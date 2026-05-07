@@ -19,8 +19,7 @@ import {
   getDefaultSkillsDir,
   parseSkillVersion,
 } from './config-paths'
-import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, PromaPermissionMode } from '@proma/shared'
-import { migratePermissionMode } from '@proma/shared'
+import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities } from '@proma/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -725,6 +724,21 @@ function resolveSkillDir(workspaceSlug: string, skillSlug: string): string | nul
   return null
 }
 
+export function readWorkspaceSkillContent(workspaceSlug: string, skillSlug: string): string {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const mdPath = join(dir, 'SKILL.md')
+  if (!existsSync(mdPath)) throw new Error(`SKILL.md 不存在: ${mdPath}`)
+  return readFileSync(mdPath, 'utf-8')
+}
+
+export function writeWorkspaceSkillContent(workspaceSlug: string, skillSlug: string, content: string): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 SKILL.md: ${workspaceSlug}/${skillSlug}`)
+}
+
 /** 简单 semver 比较：a 是否比 b 更新 */
 function isNewerVersion(a: string, b: string): boolean {
   const pa = a.split('.').map(Number)
@@ -736,10 +750,9 @@ function isNewerVersion(a: string, b: string): boolean {
   return false
 }
 
-// ===== 权限模式管理 =====
+// ===== 工作区配置管理 =====
 
 interface WorkspaceConfig {
-  permissionMode?: PromaPermissionMode
   attachedDirectories?: string[]
 }
 
@@ -756,7 +769,12 @@ function readWorkspaceConfig(workspaceSlug: string): WorkspaceConfig {
 
   try {
     const raw = readFileSync(configPath, 'utf-8')
-    return JSON.parse(raw) as WorkspaceConfig
+    const data = JSON.parse(raw) as Partial<WorkspaceConfig>
+    return {
+      attachedDirectories: Array.isArray(data.attachedDirectories)
+        ? data.attachedDirectories.filter((dir): dir is string => typeof dir === 'string')
+        : undefined,
+    }
   } catch {
     return {}
   }
@@ -765,19 +783,6 @@ function readWorkspaceConfig(workspaceSlug: string): WorkspaceConfig {
 function writeWorkspaceConfig(workspaceSlug: string, config: WorkspaceConfig): void {
   const configPath = getWorkspaceConfigPath(workspaceSlug)
   writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-}
-
-/** 获取工作区权限模式，默认 'auto'，支持旧值自动迁移 */
-export function getWorkspacePermissionMode(workspaceSlug: string): PromaPermissionMode {
-  const config = readWorkspaceConfig(workspaceSlug)
-  return config.permissionMode ? migratePermissionMode(config.permissionMode) : 'auto'
-}
-
-export function setWorkspacePermissionMode(workspaceSlug: string, mode: PromaPermissionMode): void {
-  const config = readWorkspaceConfig(workspaceSlug)
-  const updated: WorkspaceConfig = { ...config, permissionMode: mode }
-  writeWorkspaceConfig(workspaceSlug, updated)
-  console.log(`[Agent 工作区] 权限模式已更新: ${workspaceSlug} → ${mode}`)
 }
 
 // ===== 工作区级附加目录管理 =====

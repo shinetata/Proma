@@ -5,7 +5,7 @@
  * - 点击切换标签
  * - 中键关闭标签
  * - 拖拽重排序
- * - Chrome 风格等分宽度（不滚动）
+ * - Chrome 风格等分宽度（溢出时可横向滚动）
  */
 
 import * as React from 'react'
@@ -30,6 +30,8 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { TabBarItem } from './TabBarItem'
 import { TabCloseConfirmDialog } from './TabCloseConfirmDialog'
 import { useCloseTab } from '@/hooks/useCloseTab'
+import { detectIsWindows } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 
 export function TabBar(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -153,6 +155,27 @@ function TabBarInner({
   const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
+
+  // 滚动容器 ref
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+
+  // 鼠标滚轮横向滚动
+  const handleWheel = React.useCallback((e: React.WheelEvent) => {
+    if (scrollRef.current) {
+      e.preventDefault()
+      scrollRef.current.scrollLeft += e.deltaY || e.deltaX
+    }
+  }, [])
+
+  // 新增 tab 时自动滚动到最右
+  const prevTabCount = React.useRef(tabs.length)
+  React.useEffect(() => {
+    if (tabs.length > prevTabCount.current && scrollRef.current) {
+      scrollRef.current.scrollTo({ left: scrollRef.current.scrollWidth, behavior: 'smooth' })
+    }
+    prevTabCount.current = tabs.length
+  }, [tabs.length])
 
   React.useEffect(() => {
     return () => {
@@ -197,9 +220,17 @@ function TabBarInner({
 
   return (
     <div className="flex items-end h-[34px] tabbar-bg relative">
+      {/* 顶部 TabBar 的空白区域必须保持可拖拽，尤其是 macOS/Windows 自定义标题栏。
+          注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
+          前景 flex 容器也必须是 drag-region，因为它会覆盖在背景拖拽层之上。
+          需要交互的单个 Tab 会在 TabBarItem 内部自己声明 titlebar-no-drag。 */}
       <div className="absolute inset-0 titlebar-drag-region" />
 
-      <div className="relative flex items-end flex-1 min-w-0 overflow-x-clip titlebar-no-drag">
+      <div
+        ref={scrollRef}
+        onWheel={handleWheel}
+        className={cn("relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none titlebar-drag-region", isWindows && "pr-[140px]")}
+      >
         {tabs.map((tab) => (
           <TabBarItem
             key={tab.id}

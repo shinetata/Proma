@@ -558,6 +558,8 @@ export interface AgentSessionMeta {
   manualWorking?: boolean
   /** 最后一次流式执行是否被用户主动中断 */
   stoppedByUser?: boolean
+  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 bypassPermissions */
+  permissionMode?: PromaPermissionMode
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -886,12 +888,18 @@ export interface FileIndexEntry {
   path: string
   /** 条目类型 */
   type: 'file' | 'dir'
+  /** 来源：会话文件或工作区文件 */
+  source: 'session' | 'workspace'
 }
 
 /** 文件搜索结果 */
 export interface FileSearchResult {
   entries: FileIndexEntry[]
   total: number
+  /** 会话文件条目（来自 session 工作目录） */
+  sessionEntries: FileIndexEntry[]
+  /** 工作区文件条目（来自 workspace files + 附加目录） */
+  workspaceEntries: FileIndexEntry[]
 }
 
 // ===== Agent 附件 =====
@@ -1169,8 +1177,6 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSIONS: 'agent:list-sessions',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
-  /** 获取会话消息 */
-  GET_MESSAGES: 'agent:get-messages',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
   /** 更新会话标题 */
@@ -1245,6 +1251,10 @@ export const AGENT_IPC_CHANNELS = {
   IMPORT_SKILL_FROM_WORKSPACE: 'agent:import-skill-from-workspace',
   /** 从源工作区同步更新已导入的 Skill */
   UPDATE_SKILL_FROM_SOURCE: 'agent:update-skill-from-source',
+  /** 读取 SKILL.md 全文内容 */
+  READ_SKILL_CONTENT: 'agent:read-skill-content',
+  /** 写入 SKILL.md 全文内容 */
+  WRITE_SKILL_CONTENT: 'agent:write-skill-content',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */
@@ -1321,10 +1331,8 @@ export const AGENT_IPC_CHANNELS = {
   // 权限系统
   /** 权限响应（渲染进程 → 主进程） */
   PERMISSION_RESPOND: 'agent:permission:respond',
-  /** 设置权限模式（渲染进程 → 主进程） */
-  SET_PERMISSION_MODE: 'agent:set-permission-mode',
-  /** 获取权限模式（渲染进程 → 主进程） */
-  GET_PERMISSION_MODE: 'agent:get-permission-mode',
+  /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
+  UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
 
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */
