@@ -44,6 +44,11 @@ export class RoomManager {
     return room
   }
 
+  /** 检查短码是否已被占用 */
+  hasCode(code: string): boolean {
+    return this.rooms.has(code)
+  }
+
   /** 消息转发：根据来源路由到对端 */
   forward(room: Room, message: object, from: 'desktop' | 'mobile'): void {
     const target = from === 'desktop' ? room.mobile : room.desktop

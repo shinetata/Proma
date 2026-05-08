@@ -1364,6 +1364,20 @@ export const AGENT_IPC_CHANNELS = {
 } as const
 
 /**
+ * RemoteBridge 远程协作 IPC 通道常量
+ */
+export const REMOTE_BRIDGE_IPC_CHANNELS = {
+  /** 生成配对短码和 QR 内容 */
+  GENERATE_PAIRING_CODE: 'remote-bridge:generate-pairing-code',
+  /** 连接到 Gateway */
+  CONNECT: 'remote-bridge:connect',
+  /** 断开连接 */
+  DISCONNECT: 'remote-bridge:disconnect',
+  /** 获取连接状态 */
+  GET_STATUS: 'remote-bridge:get-status',
+} as const
+
+/**
  * 待处理交互请求快照（用于渲染进程重载后恢复状态）
  */
 export interface PendingRequestsSnapshot {

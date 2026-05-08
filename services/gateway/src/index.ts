@@ -51,12 +51,16 @@ wss.on('connection', (ws) => {
       role = msg.role as 'desktop' | 'mobile'
 
       if (role === 'desktop') {
-        // 桌面端：注册并获取短码
+        // 桌面端：注册并获取短码（支持预指定，用于 UI 展示一致性）
         const token = (msg.token as string) || ''
-        const code = generatePairingCode(config.pairingCodeLength)
+        const preferredCode = (msg.code as string) || ''
+        const existingRoom = preferredCode ? rooms.hasCode(preferredCode) : false
+        const code = preferredCode && !existingRoom
+          ? preferredCode
+          : generatePairingCode(config.pairingCodeLength)
         room = rooms.createRoom(code, ws, token)
         ws.send(JSON.stringify({ kind: 'auth_ok', code }))
-        console.log(`[Gateway] 桌面端已注册 → 短码: ${code}`)
+        console.log(`[Gateway] 桌面端已注册 → 短码: ${code}${preferredCode && code !== preferredCode ? ' (预指定码冲突，已替换)' : ''}`)
       } else if (role === 'mobile') {
         // 移动端：用短码加入房间
         const code = msg.code as string

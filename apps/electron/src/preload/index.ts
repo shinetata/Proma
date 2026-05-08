@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, REMOTE_BRIDGE_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -845,6 +845,17 @@ export interface ElectronAPI {
   onTrayOpenAgentSession: (callback: (data: TrayOpenAgentSessionData) => void) => () => void
   /** 订阅菜单栏创建会话事件 */
   onTrayCreateSession: (callback: (data: TrayCreateSessionData) => void) => () => void
+
+  // ===== RemoteBridge 远程协作 =====
+
+  /** 生成配对短码和 QR 内容 */
+  generateRemotePairingCode: (gatewayUrl: string) => Promise<{ code: string; qrContent: string; token: string }>
+  /** 连接到 Gateway */
+  connectRemote: (gatewayUrl: string, token: string, code: string) => Promise<void>
+  /** 断开远程连接 */
+  disconnectRemote: () => Promise<void>
+  /** 获取远程连接状态 */
+  getRemoteStatus: () => Promise<{ connected: boolean }>
 }
 
 /**
@@ -1892,6 +1903,24 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, data: TrayCreateSessionData): void => callback(data)
     ipcRenderer.on(TRAY_IPC_CHANNELS.CREATE_SESSION, listener)
     return () => { ipcRenderer.removeListener(TRAY_IPC_CHANNELS.CREATE_SESSION, listener) }
+  },
+
+  // ===== RemoteBridge 远程协作 =====
+
+  generateRemotePairingCode: (gatewayUrl: string) => {
+    return ipcRenderer.invoke(REMOTE_BRIDGE_IPC_CHANNELS.GENERATE_PAIRING_CODE, gatewayUrl)
+  },
+
+  connectRemote: (gatewayUrl: string, token: string, code: string) => {
+    return ipcRenderer.invoke(REMOTE_BRIDGE_IPC_CHANNELS.CONNECT, gatewayUrl, token, code)
+  },
+
+  disconnectRemote: () => {
+    return ipcRenderer.invoke(REMOTE_BRIDGE_IPC_CHANNELS.DISCONNECT)
+  },
+
+  getRemoteStatus: () => {
+    return ipcRenderer.invoke(REMOTE_BRIDGE_IPC_CHANNELS.GET_STATUS)
   },
 }
 

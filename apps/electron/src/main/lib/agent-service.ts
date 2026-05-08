@@ -10,6 +10,7 @@
  * 所有业务逻辑已委托给 AgentOrchestrator。
  */
 
+import { remoteBridge } from './remote-bridge'
 import { join, dirname } from 'node:path'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
@@ -40,6 +41,14 @@ const orchestrator = new AgentOrchestrator(adapter, eventBus)
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
 
+/** 导出 RemoteBridge 供 IPC handler 调用（连接/断开/状态查询） */
+export { remoteBridge }
+
+/** 获取会话对应的 webContents（供 RemoteBridge 复用已有映射，不覆盖） */
+export function getSessionWebContents(sessionId: string): WebContents | undefined {
+  return sessionWebContents.get(sessionId)
+}
+
 /**
  * 会话 → webContents 映射
  *
@@ -60,6 +69,12 @@ eventBus.use((sessionId, payload, next) => {
     }
   }
   next()
+})
+
+// ===== EventBus RemoteBridge 中间件（转发到移动端） =====
+
+eventBus.use((sessionId, payload, next) => {
+  remoteBridge.forward(sessionId, payload, next)
 })
 
 // ===== IPC 薄包装函数 =====
