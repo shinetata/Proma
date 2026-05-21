@@ -14,9 +14,10 @@
  */
 
 import * as React from 'react'
+import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye, EyeOff } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -27,6 +28,7 @@ import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
+import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { Button } from '@/components/ui/button'
@@ -46,8 +48,11 @@ import {
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
+import { registerShortcut } from '@/lib/shortcut-registry'
+import { previewPanelOpenMapAtom, previewFileMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
+  agentSessionStreamingStateAtomFamily,
   agentChannelIdAtom,
   agentModelIdAtom,
   agentChannelIdsAtom,
@@ -59,12 +64,17 @@ import {
   agentWorkspacesAtom,
   agentStreamErrorsAtom,
   agentSessionDraftsAtom,
+  agentSessionDraftAtomFamily,
   agentSessionDraftHtmlAtom,
+  agentSessionDraftHtmlAtomFamily,
   agentPromptSuggestionsAtom,
   agentMessageRefreshAtom,
+  agentDiffRefreshVersionAtom,
   agentSessionsAtom,
   agentAttachedDirectoriesMapAtom,
+  agentAttachedFilesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
+  workspaceAttachedFilesMapAtom,
   liveMessagesMapAtom,
   agentThinkingAtom,
   stoppedByUserSessionsAtom,
@@ -84,11 +94,39 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
-import type { AgentSendInput, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
-import { fileToBase64 } from '@/lib/file-utils'
+import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
+import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
+const LONG_TEXT_ATTACHMENT_THRESHOLD = 2000
+
+function formatClipboardTimestamp(date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+function looksLikeMarkdown(text: string): boolean {
+  return [
+    /^#{1,6}\s+\S/m,
+    /```[\s\S]*?```/,
+    /^\s*\|.+\|\s*\n\s*\|[\s:-]+\|/m,
+    /^---\n[\s\S]*?\n---\n/,
+    /^\s*> .+/m,
+    /^\s*[-*+]\s+\S/m,
+    /^\s*\d+\.\s+\S/m,
+    /\[[^\]]+\]\([^)]+\)/,
+  ].some((pattern) => pattern.test(text))
+}
+
+function createClipboardTextFile(text: string): File {
+  const isMarkdown = looksLikeMarkdown(text)
+  const extension = isMarkdown ? 'md' : 'txt'
+  const mediaType = isMarkdown ? 'text/markdown' : 'text/plain'
+  const filename = `clipboard-${formatClipboardTimestamp()}.${extension}`
+  return new File([text], filename, { type: mediaType })
+}
 
 interface SDKMessageRecord {
   type?: string
@@ -200,18 +238,77 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
   )
 }
 
-export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
-  // [FLASH-DEBUG] 渲染计数器
-  const renderCountRef = React.useRef(0)
-  renderCountRef.current++
-  if (renderCountRef.current % 50 === 0) {
-    console.log(`[FLASH-DEBUG] AgentView(${sessionId.slice(0, 8)}) render #${renderCountRef.current}`)
-  }
+interface AutoPreviewPopoverProps {
+  enabled: boolean
+  onToggle: () => void
+}
 
+function AutoPreviewPopover({ enabled, onToggle }: AutoPreviewPopoverProps): React.ReactElement {
+  const [open, setOpen] = React.useState(false)
+  const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleMouseEnter = React.useCallback(() => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
+    setOpen(true)
+  }, [])
+
+  const handleMouseLeave = React.useCallback(() => {
+    hoverTimeout.current = setTimeout(() => setOpen(false), 150)
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
+    }
+  }, [])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'size-[36px] rounded-full',
+            enabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+          )}
+          onClick={onToggle}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          {enabled ? <Eye className="size-5" /> : <EyeOff className="size-5" />}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="center"
+        sideOffset={8}
+        className="w-auto min-w-[160px] p-2 px-2.5"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-xs text-foreground/70">自动预览修改中文件</span>
+          <Switch
+            checked={enabled}
+            onCheckedChange={onToggle}
+            className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
-  const streamingStates = useAtomValue(agentStreamingStatesAtom)
-  const streamState = streamingStates.get(sessionId)
+  // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
+  // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
+  // atom 输出引用未变，订阅者跳过通知。
+  const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
@@ -287,6 +384,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
+  const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
+  const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
+
+  /** 移除当前引用选中文本 */
+  const handleRemoveQuotedSelection = React.useCallback(() => {
+    setQuotedSelectionMap((prev) => {
+      const m = new Map(prev)
+      m.delete(sessionId)
+      return m
+    })
+  }, [sessionId, setQuotedSelectionMap])
+
+  const setPreviewFileMap = useSetAtom(previewFileMapAtom)
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
   const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
@@ -295,12 +405,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
   const attachedDirs = attachedDirsMap.get(sessionId) ?? []
+  const setAttachedFilesMap = useSetAtom(agentAttachedFilesMapAtom)
+  const attachedFilesMap = useAtomValue(agentAttachedFilesMapAtom)
+  const attachedFiles = attachedFilesMap.get(sessionId) ?? []
   const wsAttachedDirsMap = useAtomValue(workspaceAttachedDirectoriesMapAtom)
   const wsAttachedDirs = currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
+  const setWsAttachedFilesMap = useSetAtom(workspaceAttachedFilesMapAtom)
+  const wsAttachedFilesMap = useAtomValue(workspaceAttachedFilesMapAtom)
+  const wsAttachedFiles = currentWorkspaceId ? (wsAttachedFilesMap.get(currentWorkspaceId) ?? []) : []
 
-  const draftsMap = useAtomValue(agentSessionDraftsAtom)
+  // 按 sessionId 切片订阅 drafts/draftHtml：仅本 session 草稿变化才让 AgentView 重渲染。
+  // 输入框每次按键都会写整 Map atom，若直接订阅整 Map，AgentView 跟着每键重渲染。
+  const inputContent = useAtomValue(agentSessionDraftAtomFamily(sessionId))
   const setDraftsMap = useSetAtom(agentSessionDraftsAtom)
-  const inputContent = draftsMap.get(sessionId) ?? ''
   const setInputContent = React.useCallback((value: string) => {
     setDraftsMap((prev) => {
       const map = new Map(prev)
@@ -312,9 +429,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
   }, [sessionId, setDraftsMap])
-  const draftHtmlMap = useAtomValue(agentSessionDraftHtmlAtom)
+  const inputHtmlContent = useAtomValue(agentSessionDraftHtmlAtomFamily(sessionId))
   const setDraftHtmlMap = useSetAtom(agentSessionDraftHtmlAtom)
-  const inputHtmlContent = draftHtmlMap.get(sessionId) ?? ''
   const setInputHtmlContent = React.useCallback((html: string) => {
     setDraftHtmlMap((prev) => {
       const map = new Map(prev)
@@ -426,6 +542,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .catch(() => setWorkspaceFilesPath(null))
   }, [workspaceSlug])
 
+  // 获取工作区级附加文件（@ 引用和路径解析都需要）
+  React.useEffect(() => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    window.electronAPI
+      .getWorkspaceAttachedFiles(workspaceSlug)
+      .then((files) => {
+        setWsAttachedFilesMap((prev) => {
+          const map = new Map(prev)
+          map.set(currentWorkspaceId, files)
+          return map
+        })
+      })
+      .catch(console.error)
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedFilesMap])
+
   // 工作区级目录（workspace shared files + 工作区级附加目录），@ 引用标记为工作区文件
   const workspaceDirs = React.useMemo(() => {
     const dirs: string[] = []
@@ -436,63 +567,109 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return dirs
   }, [workspaceFilesPath, wsAttachedDirs])
 
+  const attachedFileDirectories = React.useMemo(() => {
+    const dirs: string[] = []
+    for (const filePath of [...attachedFiles, ...wsAttachedFiles]) {
+      const parent = getFileParentPath(filePath)
+      if (parent && !dirs.includes(parent)) dirs.push(parent)
+    }
+    return dirs
+  }, [attachedFiles, wsAttachedFiles])
+
+  const workspaceMentionPaths = React.useMemo(() => {
+    const paths = [...workspaceDirs]
+    for (const filePath of wsAttachedFiles) {
+      if (!paths.includes(filePath)) paths.push(filePath)
+    }
+    return paths
+  }, [workspaceDirs, wsAttachedFiles])
+
+  const sessionMentionPaths = React.useMemo(() => {
+    const paths = [...attachedDirs]
+    for (const filePath of attachedFiles) {
+      if (!paths.includes(filePath)) paths.push(filePath)
+    }
+    return paths
+  }, [attachedDirs, attachedFiles])
+
+  // 合并会话级 + 工作区级附加目录，供消息区文件路径解析使用
+  const allAttachedDirs = React.useMemo(() => {
+    const dirs = [...attachedDirs]
+    for (const d of workspaceDirs) {
+      if (d && !dirs.includes(d)) dirs.push(d)
+    }
+    for (const filePath of [...attachedFiles, ...wsAttachedFiles]) {
+      if (filePath && !dirs.includes(filePath)) dirs.push(filePath)
+      const parent = getFileParentPath(filePath)
+      if (parent && !dirs.includes(parent)) dirs.push(parent)
+    }
+    return dirs
+  }, [attachedDirs, workspaceDirs, attachedFiles, wsAttachedFiles])
+
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
   const refreshVersion = refreshMap.get(sessionId) ?? 0
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
   const [messagesLoaded, setMessagesLoaded] = React.useState(false)
+  const loadingSessionIdRef = React.useRef<string | null>(null)
 
   // 加载当前会话消息
   React.useEffect(() => {
-    // 流式运行中不重置 messagesLoaded，避免 streaming UI 消失后出现空窗闪烁
-    const isCurrentlyStreaming = store.get(agentStreamingStatesAtom).get(sessionId)?.running ?? false
-    if (!isCurrentlyStreaming) {
+    // 只有切换会话时才进入 loading 态；同一会话在流式完成后的刷新要保留当前
+    // persisted/live 消息，避免“助手气泡先消失、持久化消息再恢复”的空窗跳动。
+    if (loadingSessionIdRef.current !== sessionId) {
+      loadingSessionIdRef.current = sessionId
+      setPersistedSDKMessages([])
       setMessagesLoaded(false)
     }
+    let cancelled = false
     window.electronAPI.getAgentSessionSDKMessages(sessionId)
       .then((sdkMsgs) => {
-        setPersistedSDKMessages(sdkMsgs)
-        setMessagesLoaded(true)
+        if (cancelled) return
+        unstable_batchedUpdates(() => {
+          setPersistedSDKMessages(sdkMsgs)
+          setMessagesLoaded(true)
 
-        // 消息加载完成后，同步清除流式展示状态和实时消息，
-        // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
-        // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
-        // 注意：保留 inputTokens/contextWindow 以维持上下文用量圆环显示
-        setStreamingStates((prev) => {
-          const state = prev.get(sessionId)
-          if (!state || state.running) return prev  // 仍在运行中，不清除
-          const map = new Map(prev)
-          if (state.inputTokens !== undefined) {
-            // 保留 usage 数据，仅清除流式展示字段
-            map.set(sessionId, {
-              running: false,
-              content: '',
-              toolActivities: [],
-              teammates: [],
-              inputTokens: state.inputTokens,
-              outputTokens: state.outputTokens,
-              cacheReadTokens: state.cacheReadTokens,
-              cacheCreationTokens: state.cacheCreationTokens,
-              contextWindow: state.contextWindow,
-              model: state.model,
-            })
-          } else {
+          // 消息加载完成后，同步清除流式展示状态和实时消息，
+          // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
+          // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
+          // 注意：保留 inputTokens/contextWindow 以维持上下文用量圆环显示
+          setStreamingStates((prev) => {
+            const state = prev.get(sessionId)
+            if (!state || state.running) return prev  // 仍在运行中，不清除
+            const map = new Map(prev)
+            if (state.inputTokens !== undefined) {
+              // 保留 usage 数据，仅清除流式展示字段
+              map.set(sessionId, {
+                running: false,
+                content: '',
+                toolActivities: [],
+                inputTokens: state.inputTokens,
+                outputTokens: state.outputTokens,
+                cacheReadTokens: state.cacheReadTokens,
+                cacheCreationTokens: state.cacheCreationTokens,
+                contextWindow: state.contextWindow,
+                model: state.model,
+              })
+            } else {
+              map.delete(sessionId)
+            }
+            return map
+          })
+          setLiveMessagesMap((prev) => {
+            if (!prev.has(sessionId)) return prev
+            // 仍在运行中，不清除实时消息（与 streamingStates 保护逻辑一致）
+            const streamingState = store.get(agentStreamingStatesAtom).get(sessionId)
+            if (streamingState?.running) return prev
+            const map = new Map(prev)
             map.delete(sessionId)
-          }
-          return map
-        })
-        setLiveMessagesMap((prev) => {
-          if (!prev.has(sessionId)) return prev
-          // 仍在运行中，不清除实时消息（与 streamingStates 保护逻辑一致）
-          const streamingState = store.get(agentStreamingStatesAtom).get(sessionId)
-          if (streamingState?.running) return prev
-          const map = new Map(prev)
-          map.delete(sessionId)
-          return map
+            return map
+          })
         })
       })
       .catch(console.error)
+    return () => { cancelled = true }
   }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, store])
 
   // 从会话元数据初始化附加目录（仅冷启动水合，后续由 handleAttachFolder/handleDetachDirectory 实时写入）
@@ -510,6 +687,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
   }, [sessionId, sessions, setAttachedDirsMap])
 
+  // 从会话元数据初始化附加文件（仅冷启动水合，后续由 attachFile/detachFile 实时写入）
+  React.useEffect(() => {
+    const meta = sessions.find((s) => s.id === sessionId)
+    const files = meta?.attachedFiles ?? []
+    setAttachedFilesMap((prev) => {
+      const existing = prev.get(sessionId)
+      if (existing != null) return prev
+      const map = new Map(prev)
+      if (files.length > 0) {
+        map.set(sessionId, files)
+      }
+      return map
+    })
+  }, [sessionId, sessions, setAttachedFilesMap])
+
   // 自动发送 pending prompt（从快速任务窗口或设置页触发）
   // 等待 messagesLoaded 确保消息加载完成后再插入乐观消息，避免被加载结果覆盖。
   // 使用 queueMicrotask 延迟发送：避免 setState → 重渲染 → cleanup 取消 timer 的竞态。
@@ -525,6 +717,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      additionalDirectories: Array.from(new Set([...attachedDirs, ...attachedFileDirectories, ...(pendingPrompt.additionalDirectories ?? [])])),
     }
     setPendingPrompt(null)
 
@@ -538,7 +731,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           running: true,
           content: '',
           toolActivities: [],
-          teammates: [],
           model: snapshot.modelId,
           startedAt: streamStartedAt,
           inputTokens: existing?.inputTokens,
@@ -567,6 +759,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         workspaceId: snapshot.workspaceId,
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
+        ...(snapshot.additionalDirectories && snapshot.additionalDirectories.length > 0 && {
+          additionalDirectories: snapshot.additionalDirectories,
+        }),
       }
       window.electronAPI.sendAgentMessage(input).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
@@ -579,7 +774,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -595,13 +790,51 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return `${baseName}-${counter}${ext}`
   }, [])
 
+  const attachSessionFile = React.useCallback(async (filePath: string): Promise<void> => {
+    const updated = await window.electronAPI.attachFile({ sessionId, filePath })
+    setAttachedFilesMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, updated)
+      return map
+    })
+  }, [sessionId, setAttachedFilesMap])
+
   /** 将 File 对象列表添加为待发送附件 */
-  const addFilesAsAttachments = React.useCallback(async (files: File[]): Promise<void> => {
+  const addFilesAsAttachments = React.useCallback(async (files: File[], sourcePaths?: Map<File, string>): Promise<void> => {
     // 收集已有的 pending 文件名，用于去重
     const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
 
+    const pathBackedFiles: string[] = []
+    const rejectedLargeFiles: string[] = []
+
     for (const file of files) {
       try {
+        if (file.size > MAX_ATTACHMENT_SIZE) {
+          const sourcePath = sourcePaths?.get(file)
+          if (!sourcePath) {
+            rejectedLargeFiles.push(file.name)
+            continue
+          }
+          await attachSessionFile(sourcePath)
+
+          const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
+          const uniqueFilename = makeUniqueFilename(file.name, usedNames)
+          usedNames.push(uniqueFilename)
+
+          const pending: AgentPendingFile = {
+            id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            filename: uniqueFilename,
+            mediaType: file.type || 'application/octet-stream',
+            size: file.size,
+            previewUrl,
+            sourcePath,
+          }
+
+          setPendingFiles((prev) => [...prev, pending])
+          pathBackedFiles.push(uniqueFilename)
+          continue
+        }
+
         const base64 = await fileToBase64(file)
         const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
         const uniqueFilename = makeUniqueFilename(file.name, usedNames)
@@ -625,15 +858,66 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         console.error('[AgentView] 添加附件失败:', error)
       }
     }
-  }, [makeUniqueFilename, setPendingFiles])
+
+    if (pathBackedFiles.length > 0) {
+      toast.success(`已将大文件作为附加文件引用：${formatFileNames(pathBackedFiles)}`)
+    }
+    if (rejectedLargeFiles.length > 0) {
+      toast.error(`以下文件超过 100MB 且无法取得本地路径，已跳过：${formatFileNames(rejectedLargeFiles)}`)
+    }
+  }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
+
+  const addLargeDialogFilesAsReferences = React.useCallback(async (files: FileDialogLargeFile[]): Promise<void> => {
+    if (files.length === 0) return
+    const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
+    const added: string[] = []
+    const rejected: string[] = []
+
+    for (const file of files) {
+      try {
+        await attachSessionFile(file.path)
+        const uniqueFilename = makeUniqueFilename(file.filename, usedNames)
+        usedNames.push(uniqueFilename)
+
+        const pending: AgentPendingFile = {
+          id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          filename: uniqueFilename,
+          mediaType: file.mediaType,
+          size: file.size,
+          sourcePath: file.path,
+        }
+
+        setPendingFiles((prev) => [...prev, pending])
+        added.push(uniqueFilename)
+      } catch (error) {
+        console.error('[AgentView] 附加大文件失败:', error)
+        rejected.push(file.filename)
+      }
+    }
+
+    if (added.length > 0) {
+      toast.success(`已将大文件作为附加文件引用：${formatFileNames(added)}`)
+    }
+    if (rejected.length > 0) {
+      toast.error(`以下文件附加失败，已跳过：${formatFileNames(rejected)}`)
+    }
+  }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
 
   /** 打开文件选择对话框 */
   const handleOpenFileDialog = React.useCallback(async (): Promise<void> => {
     try {
       const result = await window.electronAPI.openFileDialog()
-      if (result.files.length === 0) return
+      const largeFiles = result.largeFiles ?? []
+      const skippedFiles = result.skippedFiles ?? []
+      if (result.files.length === 0 && largeFiles.length === 0 && skippedFiles.length === 0) return
+
+      const oversized: string[] = []
 
       for (const fileInfo of result.files) {
+        if (fileInfo.size > MAX_ATTACHMENT_SIZE) {
+          oversized.push(fileInfo.filename)
+          continue
+        }
         const previewUrl = fileInfo.mediaType.startsWith('image/')
           ? `data:${fileInfo.mediaType};base64,${fileInfo.data}`
           : undefined
@@ -653,10 +937,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         setPendingFiles((prev) => [...prev, pending])
       }
+
+      if (oversized.length > 0) {
+        toast.error(`以下文件超过 100MB 且无法取得本地路径，已跳过：${formatFileNames(oversized)}`)
+      }
+      await addLargeDialogFilesAsReferences(largeFiles)
+      if (skippedFiles.length > 0) {
+        toast.warning(`以下文件无法读取，已跳过：${formatFileNames(skippedFiles.map((f) => f.filename))}`)
+      }
     } catch (error) {
       console.error('[AgentView] 文件选择对话框失败:', error)
     }
-  }, [setPendingFiles])
+  }, [addLargeDialogFilesAsReferences, setPendingFiles])
 
   /** 附加文件夹（不复制，仅记录路径） */
   const handleAttachFolder = React.useCallback(async (): Promise<void> => {
@@ -694,9 +986,46 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
   }, [setPendingFiles])
 
+  /** 点击 clipboard 附件时，在右侧预览面板中显示内容 */
+  const handleClipboardPreview = React.useCallback(async (file: AgentPendingFile) => {
+    const base64 = window.__pendingAgentFileData?.get(file.id)
+    if (!base64) return
+
+    try {
+      // atob 解码得到二进制字符串，需用 TextDecoder 正确还原 UTF-8 文本
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+      const text = new TextDecoder('utf-8').decode(bytes)
+      const tmpPath = await window.electronAPI.writeClipboardPreview(file.filename, text)
+      const tmpDir = tmpPath.substring(0, tmpPath.lastIndexOf('/'))
+      setPreviewFileMap((prev) => {
+        const m = new Map(prev)
+        m.set(sessionId, { filePath: tmpPath, previewOnly: true, readOnly: true, basePaths: [tmpDir] })
+        return m
+      })
+      store.set(previewPanelOpenMapAtom, (prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
+    } catch (error) {
+      console.error('[AgentView] clipboard 预览写入失败:', error)
+    }
+  }, [sessionId, setPreviewFileMap, store])
+
   /** 粘贴文件处理 */
   const handlePasteFiles = React.useCallback((files: File[]): void => {
     addFilesAsAttachments(files)
+  }, [addFilesAsAttachments])
+
+  /** 粘贴超长文本时转为待发送附件，避免把大段内容直接塞进输入框 */
+  const handlePasteLongText = React.useCallback((text: string): void => {
+    const file = createClipboardTextFile(text)
+    addFilesAsAttachments([file])
+      .then(() => {
+        toast.success('已将超长文本转为附件', {
+          description: file.name,
+        })
+      })
+      .catch((error) => {
+        console.error('[AgentView] 超长文本转附件失败:', error)
+        toast.error('超长文本转附件失败')
+      })
   }, [addFilesAsAttachments])
 
   /** 拖放处理 */
@@ -760,7 +1089,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         // 普通文件作为附件
         const regularFiles = filePaths.map((p) => pathMap.get(p)!).filter(Boolean)
         if (regularFiles.length > 0) {
-          addFilesAsAttachments(regularFiles)
+          const fileSourcePaths = new Map<File, string>()
+          for (const path of filePaths) {
+            const file = pathMap.get(path)
+            if (file) fileSourcePaths.set(file, path)
+          }
+          addFilesAsAttachments(regularFiles, fileSourcePaths)
         }
       } catch (error) {
         console.error('[AgentView] 路径检测失败，回退处理:', error)
@@ -818,6 +1152,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // 如果输入为空但有建议，使用建议内容
     const effectiveText = text || suggestion || ''
     if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId || !hasAvailableModel) return
+    const additionalDirectoriesForRun = new Set(attachedDirs)
+    for (const dir of attachedFileDirectories) {
+      additionalDirectoriesForRun.add(dir)
+    }
 
     // 上一条消息仍在处理中，直接追加发送
     if (streaming) {
@@ -901,41 +1239,66 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     let fileReferences = ''
     if (pendingFiles.length > 0) {
       const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
-      if (workspace) {
-        // 区分：已有 sourcePath 的文件（从侧面板添加）直接引用，其余需要保存
-        const existingFiles = pendingFiles.filter((f) => f.sourcePath)
-        const newFiles = pendingFiles.filter((f) => !f.sourcePath)
+      if (!workspace) {
+        toast.warning('暂时无法发送附件', {
+          description: '当前 Agent 会话没有绑定有效工作区。请在顶部选择工作区，或新建 Agent 会话后重新上传。',
+        })
+        return
+      }
 
-        const allRefs: Array<{ filename: string; targetPath: string }> = []
+      // 区分：已有 sourcePath 的文件（从侧面板添加）直接引用，其余需要保存
+      const existingFiles = pendingFiles.filter((f) => f.sourcePath)
+      const newFiles = pendingFiles.filter((f) => !f.sourcePath)
 
-        // 已有路径的文件直接引用
-        for (const f of existingFiles) {
-          allRefs.push({ filename: f.filename, targetPath: f.sourcePath! })
+      const allRefs: Array<{ filename: string; targetPath: string }> = []
+
+      // 已有路径的文件直接引用
+      for (const f of existingFiles) {
+        const sourcePath = f.sourcePath!
+        allRefs.push({ filename: f.filename, targetPath: sourcePath })
+        const parentPath = getFileParentPath(sourcePath)
+        if (parentPath) additionalDirectoriesForRun.add(parentPath)
+      }
+
+      // 新上传的文件保存到 session 目录
+      if (newFiles.length > 0) {
+        const filesToSave = newFiles.map((f) => ({
+          filename: f.filename,
+          data: window.__pendingAgentFileData?.get(f.id) || '',
+        }))
+        const missingDataFiles = filesToSave.filter((f) => !f.data).map((f) => f.filename)
+        if (missingDataFiles.length > 0) {
+          toast.error('附件数据已失效', {
+            description: `请移除后重新添加文件：${missingDataFiles.join('、')}`,
+          })
+          return
         }
 
-        // 新上传的文件保存到 session 目录
-        if (newFiles.length > 0) {
-          const filesToSave = newFiles.map((f) => ({
-            filename: f.filename,
-            data: window.__pendingAgentFileData?.get(f.id) || '',
-          }))
-          try {
-            const saved = await window.electronAPI.saveFilesToAgentSession({
-              workspaceSlug: workspace.slug,
-              sessionId,
-              files: filesToSave,
-            })
-            allRefs.push(...saved)
-          } catch (error) {
-            console.error('[AgentView] 保存附件到 session 失败:', error)
-          }
-        }
-
-        if (allRefs.length > 0) {
-          const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
-          fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
+        try {
+          const saved = await window.electronAPI.saveFilesToAgentSession({
+            workspaceSlug: workspace.slug,
+            sessionId,
+            files: filesToSave,
+          })
+          allRefs.push(...saved)
+        } catch (error) {
+          console.error('[AgentView] 保存附件到 session 失败:', error)
+          toast.error('附件保存失败', {
+            description: '请确认当前工作区可用，或新建 Agent 会话后重新上传。',
+          })
+          return
         }
       }
+
+      if (allRefs.length === 0) {
+        toast.error('附件没有成功加入消息', {
+          description: '请重新上传文件，或切换到有效工作区后再试。',
+        })
+        return
+      }
+
+      const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
+      fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
 
       // 清理
       for (const f of pendingFiles) {
@@ -943,6 +1306,28 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         window.__pendingAgentFileData?.delete(f.id)
       }
       setPendingFiles([])
+    }
+
+    // 构建引用选中文本：内联 XML 拼入 prompt，对话框不展示（parseAttachedFiles 剥离）
+    const quotedSelection = store.get(quotedSelectionMapAtom).get(sessionId)
+    if (quotedSelection) {
+      const capturedAt = quotedSelection.capturedAt
+      // XML 转义：path 走完整实体编码（&, <, >, "），text 仅需防误闭合外层标签
+      const safePath = quotedSelection.filePath
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+      const safeText = quotedSelection.text.replace(/<\/quoted_file>/gi, '</quoted_file_>')
+      const quotedBlock = `<quoted_file path="${safePath}">\n${safeText}\n</quoted_file>\n\n`
+      fileReferences = fileReferences + quotedBlock
+
+      store.set(quotedSelectionMapAtom, (prev) => {
+        const m = new Map(prev)
+        const current = m.get(sessionId)
+        if (current && current.capturedAt === capturedAt) m.delete(sessionId)
+        return m
+      })
     }
 
     // 2. 构建最终消息
@@ -973,7 +1358,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         running: true,
         content: '',
         toolActivities: [],
-        teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
@@ -1001,14 +1385,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
-      ...(attachedDirs.length > 0 && { additionalDirectories: attachedDirs }),
-      // 解析用户消息中的 Skill/MCP 引用，传递结构化元数据给后端
+      ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
+      // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
         const skills = [...effectiveText.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
         const mcps = [...effectiveText.matchAll(/#mcp:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const sessionIds = [...effectiveText.matchAll(/&session:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
         return {
           ...(skills.length > 0 && { mentionedSkills: skills }),
           ...(mcps.length > 0 && { mentionedMcpServers: mcps }),
+          ...(sessionIds.length > 0 && { mentionedSessionIds: sessionIds }),
         }
       })(),
     }
@@ -1026,7 +1412,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
+  }, [inputContent, pendingFiles, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -1037,7 +1423,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       map.set(sessionId, {
         ...current,
         running: false,
-        ...finalizeStreamingActivities(current.toolActivities, current.teammates),
+        ...finalizeStreamingActivities(current.toolActivities),
       })
       return map
     })
@@ -1077,7 +1463,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         running: true,
         content: '',
         toolActivities: [],
-        teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
       }
@@ -1155,7 +1540,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         running: true,
         content: '',
         toolActivities: [],
-        teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
@@ -1175,7 +1559,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }).catch(console.error)
   }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, permissionMode])
 
-  /** 在新会话中重试：创建新会话 + 切换 tab + 发送引用旧会话的提示词 */
+  /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
     if (!agentChannelId) return
 
@@ -1188,8 +1572,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       // 切换到新会话 tab
       openSession('agent', meta.id, meta.title)
 
-      // 发送引用旧会话的默认提示词
-      const prompt = `上个会话的 id 是 ${sessionId}，可以参考同工作区下的会话继续完成工作`
+      // 发送引用旧会话的默认提示词，并通过 mentionedSessionIds 触发结构化会话引用注入
+      const prompt = `请读取 &session:${sessionId} 的历史，然后从上个会话停止的位置继续。`
+      const streamStartedAt = Date.now()
 
       // 初始化新会话流式状态
       setStreamingStates((prev) => {
@@ -1198,9 +1583,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           running: true,
           content: '',
           toolActivities: [],
-          teammates: [],
           model: agentModelId || undefined,
-          startedAt: Date.now(),
+          startedAt: streamStartedAt,
         })
         return map
       })
@@ -1211,6 +1595,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: agentChannelId,
         modelId: agentModelId || undefined,
         workspaceId: currentWorkspaceId || undefined,
+        mentionedSessionIds: [sessionId],
+        startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
       }).catch(console.error)
     } catch (error) {
@@ -1235,8 +1621,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       })
     } catch (error) {
       console.error('[AgentView] 分叉会话失败:', error)
+      const rawMsg = error instanceof Error ? error.message : '未知错误'
+      // SDK 偶尔会因为 sidechain/消息归属问题抛 "not found in session"，
+      // 这里给出更可操作的中文提示，而不是把 SDK 内部英文报错直接透传给用户
+      const friendlyDesc = /not found in session/i.test(rawMsg)
+        ? '该消息无法作为分叉起点（可能属于子代理执行过程或已被清理）。请选择主对话中的其他消息再试。'
+        : rawMsg
       toast.error('分叉会话失败', {
-        description: error instanceof Error ? error.message : '未知错误',
+        description: friendlyDesc,
       })
     }
   }, [sessionId, openSession, setAgentSessions])
@@ -1264,6 +1656,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         const map = new Map(prev)
         map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
         return map
+      })
+
+      // 刷新预览面板的 diff（文件已被回退，当前显示的内容已过期）
+      store.set(agentDiffRefreshVersionAtom, (prev) => {
+        const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
       })
 
       if (result.fileRewind?.canRewind) {
@@ -1311,13 +1708,29 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
+  // ===== 预览面板状态（toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
+  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
+  const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
+
+  const togglePreviewPanel = React.useCallback(() => {
+    setPreviewOpenMap((prev) => {
+      const m = new Map(prev)
+      const current = m.get(sessionId) ?? false
+      m.set(sessionId, !current)
+      return m
+    })
+  }, [sessionId, setPreviewOpenMap])
+
+  React.useEffect(() => {
+    return registerShortcut('toggle-preview-panel', togglePreviewPanel)
+  }, [togglePreviewPanel])
+
   const hasTextInput = inputContent.trim().length > 0
   const canSend = (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      {/* 主内容区域 */}
       <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
@@ -1332,7 +1745,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           streamState={streamState}
           liveMessages={liveMessages}
           sessionPath={sessionPath}
-          attachedDirs={attachedDirs}
+          attachedDirs={allAttachedDirs}
           stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
@@ -1388,8 +1801,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               </div>
             )}
 
-            {/* 附件预览区域 */}
-            {pendingFiles.length > 0 && (
+            {/* 附件 + 引用选中文本 Chip（同排并排） */}
+            {(pendingFiles.length > 0 || currentQuotedSelection) && (
               <div className="flex flex-wrap gap-2 px-3 pt-2.5 pb-1.5">
                 {pendingFiles.map((file) => (
                   <AttachmentPreviewItem
@@ -1398,8 +1811,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     mediaType={file.mediaType}
                     previewUrl={file.previewUrl}
                     onRemove={() => handleRemoveFile(file.id)}
+                    onClick={file.filename.startsWith('clipboard-') ? () => handleClipboardPreview(file) : undefined}
                   />
                 ))}
+                {currentQuotedSelection && (
+                  <QuotedSelectionChip
+                    text={currentQuotedSelection.text}
+                    filePath={currentQuotedSelection.filePath}
+                    onRemove={handleRemoveQuotedSelection}
+                  />
+                )}
               </div>
             )}
 
@@ -1434,11 +1855,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               onChange={setInputContent}
               onSubmit={handleSend}
               onPasteFiles={handlePasteFiles}
+              onPasteLongText={handlePasteLongText}
+              longTextPasteThreshold={LONG_TEXT_ATTACHMENT_THRESHOLD}
               placeholder={
                 agentChannelId && hasAvailableModel
                   ? sendWithCmdEnter
-                    ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP)'
-                    : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP)'
+                    ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
+                    : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
                   : !agentChannelId
                     ? '请先在设置中选择 Agent 供应商'
                     : '暂无可用模型，请先在设置中启用渠道'
@@ -1446,10 +1869,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               disabled={!agentChannelId || !hasAvailableModel}
               autoFocusTrigger={sessionId}
               collapsible
+              enableMentions
               workspacePath={sessionPath}
+              workspaceId={currentWorkspaceId}
               workspaceSlug={workspaceSlug}
-              attachedDirs={workspaceDirs}
-              sessionAttachedDirs={attachedDirs}
+              sessionId={sessionId}
+              attachedDirs={workspaceMentionPaths}
+              sessionAttachedDirs={sessionMentionPaths}
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
@@ -1519,6 +1945,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                   onCompact={handleCompact}
                 />
                 {/* <FeishuNotifyToggle sessionId={sessionId} /> */}
+                <AutoPreviewPopover
+                  enabled={autoPreviewEnabled}
+                  onToggle={() => setAutoPreviewEnabled(!autoPreviewEnabled)}
+                />
               </div>
 
               <div className="flex items-center gap-1.5">

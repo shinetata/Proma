@@ -11,14 +11,14 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Hammer } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Hammer, Bot, MessageSquare, MoreHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
 import { SearchDialog } from './SearchDialog'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { activeViewAtom } from '@/atoms/active-view'
-import { appModeAtom } from '@/atoms/app-mode'
+import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import {
   conversationsAtom,
@@ -43,9 +43,14 @@ import {
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
-  agentSidePanelOpenMapAtom,
+  agentDiffPanelTabAtom,
+  agentDiffRefreshVersionAtom,
+  agentDiffUnseenChangesAtom,
+  agentDiffUnseenFilesAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
+import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { clearPreviewCacheForSession } from '@/components/diff/DiffTabContent'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -76,6 +81,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from '@/components/ui/context-menu'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import type { ActiveView } from '@/atoms/active-view'
 import type { ConversationMeta, AgentSessionMeta, WorkspaceCapabilities } from '@proma/shared'
 
@@ -152,6 +171,34 @@ function groupByDate<T extends { updatedAt: number }>(items: T[]): Array<{ label
   return groups
 }
 
+const RAIL_STATUS_CLASS: Record<SessionIndicatorStatus, string> = {
+  idle: 'hidden',
+  running: 'bg-blue-500 animate-pulse',
+  blocked: 'bg-orange-500',
+  completed: 'bg-emerald-500',
+}
+
+const SIDEBAR_DRAG_STRIP_HEIGHT = {
+  collapsedMac: 50,
+  expandedMac: 30,
+  collapsed: 8,
+  expanded: 4,
+} as const
+
+function getRailInitial(title: string): string {
+  return title.trim().slice(0, 1).toUpperCase() || '·'
+}
+
+function SidebarWindowDragStrip({ height }: { height: number }): React.ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      className="sidebar-window-drag-strip"
+      style={{ height }}
+    />
+  )
+}
+
 export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
@@ -200,6 +247,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setSessionModelMap = useSetAtom(agentSessionModelMapAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
+  const setMode = useSetAtom(appModeAtom)
 
   // 工作区能力（MCP + Skill 计数）
   const [capabilities, setCapabilities] = React.useState<WorkspaceCapabilities | null>(null)
@@ -287,7 +335,12 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setConvThinking = useSetAtom(conversationThinkingEnabledAtom)
   const setConvParallel = useSetAtom(conversationParallelModeAtom)
   const setConvPromptId = useSetAtom(conversationPromptIdAtom)
-  const setAgentSidePanelOpen = useSetAtom(agentSidePanelOpenMapAtom)
+  const setPreviewPanelOpen = useSetAtom(previewPanelOpenMapAtom)
+  const setPreviewFile = useSetAtom(previewFileMapAtom)
+  const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
+  const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
+  const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
+  const setDiffUnseenFiles = useSetAtom(agentDiffUnseenFilesAtom)
   const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
@@ -303,10 +356,16 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setConvThinking(deleteKey)
     setConvParallel(deleteKey)
     setConvPromptId(deleteKey)
-    setAgentSidePanelOpen(deleteKey)
+    setPreviewPanelOpen(deleteKey)
+    setPreviewFile(deleteKey)
+    setDiffPanelTab(deleteKey)
+    setDiffRefreshVersion(deleteKey)
+    setDiffUnseen(deleteKey)
+    setDiffUnseenFiles(deleteKey)
     setSessionChannelMap(deleteKey)
     setSessionModelMap(deleteKey)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen, setSessionChannelMap, setSessionModelMap])
+    clearPreviewCacheForSession(id)
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setSessionChannelMap, setSessionModelMap])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
@@ -792,6 +851,118 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     [filteredAgentSessions]
   )
 
+  const handleRailModeSwitch = React.useCallback((targetMode: AppMode) => {
+    setViewMode('active')
+    if (targetMode === mode) return
+
+    const isChatMode = targetMode === 'chat'
+    const sessions = isChatMode ? conversations : agentSessions
+    const lastId = isChatMode ? currentConversationId : currentAgentSessionId
+
+    if (lastId) {
+      const match = sessions.find((s) => s.id === lastId)
+      if (match) {
+        openSession(targetMode, match.id, match.title)
+        return
+      }
+    }
+
+    const tab = tabs.find((t) => t.type === targetMode)
+    if (tab) {
+      openSession(targetMode, tab.sessionId, tab.title)
+      return
+    }
+
+    const recent = sessions.find((s) => !s.archived && !draftSessionIds.has(s.id))
+    if (recent) {
+      openSession(targetMode, recent.id, recent.title)
+      return
+    }
+
+    setMode(targetMode)
+  }, [
+    mode,
+    conversations,
+    agentSessions,
+    currentConversationId,
+    currentAgentSessionId,
+    tabs,
+    draftSessionIds,
+    openSession,
+    setMode,
+    setViewMode,
+  ])
+
+  const railRecentItems = React.useMemo(() => {
+    if (mode === 'chat') {
+      return conversations
+        .filter((c) => !c.archived && !draftSessionIds.has(c.id))
+        .sort((a, b) => {
+          const activeDelta = Number(b.id === activeTabId) - Number(a.id === activeTabId)
+          if (activeDelta !== 0) return activeDelta
+          const streamingDelta = Number(streamingIds.has(b.id)) - Number(streamingIds.has(a.id))
+          if (streamingDelta !== 0) return streamingDelta
+          const pinnedDelta = Number(!!b.pinned) - Number(!!a.pinned)
+          if (pinnedDelta !== 0) return pinnedDelta
+          return b.updatedAt - a.updatedAt
+        })
+        .slice(0, 5)
+        .map((conversation) => ({
+          id: conversation.id,
+          title: conversation.title,
+          type: 'chat' as const,
+          initial: getRailInitial(conversation.title),
+          active: conversation.id === activeTabId,
+          status: streamingIds.has(conversation.id) ? 'running' as const : 'idle' as const,
+          pinned: !!conversation.pinned,
+        }))
+    }
+
+    return agentSessions
+      .filter((session) =>
+        !session.archived
+        && !draftSessionIds.has(session.id)
+        && (!currentWorkspaceId || session.workspaceId === currentWorkspaceId)
+      )
+      .sort((a, b) => {
+        const statusA = agentIndicatorMap.get(a.id) ?? (unviewedCompletedSessionIds.has(a.id) ? 'completed' : 'idle')
+        const statusB = agentIndicatorMap.get(b.id) ?? (unviewedCompletedSessionIds.has(b.id) ? 'completed' : 'idle')
+        const priority = (session: AgentSessionMeta, status: SessionIndicatorStatus): number => {
+          if (session.id === activeTabId) return 0
+          if (status === 'blocked') return 1
+          if (status === 'running') return 2
+          if (workingSessionIds.has(session.id)) return 3
+          if (session.pinned) return 4
+          if (status === 'completed') return 5
+          return 6
+        }
+        const priorityDelta = priority(a, statusA) - priority(b, statusB)
+        if (priorityDelta !== 0) return priorityDelta
+        return b.updatedAt - a.updatedAt
+      })
+      .slice(0, 5)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        type: 'agent' as const,
+        initial: getRailInitial(session.title),
+        active: session.id === activeTabId,
+        status: agentIndicatorMap.get(session.id) ?? (unviewedCompletedSessionIds.has(session.id) ? 'completed' as const : 'idle' as const),
+        pinned: !!session.pinned,
+      }))
+  }, [
+    mode,
+    conversations,
+    agentSessions,
+    draftSessionIds,
+    currentWorkspaceId,
+    activeTabId,
+    streamingIds,
+    agentIndicatorMap,
+    unviewedCompletedSessionIds,
+    workingSessionIds,
+  ])
+
   // 删除确认弹窗（collapsed/expanded 共享）
   const deleteDialog = (
     <AlertDialog
@@ -841,34 +1012,87 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   if (sidebarCollapsed) {
     return (
       <div
-        className="h-full flex flex-col items-center bg-background rounded-2xl shadow-xl transition-[width] duration-300"
-        style={{ width: 48, flexShrink: 0 }}
+        className="relative h-full flex flex-col items-center bg-background rounded-2xl shadow-xl transition-[width] duration-300 px-2"
+        style={{ width: 60, flexShrink: 0 }}
       >
-        {/* macOS 需要避开左上角红绿灯，其他平台保留紧凑呼吸感。 */}
-        <div className={cn(isMac ? 'pt-[50px]' : 'pt-2')} />
+        <SidebarWindowDragStrip
+          height={isMac ? SIDEBAR_DRAG_STRIP_HEIGHT.collapsedMac : SIDEBAR_DRAG_STRIP_HEIGHT.collapsed}
+        />
 
-        {/* 展开按钮 */}
+        {/* macOS 需要避开左上角红绿灯；边栏覆盖全局标题栏拖拽层，因此留白自身也要可拖拽。 */}
+        <div className={cn('w-full flex-shrink-0 titlebar-drag-region', isMac ? 'h-[50px]' : 'h-2')} />
+
+        {/* 展开按钮：mini rail 的唯一布局控制入口 */}
         <div className="pt-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                type="button"
+                aria-label="展开侧边栏"
                 onClick={() => setSidebarCollapsed(false)}
-                className="p-2 rounded-[10px] text-foreground/60 hover:bg-foreground/[0.04] hover:text-foreground transition-colors titlebar-no-drag"
+                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/60 bg-muted hover:bg-foreground/[0.08] hover:text-foreground transition-colors titlebar-no-drag"
               >
-                <PanelLeftOpen size={18} />
+                <PanelLeftOpen size={17} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">展开侧边栏</TooltipContent>
+            <TooltipContent side="right">展开侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'})</TooltipContent>
           </Tooltip>
         </div>
 
-        {/* 新对话/会话按钮 */}
-        <div className="pt-2">
+        <div className="my-3 h-px w-8 bg-border/70" />
+
+        {/* 模式切换 */}
+        <div className="flex flex-col items-center gap-1.5">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                type="button"
+                aria-label="切换到 Agent 模式"
+                onClick={() => handleRailModeSwitch('agent')}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag',
+                  mode === 'agent'
+                    ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                    : 'text-foreground/45 hover:bg-foreground/[0.06] hover:text-foreground/75'
+                )}
+              >
+                <Bot size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Agent 模式</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="切换到 Chat 模式"
+                onClick={() => handleRailModeSwitch('chat')}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag',
+                  mode === 'chat'
+                    ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                    : 'text-foreground/45 hover:bg-foreground/[0.06] hover:text-foreground/75'
+                )}
+              >
+                <MessageSquare size={17} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Chat 模式</TooltipContent>
+          </Tooltip>
+        </div>
+
+        <div className="my-3 h-px w-8 bg-border/70" />
+
+        {/* 高频操作 */}
+        <div className="flex flex-col items-center gap-1.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={mode === 'agent' ? '新建 Agent 会话' : '新建 Chat 对话'}
                 onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
-                className="p-2 rounded-[10px] text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
               >
                 <Plus size={16} />
               </button>
@@ -877,18 +1101,73 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
               {mode === 'agent' ? '新会话' : '新对话'}
             </TooltipContent>
           </Tooltip>
-        </div>
 
-        {/* 弹性空间 */}
-        <div className="flex-1" />
-
-        {/* 用户头像（点击打开设置） */}
-        <div className="pb-3">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                type="button"
+                aria-label="搜索"
+                onClick={() => setSearchDialogOpen(true)}
+                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/45 bg-primary/5 hover:bg-primary/10 hover:text-foreground/70 transition-colors titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+              >
+                <Search size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">搜索</TooltipContent>
+          </Tooltip>
+        </div>
+
+        <div className="my-3 h-px w-8 bg-border/70" />
+
+        {/* 最近/关键会话入口 */}
+        <div className="flex-1 min-h-0 w-full overflow-y-auto scrollbar-none">
+          <div className="flex flex-col items-center gap-1.5 pb-2">
+            {railRecentItems.map((item) => (
+              <Tooltip key={`${item.type}-${item.id}`}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`打开${item.type === 'agent' ? 'Agent 会话' : 'Chat 对话'}：${item.title}`}
+                    onClick={() => {
+                      if (item.type === 'agent') {
+                        handleSelectAgentSession(item.id, item.title)
+                      } else {
+                        handleSelectConversation(item.id, item.title)
+                      }
+                    }}
+                    className={cn(
+                      'relative size-10 flex items-center justify-center overflow-hidden rounded-[12px] transition-colors titlebar-no-drag',
+                      item.active
+                        ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                        : 'text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/80'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full pointer-events-none',
+                        RAIL_STATUS_CLASS[item.status]
+                      )}
+                    />
+                    <span className="text-[13px] font-semibold leading-none">{item.initial}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  {item.type === 'agent' ? 'Agent' : 'Chat'} · {item.title}
+                </TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
+        </div>
+
+        {/* 用户头像（点击打开设置） */}
+        <div className="pt-3 pb-3">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="打开设置"
                 onClick={() => setSettingsOpen(true)}
-                className="relative p-1 rounded-[10px] transition-colors titlebar-no-drag hover:bg-foreground/5"
+                className="relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag hover:bg-foreground/5"
               >
                 <UserAvatar avatar={userProfile.avatar} size={28} />
                 {(hasUpdate || hasEnvironmentIssues) && (
@@ -910,28 +1189,32 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   // ===== 展开状态：完整侧边栏 =====
   return (
     <div
-      className="h-full flex flex-col bg-background rounded-2xl shadow-xl transition-[width] duration-300"
-      style={{ width: width ?? 280, minWidth: 180, flexShrink: 1 }}
+      className="relative h-full flex flex-col bg-background rounded-2xl shadow-xl transition-[width] duration-300"
+      style={{ width: width ?? 240, minWidth: 170, flexShrink: 1 }}
     >
-      {/* macOS 需要避开左上角红绿灯，其他平台不占用这块空间。 */}
-      <div className={cn(isMac ? 'pt-[30px]' : 'pt-1')}>
-        {/* 模式切换器 + 折叠按钮 */}
-        <div className="flex items-start gap-1.5 px-3">
-          <div className="flex-1 min-w-0">
-            <ModeSwitcher />
-          </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => setSidebarCollapsed(true)}
-                className="mt-2 size-[36px] flex-shrink-0 flex items-center justify-center rounded-[10px] bg-muted text-foreground/40 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors titlebar-no-drag"
-              >
-                <PanelLeftClose size={14} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">收起侧边栏</TooltipContent>
-          </Tooltip>
+      <SidebarWindowDragStrip
+        height={isMac ? SIDEBAR_DRAG_STRIP_HEIGHT.expandedMac : SIDEBAR_DRAG_STRIP_HEIGHT.expanded}
+      />
+
+      {/* macOS 需要避开左上角红绿灯；边栏覆盖全局标题栏拖拽层，因此留白自身也要可拖拽。 */}
+      <div className={cn('w-full flex-shrink-0 titlebar-drag-region', isMac ? 'h-[30px]' : 'h-1')} />
+
+      {/* 模式切换器 + 折叠按钮 */}
+      <div className="titlebar-drag-region flex items-start gap-1.5 px-3">
+        <div className="flex-1 min-w-0">
+          <ModeSwitcher />
         </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              className="mt-2 size-10 flex-shrink-0 flex items-center justify-center rounded-[10px] bg-muted text-foreground/40 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors titlebar-no-drag"
+            >
+              <PanelLeftClose size={14} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">收起侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'})</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Agent 模式：工作区选择器 */}
@@ -1022,9 +1305,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                     <button
                       onClick={() => setAgentSubTab('working')}
                       className={cn(
-                        'px-2.5 py-0.5 rounded-md text-[12px] font-medium transition-colors titlebar-no-drag inline-flex items-center',
+                        'flex-1 justify-center px-2.5 py-0.5 rounded-md text-[12px] font-medium transition-colors titlebar-no-drag inline-flex items-center',
                         agentSubTab === 'working'
-                          ? 'bg-foreground/[0.08] text-foreground/80'
+                          ? 'tab-item-selected bg-foreground/[0.08] text-foreground/80'
                           : 'text-foreground/40 hover:text-foreground/60 hover:bg-foreground/[0.04]'
                       )}
                     >
@@ -1043,9 +1326,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                     <button
                       onClick={() => setAgentSubTab('pinned')}
                       className={cn(
-                        'px-2.5 py-0.5 rounded-md text-[12px] font-medium transition-colors titlebar-no-drag inline-flex items-center',
+                        'flex-1 justify-center px-2.5 py-0.5 rounded-md text-[12px] font-medium transition-colors titlebar-no-drag inline-flex items-center',
                         agentSubTab === 'pinned'
-                          ? 'bg-foreground/[0.08] text-foreground/80'
+                          ? 'tab-item-selected bg-foreground/[0.08] text-foreground/80'
                           : 'text-foreground/40 hover:text-foreground/60 hover:bg-foreground/[0.04]'
                       )}
                     >
@@ -1143,11 +1426,13 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 </div>
               </div>
 
-              {/* 拖拽分割条：默认 1px 细线，hover 扩为 4px 热区 */}
+              {/* 拖拽分割条 */}
               <div
                 onMouseDown={handleAgentTopResizeStart}
-                className="h-px bg-border/60 hover:h-1 hover:bg-foreground/[0.08] cursor-row-resize titlebar-no-drag flex-shrink-0 transition-[height,background-color] duration-75"
-              />
+                className="h-[8px] cursor-row-resize active:bg-primary/50 transition-colors titlebar-no-drag flex-shrink-0 flex items-center"
+              >
+                <div className="mx-3 w-full border-t border-muted-foreground/20" />
+              </div>
             </>
           )}
 
@@ -1428,120 +1713,114 @@ function ConversationItem({
 
   const isPinned = !!conversation.pinned
 
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        startEdit()
-      }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      className={cn(
-        'relative w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors duration-100 titlebar-no-drag text-left',
-        active
-          ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
-          : 'hover:bg-primary/5'
-      )}
-    >
-      {/* 流式状态左侧竖线条（与 Agent 保持一致） */}
-      {streaming && (
-        <span
-          className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-emerald-500 animate-pulse pointer-events-none"
-          aria-hidden="true"
-        />
-      )}
-      <div className="flex-1 min-w-0">
-        {editing ? (
-          <input
-            ref={inputRef}
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={saveTitle}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full bg-transparent text-[13px] leading-5 text-foreground border-b border-primary/50 outline-none px-0 py-0"
-            maxLength={100}
-          />
-        ) : (
-          <div className={cn(
-            'truncate text-[13px] leading-5 flex items-center gap-1.5',
-            active ? 'text-foreground' : 'text-foreground/80'
-          )}>
-            {/* 置顶标记 */}
-            {showPinIcon && (
-              <Pin size={11} className="flex-shrink-0 text-primary/60" />
-            )}
-            <span className="truncate">{conversation.title}</span>
-          </div>
-        )}
-      </div>
+  const menuItems = (
+    MenuItem: typeof ContextMenuItem | typeof DropdownMenuItem,
+    MenuSeparator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator,
+  ) => (
+    <>
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onTogglePin(conversation.id)}>
+        {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
+        {isPinned ? '取消置顶' : '置顶对话'}
+      </MenuItem>
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => startEdit()}>
+        <Pencil size={14} />
+        重命名
+      </MenuItem>
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onToggleArchive(conversation.id)}>
+        {conversation.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+        {conversation.archived ? '取消归档' : '归档'}
+      </MenuItem>
+      <MenuSeparator className="my-0.5" />
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5 text-destructive" onSelect={() => onRequestDelete()}>
+        <Trash2 size={14} />
+        删除对话
+      </MenuItem>
+    </>
+  )
 
-      {/* 操作按钮组（hover 时可见） */}
-      <div className={cn(
-        'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100 overflow-hidden',
-        hovered && !editing ? 'opacity-100' : 'opacity-0 w-0 pointer-events-none'
-      )}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onTogglePin(conversation.id)
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onSelect}
+          onDoubleClick={(e) => {
+            e.stopPropagation()
+            startEdit()
+          }}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+          className={cn(
+            'relative w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors duration-100 titlebar-no-drag text-left',
+            active
+              ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+              : 'hover:bg-primary/5'
+          )}
+        >
+          {/* 流式状态左侧竖线条（与 Agent 保持一致） */}
+          {streaming && (
+            <span
+              className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-emerald-500 animate-pulse pointer-events-none"
+              aria-hidden="true"
+            />
+          )}
+          <div className="flex-1 min-w-0">
+            {editing ? (
+              <input
+                ref={inputRef}
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onBlur={saveTitle}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full bg-transparent text-[13px] leading-5 text-foreground border-b border-primary/50 outline-none px-0 py-0"
+                maxLength={100}
+              />
+            ) : (
+              <div className={cn(
+                'truncate text-[13px] leading-5 flex items-center gap-1.5',
+                active ? 'text-foreground' : 'text-foreground/80'
+              )}>
+                {/* 置顶标记 */}
+                {showPinIcon && (
+                  <Pin size={11} className="flex-shrink-0 text-primary/60" />
+                )}
+                <span className="truncate">{conversation.title}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 三点菜单按钮（hover 时可见，始终占位避免跳动） */}
+          {!editing && (
+            <div
+              className="flex-shrink-0"
+              onClick={(e) => e.stopPropagation()}
             >
-              {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">{isPinned ? '取消置顶' : '置顶对话'}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                startEdit()
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-            >
-              <Pencil size={13} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">重命名</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleArchive(conversation.id)
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-            >
-              {conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">{conversation.archived ? '取消归档' : '归档'}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onRequestDelete()
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-destructive/10 hover:text-destructive transition-colors"
-            >
-              <Trash2 size={13} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">删除对话</TooltipContent>
-        </Tooltip>
-      </div>
-    </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={cn(
+                      'p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors',
+                      'data-[state=open]:bg-foreground/[0.08] data-[state=open]:text-foreground/60 data-[state=open]:opacity-100',
+                      !hovered && 'opacity-0 pointer-events-none'
+                    )}
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+                  {menuItems(DropdownMenuItem, DropdownMenuSeparator)}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40 z-[9999] min-w-0 p-0.5">
+        {menuItems(ContextMenuItem, ContextMenuSeparator)}
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -1633,168 +1912,135 @@ function AgentSessionItem({
     }
   }
 
+  const isWorking = isInWorkingSection || session.manualWorking
+  const canMove = indicatorStatus === 'idle' || indicatorStatus === 'completed'
+
+  const menuItems = (
+    MenuItem: typeof ContextMenuItem | typeof DropdownMenuItem,
+    MenuSeparator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator,
+  ) => (
+    <>
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onTogglePin(session.id)}>
+        {session.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+        {session.pinned ? '取消置顶' : '置顶会话'}
+      </MenuItem>
+      <MenuItem
+        className="text-xs py-1 [&>svg]:size-3.5"
+        disabled={indicatorStatus === 'running'}
+        onSelect={() => { if (indicatorStatus !== 'running') onToggleManualWorking(session.id) }}
+      >
+        <Hammer size={14} className={isWorking ? 'fill-current' : ''} />
+        {indicatorStatus === 'running' ? '运行中无法移出' : isWorking ? '取消工作中' : '标记为工作中'}
+      </MenuItem>
+      {canMove && (
+        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onRequestMove()}>
+          <ArrowRightLeft size={14} />
+          迁移到其他工作区
+        </MenuItem>
+      )}
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => startEdit()}>
+        <Pencil size={14} />
+        重命名
+      </MenuItem>
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onToggleArchive(session.id)}>
+        {session.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+        {session.archived ? '取消归档' : '归档'}
+      </MenuItem>
+      <MenuSeparator className="my-0.5" />
+      <MenuItem className="text-xs py-1 [&>svg]:size-3.5 text-destructive" onSelect={() => onRequestDelete()}>
+        <Trash2 size={14} />
+        删除会话
+      </MenuItem>
+    </>
+  )
+
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        startEdit()
-      }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      className={cn(
-        'relative w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors duration-100 titlebar-no-drag text-left',
-        active
-          ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
-          : 'hover:bg-primary/5'
-      )}
-    >
-      {leftAccent && (
-        <span
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onSelect}
+          onDoubleClick={(e) => {
+            e.stopPropagation()
+            startEdit()
+          }}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
           className={cn(
-            'absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full pointer-events-none',
-            SESSION_LEFT_ACCENT_CLASS[leftAccent]
+            'relative w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors duration-100 titlebar-no-drag text-left',
+            active
+              ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+              : 'hover:bg-primary/5'
           )}
-        />
-      )}
-      <div className="flex-1 min-w-0">
-        {editing ? (
-          <input
-            ref={inputRef}
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={saveTitle}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full bg-transparent text-[13px] leading-5 text-foreground border-b border-primary/50 outline-none px-0 py-0"
-            maxLength={100}
-          />
-        ) : (
-          <div className={cn(
-            'truncate text-[13px] leading-5 flex items-center gap-1.5',
-            active ? 'text-foreground' : 'text-foreground/80'
-          )}>
-            {showPinIcon && (
-              <Pin size={11} className="flex-shrink-0 text-primary/60" />
-            )}
-            <span className="truncate">{session.title}</span>
-            {workspaceName && (
-              <span className="flex-shrink-0 px-1.5 py-0 rounded-full bg-foreground/[0.06] text-[10px] leading-4 text-foreground/40 font-medium truncate max-w-[80px]">
-                {workspaceName}
-              </span>
+        >
+          {leftAccent && (
+            <span
+              className={cn(
+                'absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full pointer-events-none',
+                SESSION_LEFT_ACCENT_CLASS[leftAccent]
+              )}
+            />
+          )}
+          <div className="flex-1 min-w-0">
+            {editing ? (
+              <input
+                ref={inputRef}
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onBlur={saveTitle}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full bg-transparent text-[13px] leading-5 text-foreground border-b border-primary/50 outline-none px-0 py-0"
+                maxLength={100}
+              />
+            ) : (
+              <div className={cn(
+                'truncate text-[13px] leading-5 flex items-center gap-1.5',
+                active ? 'text-foreground' : 'text-foreground/80'
+              )}>
+                {showPinIcon && (
+                  <Pin size={11} className="flex-shrink-0 text-primary/60" />
+                )}
+                <span className="truncate">{session.title}</span>
+                {workspaceName && (
+                  <span className="flex-shrink-0 px-1.5 py-0 rounded-full bg-primary/10 text-[10px] leading-4 workspace-badge font-medium truncate max-w-[80px]">
+                    {workspaceName}
+                  </span>
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
 
-      {/* 操作按钮组（hover 时可见） */}
-      <div className={cn(
-        'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100 overflow-hidden',
-        hovered && !editing ? 'opacity-100' : 'opacity-0 w-0 pointer-events-none'
-      )}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onTogglePin(session.id)
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+          {/* 三点菜单按钮（hover 时可见，始终占位避免跳动） */}
+          {!editing && (
+            <div
+              className="flex-shrink-0"
+              onClick={(e) => e.stopPropagation()}
             >
-              {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">{session.pinned ? '取消置顶' : '置顶会话'}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                if (indicatorStatus !== 'running') {
-                  onToggleManualWorking(session.id)
-                }
-              }}
-              disabled={indicatorStatus === 'running'}
-              className={cn(
-                'p-1 rounded-md transition-colors',
-                indicatorStatus === 'running'
-                  ? 'text-primary/40 cursor-not-allowed'
-                  : (isInWorkingSection || session.manualWorking)
-                    ? 'text-primary hover:bg-foreground/[0.08]'
-                    : 'text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60'
-              )}
-            >
-              <Hammer size={13} className={(isInWorkingSection || session.manualWorking) ? 'fill-current' : ''} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {indicatorStatus === 'running'
-              ? '运行中无法移出'
-              : (isInWorkingSection || session.manualWorking) ? '取消工作中' : '标记为工作中'}
-          </TooltipContent>
-        </Tooltip>
-        {(indicatorStatus === 'idle' || indicatorStatus === 'completed') && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onRequestMove()
-                }}
-                className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-              >
-                <ArrowRightLeft size={13} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">迁移到其他工作区</TooltipContent>
-          </Tooltip>
-        )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                startEdit()
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-            >
-              <Pencil size={13} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">重命名</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleArchive(session.id)
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-            >
-              {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">{session.archived ? '取消归档' : '归档'}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onRequestDelete()
-              }}
-              className="p-1 rounded-md text-foreground/30 hover:bg-destructive/10 hover:text-destructive transition-colors"
-            >
-              <Trash2 size={13} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">删除会话</TooltipContent>
-        </Tooltip>
-      </div>
-    </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={cn(
+                      'p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors',
+                      'data-[state=open]:bg-foreground/[0.08] data-[state=open]:text-foreground/60 data-[state=open]:opacity-100',
+                      !hovered && 'opacity-0 pointer-events-none'
+                    )}
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+                  {menuItems(DropdownMenuItem, DropdownMenuSeparator)}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40 z-[9999] min-w-0 p-0.5">
+        {menuItems(ContextMenuItem, ContextMenuSeparator)}
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }

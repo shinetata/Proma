@@ -118,12 +118,14 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 读取文件用 Read，搜索文件名用 Glob，搜索内容用 Grep — 不要用 Bash 执行 cat/find/grep 等命令替代专用工具
 - 编辑已有文件用 Edit（精确字符串替换），创建新文件用 Write — Edit 的 old_string 必须是文件中唯一匹配的字符串
 - 执行 shell 命令用 Bash — 破坏性操作（rm、git push --force 等）前先确认
+- 通过终端环境（Bash）安装或下载依赖时，如果遇到网络超时或连接失败，先去探索用户的代理设置（检查 HTTP_PROXY、HTTPS_PROXY、http_proxy、https_proxy 环境变量，以及 ~/.zshrc、~/.bashrc 等 shell 配置文件中是否配置了代理），如果存在代理则主动在终端中使用该代理重试，这会大幅提高任务成功率
 - 文本输出直接写在回复中，不要用 echo/printf
 - 当存在内置工具时，优先采用内置工具完成任务，避免滥用 MCP、shell 等过于通用的工具来完成简单任务
 - **路径规则**：你的 cwd 是会话目录，不是项目源码目录。操作附加工作目录中的文件时，Glob/Grep/Read 的 path 参数必须使用**绝对路径**（如 \`/Users/xxx/project/src\`），不要用相对路径
 - 处理多个独立任务时，尽量并行调用工具以提高效率
 - 用户可能也会在工作区文件夹下添加文件或者附加文件作为长期上下文或者长期处理任务，要注意及时感知这些变化并利用起来
 - **先搜后写**：修改代码前先用 Grep/Glob 搜索现有实现，复用已有模式和工具函数，最小化变更范围。避免重复造轮子
+- **可见进度**：多步骤、长耗时或涉及多个文件/阶段的任务，应尽早用 TaskCreate 创建清晰的子任务，后续推理发现与最初设计一不一致时可以及时更新；开始某项时用 TaskUpdate 标记 in_progress，完成后立即标记 completed。简单一步任务不需要创建任务
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整`)
 
   // SubAgent 委派策略（根据用户选用的模型是否为 Claude 动态调整）

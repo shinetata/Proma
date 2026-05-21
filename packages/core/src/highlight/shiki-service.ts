@@ -24,7 +24,7 @@ const DEFAULT_LANGS: BundledLanguage[] = [
 ]
 
 /** 默认加载的主题 */
-const DEFAULT_THEMES: BundledTheme[] = ['github-light', 'github-dark']
+const DEFAULT_THEMES: BundledTheme[] = ['github-light', 'github-dark', 'one-light', 'one-dark-pro']
 
 /** 常见语言别名映射 */
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -66,6 +66,31 @@ export interface HighlightResult {
   html: string
   /** 实际使用的语言（经过别名解析和 fallback） */
   language: string
+}
+
+/** 不规则语言显示名称（无法通过首字母大写自动生成） */
+const DISPLAY_NAMES: Record<string, string> = {
+  js: 'JavaScript', javascript: 'JavaScript',
+  ts: 'TypeScript', typescript: 'TypeScript',
+  tsx: 'TSX', jsx: 'JSX',
+  py: 'Python', rb: 'Ruby',
+  cpp: 'C++', 'c++': 'C++',
+  cs: 'C#', csharp: 'C#',
+  kt: 'Kotlin', rs: 'Rust',
+  sh: 'Shell', zsh: 'Shell',
+  yml: 'YAML', md: 'Markdown',
+  tf: 'Terraform',
+  html: 'HTML', css: 'CSS', scss: 'SCSS', less: 'LESS',
+  json: 'JSON', xml: 'XML', sql: 'SQL',
+  graphql: 'GraphQL', php: 'PHP',
+  plaintext: 'Text', text: 'Text',
+}
+
+/** 获取语言显示名称，未匹配的自动首字母大写 */
+export function getDisplayName(lang: string): string {
+  if (!lang) return 'Code'
+  const key = lang.toLowerCase()
+  return DISPLAY_NAMES[key] ?? key.charAt(0).toUpperCase() + key.slice(1)
 }
 
 /** 单个高亮 token */

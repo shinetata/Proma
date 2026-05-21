@@ -37,8 +37,6 @@ import {
   Send,
   Server,
   Terminal,
-  UserMinus,
-  Users,
   Wrench,
   Zap,
 } from 'lucide-react'
@@ -62,8 +60,6 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   TaskUpdate: ListChecks,
   TaskGet: FileSearch,
   TaskList: List,
-  TeamCreate: Users,
-  TeamDelete: UserMinus,
   Agent: Bot,
   EnterPlanMode: Map,
   ExitPlanMode: MapPinOff,
@@ -110,10 +106,8 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   TodoRead: '阅读待办',
   TaskCreate: '创建任务',
   TaskUpdate: '更新任务',
-  TaskGet: '加载任务',
+  TaskGet: '查看任务',
   TaskList: '任务列表',
-  TeamCreate: '创建 Agent Teams',
-  TeamDelete: '删除 Agent Teams',
   Agent: 'Agent',
   EnterPlanMode: '正在生成计划',
   ExitPlanMode: '正在退出计划',
@@ -287,17 +281,6 @@ export function getInputSummary(
       return null
     }
 
-    case 'TeamCreate': {
-      const parts: string[] = []
-      if (typeof input.team_name === 'string') {
-        parts.push(input.team_name)
-      }
-      if (typeof input.description === 'string') {
-        parts.push(input.description)
-      }
-      return parts.length > 0 ? parts.join(' · ') : null
-    }
-
     case 'Agent': {
       const parts: string[] = []
       if (typeof input.name === 'string') {
@@ -454,77 +437,4 @@ export function formatElapsed(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
   const remainingSeconds = Math.floor(seconds % 60)
   return `${minutes}m ${remainingSeconds}s`
-}
-
-/** 文件扩展名到语言标识的映射 */
-const EXT_LANGUAGE_MAP: Record<string, string> = {
-  ts: 'typescript',
-  tsx: 'tsx',
-  js: 'javascript',
-  jsx: 'jsx',
-  py: 'python',
-  rb: 'ruby',
-  go: 'go',
-  rs: 'rust',
-  java: 'java',
-  kt: 'kotlin',
-  swift: 'swift',
-  c: 'c',
-  cpp: 'cpp',
-  h: 'c',
-  hpp: 'cpp',
-  cs: 'csharp',
-  php: 'php',
-  json: 'json',
-  jsonl: 'json',
-  yaml: 'yaml',
-  yml: 'yaml',
-  toml: 'toml',
-  xml: 'xml',
-  html: 'html',
-  htm: 'html',
-  css: 'css',
-  scss: 'scss',
-  less: 'less',
-  md: 'markdown',
-  mdx: 'mdx',
-  sql: 'sql',
-  sh: 'shellscript',
-  bash: 'shellscript',
-  zsh: 'shellscript',
-  fish: 'shellscript',
-  ps1: 'powershell',
-  dockerfile: 'dockerfile',
-  makefile: 'makefile',
-  lua: 'lua',
-  r: 'r',
-  scala: 'scala',
-  dart: 'dart',
-  vue: 'vue',
-  svelte: 'svelte',
-  graphql: 'graphql',
-  gql: 'graphql',
-  proto: 'protobuf',
-  env: 'shellscript',
-  ini: 'ini',
-  conf: 'ini',
-  cfg: 'ini',
-}
-
-/**
- * 根据文件路径推断语法高亮语言标识
- * 返回 Shiki 可识别的语言 ID，未知扩展名返回 'text'
- */
-export function inferLanguageFromPath(filePath: string): string {
-  const basename = filePath.split('/').pop() ?? filePath
-  // 处理无扩展名的特殊文件
-  const lowerBasename = basename.toLowerCase()
-  if (lowerBasename === 'dockerfile') return 'dockerfile'
-  if (lowerBasename === 'makefile' || lowerBasename === 'gnumakefile') return 'makefile'
-  if (lowerBasename.startsWith('.env')) return 'shellscript'
-
-  const dotIndex = basename.lastIndexOf('.')
-  if (dotIndex === -1) return 'text'
-  const ext = basename.slice(dotIndex + 1).toLowerCase()
-  return EXT_LANGUAGE_MAP[ext] ?? 'text'
 }

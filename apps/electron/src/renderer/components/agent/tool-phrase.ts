@@ -190,8 +190,8 @@ export function getToolPhrase(toolName: string, input: Record<string, unknown>):
 
     case 'TaskGet': {
       const taskId = input.taskId
-      if (typeof taskId === 'string') return phrase(`加载任务 #${taskId}`)
-      return phrase('加载任务')
+      if (typeof taskId === 'string') return phrase(`查看任务 #${taskId}`)
+      return phrase('查看任务')
     }
 
     case 'TaskList': {
@@ -208,18 +208,6 @@ export function getToolPhrase(toolName: string, input: Record<string, unknown>):
 
     case 'TodoRead': {
       return phrase('读取待办')
-    }
-
-    case 'TeamCreate': {
-      const name = input.team_name
-      if (typeof name === 'string') return phrase(`创建 Agent Teams ${name}`)
-      return phrase('创建 Agent Teams')
-    }
-
-    case 'TeamDelete': {
-      const name = input.team_name
-      if (typeof name === 'string') return phrase(`删除 Agent Teams ${name}`)
-      return phrase('删除 Agent Teams')
     }
 
     case 'EnterPlanMode': {

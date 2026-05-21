@@ -315,6 +315,68 @@
   app-region: drag;
 }
 
+/* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */
+.sidebar-window-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* Windows 自定义窗口控制按钮
+ *
+ * 可点击性关键点（解决 Windows 用户点击失效 / 需要双击的 bug）：
+ * 1. 容器本身就是 no-drag 矩形，不靠"在 drag 区里挖三个小洞"——避免 Chromium hitmask
+ *    在小矩形 + 高 DPI 缩放下的像素对齐误差。
+ * 2. AppShell 的 drag-region 在 Windows 上不再延伸到按钮区域（见 AppShell.tsx 的 right-[126px]），
+ *    drag 与 no-drag 区域彻底解耦，OS hitmask 不会再误判。
+ * 3. 按钮尺寸与位置使用整数 px，避免 125%/150%/175% DPI 下四舍五入收缩。
+ */
+.window-controls {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  height: 28px;
+  gap: 1px;
+}
+
+.window-control-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  border: none;
+  cursor: default;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-control-btn:hover {
+  background-color: hsl(var(--muted) / 0.35);
+  color: hsl(var(--foreground));
+}
+
+.window-control-btn:active {
+  background-color: hsl(var(--muted) / 0.5);
+}
+
+.window-control-close:hover {
+  background-color: #c42b1c;
+  color: #fff;
+}
+
+.window-control-close:active {
+  background-color: #a01d11;
+  color: #fff;
+}
+
 /* 深色特殊主题 dialog 光晕效果 */
 .theme-ocean-dark [data-radix-dialog-content],
 .theme-forest-dark [data-radix-dialog-content],
@@ -381,46 +443,54 @@
 /* ===== 碧海主题：会话/工作区选中状态 ===== */
 /* 晴空碧海：浅蓝背景 + 深蓝文字 */
 .theme-ocean-light .session-item-selected,
-.theme-ocean-light .workspace-item-selected {
+.theme-ocean-light .workspace-item-selected,
+.theme-ocean-light .tab-item-selected {
   background: hsl(205 35% 82%) !important;  /* 浅蓝色背景 */
   color: hsl(205 50% 25%) !important;       /* 深蓝色文字 */
 }
 .theme-ocean-light .session-item-selected *,
-.theme-ocean-light .workspace-item-selected * {
+.theme-ocean-light .workspace-item-selected *,
+.theme-ocean-light .tab-item-selected * {
   color: inherit !important;
 }
 
 /* 苍穹暮色：深蓝背景 + 亮蓝文字 */
 .theme-ocean-dark .session-item-selected.session-item-selected,
-.theme-ocean-dark .workspace-item-selected.workspace-item-selected {
+.theme-ocean-dark .workspace-item-selected.workspace-item-selected,
+.theme-ocean-dark .tab-item-selected.tab-item-selected {
   background-color: hsl(210 40% 18%) !important;  /* 深蓝色背景 */
   color: hsl(205 70% 75%) !important;       /* 亮蓝色文字 */
 }
 .theme-ocean-dark .session-item-selected *,
-.theme-ocean-dark .workspace-item-selected * {
+.theme-ocean-dark .workspace-item-selected *,
+.theme-ocean-dark .tab-item-selected * {
   color: inherit !important;
 }
 
 /* ===== 森系主题：会话/工作区选中状态 ===== */
 /* 森息晨光：浅绿背景 + 深绿文字 */
 .theme-forest-light .session-item-selected,
-.theme-forest-light .workspace-item-selected {
+.theme-forest-light .workspace-item-selected,
+.theme-forest-light .tab-item-selected {
   background: hsl(145 25% 82%) !important;  /* 浅绿色背景 */
   color: hsl(150 35% 25%) !important;       /* 深绿色文字 */
 }
 .theme-forest-light .session-item-selected *,
-.theme-forest-light .workspace-item-selected * {
+.theme-forest-light .workspace-item-selected *,
+.theme-forest-light .tab-item-selected * {
   color: inherit !important;
 }
 
 /* 森息夜语：深绿背景 + 亮绿文字 */
 .theme-forest-dark .session-item-selected.session-item-selected,
-.theme-forest-dark .workspace-item-selected.workspace-item-selected {
+.theme-forest-dark .workspace-item-selected.workspace-item-selected,
+.theme-forest-dark .tab-item-selected.tab-item-selected {
   background-color: hsl(150 25% 18%) !important;  /* 深绿色背景 */
   color: hsl(150 40% 70%) !important;       /* 亮绿色文字 */
 }
 .theme-forest-dark .session-item-selected *,
-.theme-forest-dark .workspace-item-selected * {
+.theme-forest-dark .workspace-item-selected *,
+.theme-forest-dark .tab-item-selected * {
   color: inherit !important;
 }
 
@@ -437,24 +507,58 @@
 /* ===== 莫兰迪主题：会话/工作区选中状态 ===== */
 /* 莫兰迪夜：淡紫灰背景 + 温暖杏粉文字 */
 .theme-slate-dark .session-item-selected.session-item-selected,
-.theme-slate-dark .workspace-item-selected.workspace-item-selected {
+.theme-slate-dark .workspace-item-selected.workspace-item-selected,
+.theme-slate-dark .tab-item-selected.tab-item-selected {
   background-color: hsl(260 10% 22%) !important;  /* 淡紫灰背景 */
   color: hsl(15 30% 75%) !important;        /* 淡杏粉文字 */
 }
 .theme-slate-dark .session-item-selected *,
-.theme-slate-dark .workspace-item-selected * {
+.theme-slate-dark .workspace-item-selected *,
+.theme-slate-dark .tab-item-selected * {
   color: inherit !important;
 }
 
 /* ===== 云朵舞者主题：会话/工作区选中状态 ===== */
 .theme-slate-light .session-item-selected,
-.theme-slate-light .workspace-item-selected {
+.theme-slate-light .workspace-item-selected,
+.theme-slate-light .tab-item-selected {
   background: hsl(40 8% 84%) !important;    /* 温暖灰背景 */
   color: hsl(40 10% 25%) !important;        /* 深暖灰文字 */
 }
 .theme-slate-light .session-item-selected *,
-.theme-slate-light .workspace-item-selected * {
+.theme-slate-light .workspace-item-selected *,
+.theme-slate-light .tab-item-selected * {
   color: inherit !important;
+}
+
+/* ===== 工作区 Badge 文字颜色（追踪 workspace-item-selected 的字色） ===== */
+/* 默认主题（light / dark / system）兜底色：与原先 text-foreground/40 保持一致 */
+.workspace-badge {
+  color: hsl(var(--foreground) / 0.4);
+}
+/* 晴空碧海 */
+.theme-ocean-light .workspace-badge {
+  color: hsl(205 50% 25%);
+}
+/* 苍穹暮色 */
+.theme-ocean-dark .workspace-badge {
+  color: hsl(205 70% 75%);
+}
+/* 森息晨光 */
+.theme-forest-light .workspace-badge {
+  color: hsl(150 35% 25%);
+}
+/* 森息夜语 */
+.theme-forest-dark .workspace-badge {
+  color: hsl(150 40% 70%);
+}
+/* 云朵舞者 */
+.theme-slate-light .workspace-badge {
+  color: hsl(40 10% 25%);
+}
+/* 莫兰迪夜 */
+.theme-slate-dark .workspace-badge {
+  color: hsl(15 30% 75%);
 }
 
 /* ===== TabBar 背景 ===== */
@@ -612,7 +716,8 @@
 }
 
 .code-block-wrapper pre.shiki {
-  font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  /* Cascadia Code 是 Windows 11 预装字体，优先级提高；Courier New 作为 Windows 10 最终兜底 */
+  font-family: 'Fira Code', 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
   background-color: hsl(var(--code-bg)) !important;
 }
 
@@ -789,4 +894,423 @@
 }
 .file-browser-row-flash {
   animation: file-browser-flash 1.2s ease-out;
+}
+
+/* ===== Office 内联预览 ===== */
+.office-preview-host {
+  min-height: 100%;
+  padding: 12px;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+}
+
+.office-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.office-preview-title {
+  color: hsl(var(--foreground) / 0.72);
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.office-preview-notice,
+.office-empty {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.office-preview-notice {
+  border: 1px solid hsl(var(--border) / 0.45);
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.24);
+  padding: 8px 10px;
+}
+
+.office-sheet,
+.office-slide {
+  border: 1px solid hsl(var(--border) / 0.5);
+  border-radius: 8px;
+  background: hsl(var(--background) / 0.72);
+  overflow: hidden;
+}
+
+.office-sheet h3,
+.office-slide h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.office-sheet h3 {
+  padding: 10px 12px;
+  border-bottom: 1px solid hsl(var(--border) / 0.45);
+}
+
+.office-table-wrap {
+  overflow: auto;
+  max-width: 100%;
+}
+
+.office-table-wrap table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.office-table-wrap th,
+.office-table-wrap td {
+  max-width: 280px;
+  min-width: 72px;
+  border-right: 1px solid hsl(var(--border) / 0.35);
+  border-bottom: 1px solid hsl(var(--border) / 0.35);
+  padding: 6px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.office-table-wrap thead th,
+.office-row-heading {
+  position: sticky;
+  z-index: 1;
+  background: hsl(var(--muted) / 0.36);
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+
+.office-table-wrap thead th {
+  top: 0;
+}
+
+.office-row-heading {
+  left: 0;
+  min-width: 44px;
+  text-align: right;
+}
+
+.office-slide {
+  padding: 12px;
+}
+
+.office-slide-index {
+  margin-bottom: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.office-slide ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: hsl(var(--foreground) / 0.82);
+  line-height: 1.6;
+}
+
+.office-slide li + li {
+  margin-top: 4px;
+}
+
+/* ===== 语音输入浮窗拖动区域 ===== */
+.voice-dictation-drag-region {
+  -webkit-app-region: drag;
+  cursor: move;
+}
+
+.voice-dictation-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ===== Tiptap 可编辑表格样式 ===== */
+.ProseMirror table,
+.ProseMirror table.markdown-table {
+  border: 1px solid hsl(var(--foreground) / 0.22);
+  border-collapse: separate;
+  border-radius: 6px;
+  border-spacing: 0;
+  width: 100%;
+  margin: 0.75em 0;
+  overflow: hidden;
+  table-layout: auto;
+}
+
+.ProseMirror table colgroup {
+  display: table-column-group;
+}
+
+.ProseMirror table col {
+  display: table-column;
+}
+
+.ProseMirror table tr {
+  display: table-row;
+}
+
+.ProseMirror table td,
+.ProseMirror table th,
+.ProseMirror table.markdown-table td,
+.ProseMirror table.markdown-table th,
+.ProseMirror .md-td,
+.ProseMirror .md-th {
+  background-clip: padding-box;
+  border: 0 !important;
+  border-right: 1px solid hsl(var(--foreground) / 0.28) !important;
+  border-bottom: 1px solid hsl(var(--foreground) / 0.16) !important;
+  box-shadow: inset -1px 0 0 hsl(var(--background) / 0.9);
+  min-width: 48px;
+  padding: 4px 8px;
+  position: relative;
+  vertical-align: top;
+}
+
+.ProseMirror table.markdown-table td,
+.ProseMirror table.markdown-table th {
+  border-right-color: hsl(var(--foreground) / 0.28) !important;
+}
+
+.ProseMirror table td:not(:last-child)::after,
+.ProseMirror table th:not(:last-child)::after,
+.ProseMirror table.markdown-table td:not(:last-child)::after,
+.ProseMirror table.markdown-table th:not(:last-child)::after {
+  background: hsl(var(--foreground) / 0.28);
+  bottom: 0;
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  right: -1px;
+  top: 0;
+  width: 1px;
+}
+
+.ProseMirror table tr > :last-child,
+.ProseMirror table.markdown-table tr > :last-child {
+  border-right: 0 !important;
+  box-shadow: none;
+}
+
+.ProseMirror table tr:last-child > *,
+.ProseMirror table.markdown-table tr:last-child > * {
+  border-bottom: 0 !important;
+}
+
+.ProseMirror table th,
+.ProseMirror table.markdown-table th {
+  background-color: hsl(var(--muted) / 0.5);
+  font-weight: 600;
+  text-align: left;
+}
+
+.ProseMirror table tr:nth-child(even) td,
+.ProseMirror table.markdown-table tr:nth-child(even) td {
+  background-color: hsl(var(--muted) / 0.15);
+}
+
+.ProseMirror .selectedCell::after {
+  z-index: 2;
+  position: absolute;
+  content: '';
+  inset: 0;
+  background: hsl(var(--primary) / 0.12);
+  pointer-events: none;
+}
+
+.ProseMirror:not([contenteditable='true']) .selectedCell::after {
+  display: none;
+}
+
+/* ===== Tiptap 可编辑代码块 ===== */
+.ProseMirror pre.markdown-code-block {
+  background: hsl(var(--muted) / 0.45) !important;
+  color: hsl(var(--foreground)) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.dark .ProseMirror pre.markdown-code-block,
+.theme-ocean-dark .ProseMirror pre.markdown-code-block,
+.theme-slate-dark .ProseMirror pre.markdown-code-block {
+  background: hsl(var(--muted)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.theme-forest-dark .ProseMirror pre.markdown-code-block {
+  background: hsl(150 20% 9%) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.ProseMirror pre.markdown-code-block code,
+.ProseMirror pre.markdown-code-block code * {
+  background: transparent !important;
+  font: inherit;
+  padding: 0 !important;
+  -webkit-text-fill-color: currentColor;
+}
+
+.ProseMirror pre.markdown-code-block .hljs-comment,
+.ProseMirror pre.markdown-code-block .hljs-quote {
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
+.ProseMirror pre.markdown-code-block .hljs-keyword,
+.ProseMirror pre.markdown-code-block .hljs-selector-tag,
+.ProseMirror pre.markdown-code-block .hljs-subst,
+.ProseMirror pre.markdown-code-block .hljs-doctag,
+.ProseMirror pre.markdown-code-block .hljs-template-tag,
+.ProseMirror pre.markdown-code-block .hljs-template-variable {
+  color: hsl(var(--primary));
+  font-weight: 600;
+}
+
+.ProseMirror pre.markdown-code-block .hljs-string,
+.ProseMirror pre.markdown-code-block .hljs-regexp,
+.ProseMirror pre.markdown-code-block .hljs-title,
+.ProseMirror pre.markdown-code-block .hljs-section,
+.ProseMirror pre.markdown-code-block .hljs-name,
+.ProseMirror pre.markdown-code-block .hljs-selector-id,
+.ProseMirror pre.markdown-code-block .hljs-selector-class {
+  color: hsl(150 55% 34%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-string,
+.dark .ProseMirror pre.markdown-code-block .hljs-regexp,
+.dark .ProseMirror pre.markdown-code-block .hljs-title,
+.dark .ProseMirror pre.markdown-code-block .hljs-section,
+.dark .ProseMirror pre.markdown-code-block .hljs-name,
+.dark .ProseMirror pre.markdown-code-block .hljs-selector-id,
+.dark .ProseMirror pre.markdown-code-block .hljs-selector-class {
+  color: hsl(150 55% 62%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-number,
+.ProseMirror pre.markdown-code-block .hljs-literal,
+.ProseMirror pre.markdown-code-block .hljs-variable,
+.ProseMirror pre.markdown-code-block .hljs-template-variable,
+.ProseMirror pre.markdown-code-block .hljs-attribute,
+.ProseMirror pre.markdown-code-block .hljs-symbol,
+.ProseMirror pre.markdown-code-block .hljs-bullet {
+  color: hsl(24 80% 44%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-number,
+.dark .ProseMirror pre.markdown-code-block .hljs-literal,
+.dark .ProseMirror pre.markdown-code-block .hljs-variable,
+.dark .ProseMirror pre.markdown-code-block .hljs-template-variable,
+.dark .ProseMirror pre.markdown-code-block .hljs-attribute,
+.dark .ProseMirror pre.markdown-code-block .hljs-symbol,
+.dark .ProseMirror pre.markdown-code-block .hljs-bullet {
+  color: hsl(32 90% 64%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-built_in,
+.ProseMirror pre.markdown-code-block .hljs-type,
+.ProseMirror pre.markdown-code-block .hljs-class .hljs-title,
+.ProseMirror pre.markdown-code-block .hljs-function .hljs-title,
+.ProseMirror pre.markdown-code-block .hljs-title.function_ {
+  color: hsl(210 70% 45%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-built_in,
+.dark .ProseMirror pre.markdown-code-block .hljs-type,
+.dark .ProseMirror pre.markdown-code-block .hljs-class .hljs-title,
+.dark .ProseMirror pre.markdown-code-block .hljs-function .hljs-title,
+.dark .ProseMirror pre.markdown-code-block .hljs-title.function_ {
+  color: hsl(210 90% 70%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-attr,
+.ProseMirror pre.markdown-code-block .hljs-property,
+.ProseMirror pre.markdown-code-block .hljs-params,
+.ProseMirror pre.markdown-code-block .hljs-selector-attr,
+.ProseMirror pre.markdown-code-block .hljs-selector-pseudo {
+  color: hsl(270 55% 48%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-attr,
+.dark .ProseMirror pre.markdown-code-block .hljs-property,
+.dark .ProseMirror pre.markdown-code-block .hljs-params,
+.dark .ProseMirror pre.markdown-code-block .hljs-selector-attr,
+.dark .ProseMirror pre.markdown-code-block .hljs-selector-pseudo {
+  color: hsl(275 72% 74%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-operator,
+.ProseMirror pre.markdown-code-block .hljs-punctuation,
+.ProseMirror pre.markdown-code-block .hljs-meta,
+.ProseMirror pre.markdown-code-block .hljs-link {
+  color: hsl(190 72% 34%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-operator,
+.dark .ProseMirror pre.markdown-code-block .hljs-punctuation,
+.dark .ProseMirror pre.markdown-code-block .hljs-meta,
+.dark .ProseMirror pre.markdown-code-block .hljs-link {
+  color: hsl(190 78% 65%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-tag,
+.ProseMirror pre.markdown-code-block .hljs-tag .hljs-name {
+  color: hsl(345 72% 44%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-tag,
+.dark .ProseMirror pre.markdown-code-block .hljs-tag .hljs-name {
+  color: hsl(345 82% 70%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-addition {
+  color: hsl(145 58% 32%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-addition {
+  color: hsl(145 62% 64%);
+}
+
+.ProseMirror pre.markdown-code-block .hljs-deletion {
+  color: hsl(0 68% 48%);
+}
+
+.dark .ProseMirror pre.markdown-code-block .hljs-deletion {
+  color: hsl(0 78% 72%);
+}
+
+.ProseMirror .markdown-code-edit-layer {
+  background: transparent !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-size: 13px !important;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: 0 !important;
+  line-height: 1.6 !important;
+  tab-size: 2;
+  white-space: pre !important;
+}
+
+.ProseMirror .markdown-code-edit-layer code {
+  background: transparent !important;
+  color: hsl(var(--foreground)) !important;
+  font: inherit !important;
+  letter-spacing: 0 !important;
+  line-height: inherit !important;
+  padding: 0 !important;
+  tab-size: inherit;
+  white-space: pre !important;
+  -webkit-text-fill-color: currentColor;
+  caret-color: hsl(var(--foreground));
+}
+
+.ProseMirror .markdown-code-edit-layer ::selection {
+  background: hsl(var(--primary) / 0.22);
 }

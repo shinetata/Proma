@@ -178,7 +178,6 @@ bun run generate:icons    # 生成应用图标
 | `agent-ask-user-service.ts` | Agent 用户交互：AskUser 请求处理 |
 | `agent-exit-plan-service.ts` | Agent 退出计划服务 |
 | `agent-workspace-manager.ts` | 工作区管理（16KB）：MCP Server 配置、Skills 配置、工作区 CRUD |
-| `agent-team-reader.ts` | Agent 团队协作：团队配置读取 |
 | `chat-service.ts` | Chat 流式调用编排（20KB）：Provider 适配器集成、消息持久化、AbortController |
 | `conversation-manager.ts` | 对话管理（13KB）：对话 CRUD、JSONL 消息存储、置顶、上下文分割 |
 | `channel-manager.ts` | 渠道管理（16KB）：渠道 CRUD、API Key AES-256-GCM 加密（safeStorage）、连接测试、模型获取 |
@@ -227,9 +226,8 @@ bun run generate:icons    # 生成应用图标
 | **Anthropic** | `anthropic-adapter.ts` | Messages API | extended_thinking、多模态 |
 | **OpenAI** | `openai-adapter.ts` | Chat Completions | 标准 OpenAI 协议 |
 | **DeepSeek** | `anthropic-adapter.ts` | Messages API | Anthropic 兼容 |
-| **Moonshot** | `openai-adapter.ts` | Chat Completions | OpenAI 兼容 |
 | **智谱 AI** | `openai-adapter.ts` | Chat Completions | OpenAI 兼容 |
-| **MiniMax** | `openai-adapter.ts` | Chat Completions | OpenAI 兼容 |
+| **MiniMax** | `anthropic-adapter.ts` | Messages API | Anthropic 兼容 |
 | **豆包** | `openai-adapter.ts` | Chat Completions | OpenAI 兼容 |
 | **通义千问** | `openai-adapter.ts` | Chat Completions | OpenAI 兼容 |
 | **Google** | `google-adapter.ts` | Generative Language API | Gemini 系列 |
@@ -380,6 +378,16 @@ bun run generate:icons    # 生成应用图标
 
 提交代码时始终递增受影响包的 patch 版本（如 `0.1.18` → `0.1.19`），影响多个包则都要递增。
 
+### 默认 Skills 版本契约（`apps/electron/default-skills/`）
+
+修改任何 `default-skills/<skill>/` 内容时，**必须同步递增该 Skill `SKILL.md` frontmatter 的 `version` 字段**（patch +1）。
+
+**为什么**：`seedDefaultSkills()` 与 `upgradeDefaultSkillsInWorkspaces()` 通过 semver 比较决定是否将 bundle 中的 Skill 同步到老用户的 `~/.proma/default-skills/` 与各工作区。**version 不变 = 老用户拿不到新内容**。
+
+**早期实现曾用"无条件 cpSync"绕开这个约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`、`agent-workspace-manager.ts:upgradeDefaultSkillsInWorkspaces`）。
+
+**新增 Skill 不需要先注入 default-skills 目录的旧版本**——`upgradeDefaultSkillsInWorkspaces` 会通过"目标缺失即注入"路径让所有老工作区自动获得。
+
 ## Agent SDK 集成架构
 
 基于 `@anthropic-ai/Codex-agent-sdk@0.2.120` 实现 Agent 模式，与 Chat 模式并行。
@@ -476,7 +484,7 @@ React UI 更新
 
 ### 已实现功能
 
-- ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Moonshot、智谱、MiniMax、豆包、通义千问、Google、自定义端点
+- ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Kimi、智谱、MiniMax、豆包、通义千问、Google、自定义端点
 - ✅ **Agent SDK 集成**：基于 Codex Agent SDK 的完整 Agent 模式
 - ✅ **飞书集成**：消息同步、任务通知、OAuth 认证（68KB 核心服务）
 - ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Skills 管理
