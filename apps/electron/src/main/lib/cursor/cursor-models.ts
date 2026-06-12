@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import type { ChannelModel, ChannelTestResult, FetchModelsResult } from '@proma/shared'
 import { ensureCursorCli } from './cursor-cli-installer'
 
@@ -15,9 +16,11 @@ function runCursorCli(
   args: string[],
   apiKey: string,
   timeoutMs = 30_000,
+  cwd?: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(cliPath, args, {
+      cwd,
       env: { ...process.env, CURSOR_API_KEY: apiKey },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -118,4 +121,49 @@ export async function testCursorConnection(apiKey: string): Promise<ChannelTestR
     return { success: true, message: '连接成功' }
   }
   return { success: false, message: `连接失败 (exit ${code})${stderr ? `: ${stderr.slice(0, 150)}` : ''}` }
+}
+
+/**
+ * 用 cursor-agent CLI 生成会话标题（一次性 LLM 摘要）
+ *
+ * Cursor 无 HTTP 标题端点，改用 headless 一次性调用（-p + text 输出）做摘要，
+ * 让 Cursor 会话与其他渠道一样获得 LLM 总结的标题。
+ *
+ * 关键点（对齐 CursorAgentAdapter.buildArgs，否则 headless 无输出）：
+ * - `-p/--print` 为布尔 flag，prompt 是位置参数，必须放在所有 flag 之后。
+ * - headless 下用 `--force --trust` 自动放行，避免权限/信任提示导致停顿至超时。
+ * - 在临时目录运行（不传 --workspace），避免 agent 探查工作区文件。
+ * - 任何失败 / 超时 / 空输出返回 null，由调用方回退到本地启发式。
+ */
+export async function generateCursorTitle(
+  apiKey: string,
+  modelId: string | undefined,
+  prompt: string,
+): Promise<string | null> {
+  if (!apiKey.trim()) return null
+
+  let cliPath: string
+  try {
+    cliPath = (await ensureCursorCli()).path
+  } catch {
+    return null
+  }
+
+  const args = ['-p', '--output-format', 'text', '--force', '--trust']
+  if (modelId) args.push('--model', modelId)
+  // 位置参数 prompt 放最后，避免被前置 flag 解析吞掉
+  args.push(prompt)
+
+  const { code, stdout, stderr } = await runCursorCli(cliPath, args, apiKey, 20_000, tmpdir())
+  if (code !== 0) {
+    console.warn(`[Cursor 标题] CLI 退出码非零 (exit ${code})${stderr ? `: ${stderr.slice(0, 200)}` : ''}`)
+    return null
+  }
+
+  const text = stdout.trim()
+  if (!text) {
+    console.warn(`[Cursor 标题] CLI 输出为空${stderr ? `，stderr: ${stderr.slice(0, 200)}` : ''}`)
+    return null
+  }
+  return text
 }

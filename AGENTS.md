@@ -474,7 +474,7 @@ RouterAgentAdapter  ── provider=cursor ─→ CursorAgentAdapter → spawn c
 - **参数映射**：`-p --output-format stream-json --trust`；权限 plan → `--mode plan`，其它 → `--force`；`--model` / `--workspace=cwd` / `--resume=<chatId>`；系统提示词 append 作为 prompt 前缀。
 - **凭证与环境**：`CURSOR_API_KEY` 注入子进程；复用编排层 `sdkEnv`（含增强 PATH/HOME），并剥离 `ANTHROPIC_*`。
 - **事件翻译**：`system/init` → `onSessionId`（持久化为 `sdkSessionId` 供 `--resume`）+ `onModelResolved`；`assistant` → 文本块；`tool_call started/completed` → `tool_use`/`tool_result`；`result` → `SDKResultMessage`（进程异常退出则合成 error result，避免编排层挂起）。
-- **自动标题**：Cursor 等 agent-only 渠道无 HTTP 标题端点，`generateTitle()` 对其改用本地截断（首句裁剪），不调用 Provider HTTP。
+- **自动标题**：Cursor 等 agent-only 渠道无 HTTP 标题端点，`generateTitle()` 对 Cursor 优先用 `cursor-agent -p --output-format text`（在临时目录一次性 LLM 摘要，与其他渠道体验一致），失败/超时再回退本地启发式（首句去礼貌前缀 + 截断，见 `localHeuristicTitle`）。
 
 **已知限制（按设计降级）**：
 
