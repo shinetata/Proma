@@ -4,6 +4,7 @@ import type {
   FeishuBotConfig,
   FeishuSessionMirrorSettings,
 } from '@proma/shared'
+import { stripPromaInjectedBlocks } from '@proma/shared'
 
 const DESKTOP_MIRROR_PREFIX = '📱 Proma 桌面'
 const MAX_FEISHU_MIRROR_BODY_LENGTH = 3900
@@ -61,25 +62,6 @@ function firstAttachedFileLabel(content: string): string | null {
     if (lineMatch) return lineMatch[1]!.trim()
   }
   return null
-}
-
-/** 剥离 Proma 注入的 XML / 注释块，提取用户可见正文。 */
-export function stripPromaInjectedBlocks(content: string): string {
-  let text = content
-    .replace(/<!--[\s\S]*?-->\n?/g, '')
-    .replace(/<attached_files>\n?[\s\S]*?\n?<\/attached_files>\n*/g, '')
-    .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
-    .replace(/<bridge_context>\n?[\s\S]*?\n?<\/bridge_context>\n*/g, '')
-    .replace(/<quoted_message>\n?[\s\S]*?\n?<\/quoted_message>\n*/g, '')
-    .replace(/<interactive_card>\n?[\s\S]*?\n?<\/interactive_card>\n*/g, '')
-    .replace(/<group_extra>\n?[\s\S]*?\n?<\/group_extra>\n*/g, '')
-
-  const userMessageMatch = text.match(/<user_message>\n?([\s\S]*?)\n?<\/user_message>/)
-  if (userMessageMatch) {
-    text = userMessageMatch[1]!
-  }
-
-  return text.trim()
 }
 
 /** 将桌面端 userMessage 格式化为飞书镜像群可见文本。 */
