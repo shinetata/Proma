@@ -33,36 +33,42 @@ interface PlanOption {
   variant: 'default' | 'secondary' | 'destructive'
 }
 
-const PLAN_OPTIONS: PlanOption[] = [
-  {
-    action: 'approve_auto',
-    label: '批准并完全自动执行',
-    description: '后续工具调用全部自动允许',
-    icon: <Check className="size-3.5" />,
-    variant: 'default',
-  },
-  {
-    action: 'approve_edit',
-    label: '批准并自动审批',
-    description: '使用 SDK 自动审批器判断后续操作',
-    icon: <ShieldCheck className="size-3.5" />,
-    variant: 'secondary',
-  },
-  {
-    action: 'deny',
-    label: '拒绝计划',
-    description: '直接拒绝，Agent 不会执行计划',
-    icon: <X className="size-3.5" />,
-    variant: 'destructive',
-  },
-  {
-    action: 'feedback',
-    label: '提供修改意见',
-    description: '告诉 Agent 需要调整什么',
-    icon: <MessageSquare className="size-3.5" />,
-    variant: 'secondary',
-  },
-]
+function buildPlanOptions(isCursorSynthetic: boolean): PlanOption[] {
+  return [
+    {
+      action: 'approve_auto',
+      label: '批准并完全自动执行',
+      description: isCursorSynthetic
+        ? '批准后自动开始执行，工具全部自动允许'
+        : '后续工具调用全部自动允许',
+      icon: <Check className="size-3.5" />,
+      variant: 'default',
+    },
+    {
+      action: 'approve_edit',
+      label: '批准并自动审批',
+      description: isCursorSynthetic
+        ? '批准后自动开始执行，危险操作需确认'
+        : '使用 SDK 自动审批器判断后续操作',
+      icon: <ShieldCheck className="size-3.5" />,
+      variant: 'secondary',
+    },
+    {
+      action: 'deny',
+      label: '拒绝计划',
+      description: '直接拒绝，Agent 不会执行计划',
+      icon: <X className="size-3.5" />,
+      variant: 'destructive',
+    },
+    {
+      action: 'feedback',
+      label: '提供修改意见',
+      description: '告诉 Agent 需要调整什么',
+      icon: <MessageSquare className="size-3.5" />,
+      variant: 'secondary',
+    },
+  ]
+}
 
 interface ExitPlanModeBannerProps {
   sessionId: string
@@ -78,6 +84,11 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
   const [submitting, setSubmitting] = React.useState(false)
 
   const request = requests[0] ?? null
+  const isCursorSynthetic = request?.source === 'cursor_synthetic'
+  const planOptions = React.useMemo(
+    () => buildPlanOptions(isCursorSynthetic),
+    [isCursorSynthetic],
+  )
 
   // ===== Refs：确保 keydown handler 始终读取最新值，消除闭包过期问题 =====
   const focusedIdxRef = React.useRef(focusedIdx)
@@ -166,14 +177,14 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
 
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
-        const count = PLAN_OPTIONS.length
+        const count = planOptions.length
         const next = e.key === 'ArrowDown'
           ? (curFocusIdx + 1) % count
           : (curFocusIdx - 1 + count) % count
         setFocusedIdx(next)
       } else if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault()
-        const option = PLAN_OPTIONS[curFocusIdx]
+        const option = planOptions[curFocusIdx]
         if (option) {
           if (option.action === 'feedback') {
             setShowFeedback(true)
@@ -183,7 +194,7 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
         }
       } else if (e.key >= '1' && e.key <= '4') {
         const idx = parseInt(e.key) - 1
-        const option = PLAN_OPTIONS[idx]
+        const option = planOptions[idx]
         if (option) {
           setFocusedIdx(idx)
           if (option.action === 'feedback') {
@@ -197,7 +208,7 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [request?.requestId])
+  }, [request?.requestId, planOptions])
 
   if (!request) return null
 
@@ -218,8 +229,8 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
           </button>
         </div>
         <p className="text-xs text-muted-foreground">
-          {request.source === 'cursor_synthetic'
-            ? 'Agent 已完成规划，请选择如何继续'
+          {isCursorSynthetic
+            ? 'Agent 已完成规划，批准后 Proma 将自动发送执行指令'
             : 'Agent 已完成计划，请选择如何继续'}
         </p>
         {request.planPath && (
@@ -246,7 +257,7 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
       {/* 选项列表 */}
       <div className="px-4 pb-2">
         <div className="flex flex-col gap-1">
-          {PLAN_OPTIONS.map((option, idx) => {
+          {planOptions.map((option, idx) => {
             const isFocused = focusedIdx === idx
             return (
               <button

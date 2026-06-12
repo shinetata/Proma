@@ -18,6 +18,16 @@ import type {
   ExitPlanAllowedPrompt,
   PromaPermissionMode,
 } from '@proma/shared'
+import { shouldAutoContinuePlanExecution } from './agent-plan-continuation-utils'
+
+/** ExitPlanMode 响应结果（供 IPC 层后续处理） */
+export type ExitPlanModeRespondResult = {
+  sessionId: string
+  targetMode: PromaPermissionMode | null
+  source?: ExitPlanModeRequestSource
+  planPath?: string
+  shouldAutoContinue: boolean
+}
 
 /** ExitPlanMode 审批结果（扩展 SDK PermissionResult，附加 targetMode） */
 export type ExitPlanPermissionResult = {
@@ -123,13 +133,16 @@ export class AgentExitPlanService {
   /**
    * 响应 ExitPlanMode 请求（由 IPC handler 调用）
    *
-   * @returns { sessionId, targetMode } 用于通知编排层；未找到返回 null
+   * @returns 会话、目标模式与是否应自动续跑；未找到返回 null
    */
-  respondToExitPlanMode(response: ExitPlanModeResponse): { sessionId: string; targetMode: PromaPermissionMode | null } | null {
+  respondToExitPlanMode(response: ExitPlanModeResponse): ExitPlanModeRespondResult | null {
     const pending = this.pendingRequests.get(response.requestId)
     if (!pending) return null
 
     const sessionId = pending.request.sessionId
+    const source = pending.request.source
+    const planPath = pending.request.planPath
+    const shouldAutoContinue = shouldAutoContinuePlanExecution(source, response.action)
     this.pendingRequests.delete(response.requestId)
 
     switch (response.action) {
@@ -140,7 +153,13 @@ export class AgentExitPlanService {
           updatedInput: pending.toolInput,
           targetMode: 'bypassPermissions',
         })
-        return { sessionId, targetMode: 'bypassPermissions' }
+        return {
+          sessionId,
+          targetMode: 'bypassPermissions',
+          source,
+          planPath,
+          shouldAutoContinue,
+        }
       }
       case 'approve_edit': {
         // 批准 + 切换到自动审批模式
@@ -149,7 +168,13 @@ export class AgentExitPlanService {
           updatedInput: pending.toolInput,
           targetMode: 'auto',
         })
-        return { sessionId, targetMode: 'auto' }
+        return {
+          sessionId,
+          targetMode: 'auto',
+          source,
+          planPath,
+          shouldAutoContinue,
+        }
       }
       case 'deny': {
         // 拒绝计划
@@ -157,7 +182,7 @@ export class AgentExitPlanService {
           behavior: 'deny' as const,
           message: '用户拒绝了计划',
         })
-        return { sessionId, targetMode: null }
+        return { sessionId, targetMode: null, source, planPath, shouldAutoContinue: false }
       }
       case 'feedback': {
         // 用户提供反馈，拒绝并附带反馈内容
@@ -165,14 +190,14 @@ export class AgentExitPlanService {
           behavior: 'deny' as const,
           message: response.feedback ?? '用户要求修改计划',
         })
-        return { sessionId, targetMode: null }
+        return { sessionId, targetMode: null, source, planPath, shouldAutoContinue: false }
       }
       default: {
         pending.resolve({
           behavior: 'deny' as const,
           message: '未知操作',
         })
-        return { sessionId, targetMode: null }
+        return { sessionId, targetMode: null, source, planPath, shouldAutoContinue: false }
       }
     }
   }

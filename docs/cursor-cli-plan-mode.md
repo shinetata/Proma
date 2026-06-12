@@ -99,6 +99,16 @@ Cursor headless **无** `ExitPlanMode` 工具。Proma 采用启发式：
 
 满足条件 → 触发 `exitPlanService.requestPlanApproval`（`source: cursor_synthetic`）。
 
+## 审批后自动执行
+
+用户在 Proma UI 选择「批准并完全自动执行」或「批准并自动审批」后：
+
+1. 持久化目标权限模式（`bypassPermissions` / `auto`）
+2. 主进程通过 `continuePlanAfterApproval` 自动发送 `请执行该计划`（含 planPath 时附带路径）
+3. 新一轮 `cursor-agent` 以 `--force --trust`（或 auto 对应参数）启动执行
+
+`deny` / `feedback` 不触发自动续跑。Claude SDK 渠道的 `ExitPlanMode` 工具路径仍在同轮阻塞等待，行为不变。
+
 ## 已知限制
 
 - 单轮单进程：不支持流式追加、软中断、运行中改 CLI flags

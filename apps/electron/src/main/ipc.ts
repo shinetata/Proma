@@ -187,6 +187,7 @@ import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveF
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
+import { continuePlanAfterApproval } from './lib/agent-plan-continuation'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -2366,7 +2367,7 @@ export function registerIpcHandlers(): void {
       const result = exitPlanService.respondToExitPlanMode(response)
 
       if (result) {
-        const { sessionId, targetMode } = result
+        const { sessionId, targetMode, planPath, shouldAutoContinue } = result
 
         // 通知渲染进程请求已处理
         event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
@@ -2390,6 +2391,17 @@ export function registerIpcHandlers(): void {
             payload: { kind: 'proma_event', event: { type: 'permission_mode_changed', mode: targetMode } },
           })
           console.log(`[IPC] ExitPlanMode 权限模式切换: ${targetMode}`)
+        }
+
+        if (shouldAutoContinue && targetMode) {
+          void continuePlanAfterApproval({
+            sessionId,
+            targetMode,
+            planPath,
+            webContents: event.sender,
+          }).catch((err: unknown) => {
+            console.error('[IPC] Cursor Plan 批准后自动执行失败:', err)
+          })
         }
       }
     }
