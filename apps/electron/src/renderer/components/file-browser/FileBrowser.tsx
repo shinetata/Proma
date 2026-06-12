@@ -774,7 +774,7 @@ function FileTreeItem({
               </button>
             </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
-                {onAddToChat && !entry.isDirectory && menuSelectedCount === 1 && (
+                {onAddToChat && menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
                     onSelect={() => onAddToChat(entry)}

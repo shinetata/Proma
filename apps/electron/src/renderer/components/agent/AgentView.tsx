@@ -1353,12 +1353,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
       const allRefs: Array<{ filename: string; targetPath: string }> = []
 
-      // 已有路径的文件直接引用
+      // 已有路径的文件/目录直接引用
       for (const f of existingFiles) {
         const sourcePath = f.sourcePath!
-        allRefs.push({ filename: f.filename, targetPath: sourcePath })
-        const parentPath = getFileParentPath(sourcePath)
-        if (parentPath) additionalDirectoriesForRun.add(parentPath)
+        if (f.isDirectory === true) {
+          // 目录：引用目录本身（路径加 / 后缀让接收端识别为目录），
+          // 并把目录加入 additionalDirectories（目录就是授权单位，无需取父目录）
+          const dirRef = sourcePath.endsWith('/') ? sourcePath : `${sourcePath}/`
+          allRefs.push({ filename: f.filename, targetPath: dirRef })
+          additionalDirectoriesForRun.add(sourcePath)
+        } else {
+          allRefs.push({ filename: f.filename, targetPath: sourcePath })
+          const parentPath = getFileParentPath(sourcePath)
+          if (parentPath) additionalDirectoriesForRun.add(parentPath)
+        }
       }
 
       // 剪贴板草稿：读取临时文件最新内容，转为待保存数据
@@ -2091,6 +2099,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     filename={file.filename}
                     mediaType={file.mediaType}
                     previewUrl={file.previewUrl}
+                    isDirectory={file.isDirectory}
                     onRemove={() => handleRemoveFile(file.id)}
                     onClick={file.filename.startsWith('clipboard-') ? () => handleClipboardPreview(file) : undefined}
                   />

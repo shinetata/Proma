@@ -363,12 +363,13 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     const pending: AgentPendingFile = {
       id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       filename: entry.name,
-      mediaType: getMediaTypeFromFilename(entry.name),
+      mediaType: entry.isDirectory ? 'inode/directory' : getMediaTypeFromFilename(entry.name),
       size: entry.size ?? 0,
       sourcePath: entry.path,
+      isDirectory: entry.isDirectory,
     }
 
-    // 有 sourcePath 的文件发送时直接引用原路径，不需要存 base64
+    // 有 sourcePath 的文件/目录发送时直接引用原路径，不需要存 base64
     setPendingFiles((prev) => [...prev, pending])
   }, [pendingFiles, setPendingFiles])
 
@@ -1174,7 +1175,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
               </button>
             </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
-                {onAddToChat && !entry.isDirectory && (
+                {onAddToChat && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
                     onSelect={() => onAddToChat({ ...entry, path: currentPath, name: currentName })}

@@ -1046,6 +1046,12 @@ export interface AgentPendingFile {
    * 而非像侧面板真实文件那样原地引用。
    */
   isClipboardDraft?: boolean
+  /**
+   * 标记 sourcePath 指向的是目录而非文件。
+   * 目录项发送时直接引用目录绝对路径（不取父目录），并把目录本身加入
+   * SDK additionalDirectories，让 Agent 可用 Glob/Read 按需探索；不复制、不读内容。
+   */
+  isDirectory?: boolean
 }
 
 /** Agent 文件保存到 session 的输入 */

@@ -8,7 +8,7 @@
  */
 
 import * as React from 'react'
-import { X, Paperclip } from 'lucide-react'
+import { X, Paperclip, Folder } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 
@@ -19,6 +19,8 @@ interface AttachmentPreviewItemProps {
   mediaType: string
   /** 本地预览 URL（blob URL / data URL，图片用） */
   previewUrl?: string
+  /** 是否为目录引用（显示文件夹图标，区别于普通文件） */
+  isDirectory?: boolean
   /** 删除回调 */
   onRemove: () => void
   /** 点击回调（用于打开文件预览等） */
@@ -40,6 +42,7 @@ export function AttachmentPreviewItem({
   filename,
   mediaType,
   previewUrl,
+  isDirectory,
   onRemove,
   onClick,
   className,
@@ -114,7 +117,7 @@ export function AttachmentPreviewItem({
         }
       } : undefined}
     >
-      <Paperclip className="size-4 shrink-0" />
+      {isDirectory ? <Folder className="size-4 shrink-0" /> : <Paperclip className="size-4 shrink-0" />}
       <span className="max-w-[160px] truncate">{truncateName(filename)}</span>
       {/* 关闭按钮 */}
       <button

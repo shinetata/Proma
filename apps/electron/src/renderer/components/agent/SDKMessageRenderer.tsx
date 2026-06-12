@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Folder, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
@@ -865,6 +865,8 @@ export function SDKMessageRenderer({
 export interface AttachedFileRef {
   filename: string
   path: string
+  /** 是否为目录引用（路径以 / 结尾时标记） */
+  isDirectory?: boolean
 }
 
 /** 解析的引用文件 */
@@ -905,7 +907,10 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
   for (const line of lines) {
     const lineMatch = line.match(/^-\s+(.+?):\s+(.+)$/)
     if (lineMatch) {
-      files.push({ filename: lineMatch[1]!.trim(), path: lineMatch[2]!.trim() })
+      const path = lineMatch[2]!.trim()
+      // 目录引用以 / 结尾（发送端约定），据此区分文件与目录
+      const isDirectory = path.endsWith('/')
+      files.push({ filename: lineMatch[1]!.trim(), path, isDirectory })
     }
   }
 
@@ -977,12 +982,12 @@ function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactEle
 /** 文件附件芯片 */
 function AttachedFileChip({ file }: { file: AttachedFileRef }): React.ReactElement {
   const isImg = isImageFile(file.filename)
-  const Icon = isImg ? FileImage : FileText
+  const Icon = file.isDirectory ? Folder : isImg ? FileImage : FileText
 
   return (
     <div className="inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1 text-[12px] text-muted-foreground">
       <Icon className="size-3.5 shrink-0" />
-      <span className="truncate max-w-[200px]">{file.filename}</span>
+      <span className="truncate max-w-[200px]">{file.isDirectory ? `${file.filename}/` : file.filename}</span>
     </div>
   )
 }
@@ -1045,8 +1050,8 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
   const { files: attachedFiles, quotes, text } = parseAttachedFiles(stripScheduledRunMarker(rawText))
-  const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
-  const nonImageFiles = attachedFiles.filter((f) => !isImageFile(f.filename))
+  const imageFiles = attachedFiles.filter((f) => !f.isDirectory && isImageFile(f.filename))
+  const nonImageFiles = attachedFiles.filter((f) => f.isDirectory || !isImageFile(f.filename))
   const meta = extractMeta(message as unknown as SDKMessage)
 
   return (
