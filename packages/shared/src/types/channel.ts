@@ -10,15 +10,19 @@
  */
 export type ProviderType =
   | 'anthropic'
+  | 'anthropic-compatible'
   | 'openai'
   | 'deepseek'
   | 'google'
   | 'kimi-api'
   | 'kimi-coding'
   | 'zhipu'
+  | 'zhipu-coding'
   | 'minimax'
   | 'doubao'
   | 'qwen'
+  | 'xiaomi'
+  | 'xiaomi-token-plan'
   | 'custom'
 
 /**
@@ -26,15 +30,19 @@ export type ProviderType =
  */
 export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   anthropic: 'https://api.anthropic.com',
+  'anthropic-compatible': '',
   openai: 'https://api.openai.com/v1',
   deepseek: 'https://api.deepseek.com/anthropic',
   google: 'https://generativelanguage.googleapis.com',
   'kimi-api': 'https://api.moonshot.cn/anthropic',
   'kimi-coding': 'https://api.kimi.com/coding/v1',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+  'zhipu-coding': 'https://open.bigmodel.cn/api/anthropic',
   minimax: 'https://api.minimaxi.com/anthropic',
   doubao: 'https://ark.cn-beijing.volces.com/api/v3',
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  xiaomi: 'https://api.xiaomimimo.com/anthropic',
+  'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   custom: '',
 }
 
@@ -43,15 +51,19 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
  */
 export const PROVIDER_LABELS: Record<ProviderType, string> = {
   anthropic: 'Anthropic',
+  'anthropic-compatible': 'Anthropic 兼容格式',
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
   google: 'Google',
   'kimi-api': 'Kimi API (Anthropic 协议)',
   'kimi-coding': 'Kimi Coding Plan',
   zhipu: '智谱 AI',
+  'zhipu-coding': '智谱 Coding Plan',
   minimax: 'MiniMax (API&编程包)',
   doubao: '豆包',
   qwen: '通义千问',
+  xiaomi: '小米 MiMo (API)',
+  'xiaomi-token-plan': '小米 MiMo Token Plan',
   custom: 'OpenAI 兼容格式',
 }
 
@@ -63,10 +75,14 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
  */
 export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'anthropic',
+  'anthropic-compatible',
   'deepseek',
   'kimi-api',
   'kimi-coding',
+  'zhipu-coding',
   'minimax',
+  'xiaomi',
+  'xiaomi-token-plan',
 ])
 
 /**

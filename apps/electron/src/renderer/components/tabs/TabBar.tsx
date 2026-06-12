@@ -14,21 +14,20 @@ import {
   tabsAtom,
   activeTabIdAtom,
   tabIndicatorMapAtom,
-  openTab,
-  reorderTabs,
 } from '@/atoms/tab-atoms'
 import type { TabItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
+  agentWorkspacesAtom,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
+import { automationFormAtom } from '@/atoms/automation-atoms'
 import { TabBarItem } from './TabBarItem'
-import { TabCloseConfirmDialog } from './TabCloseConfirmDialog'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import { detectIsWindows } from '@/lib/platform'
 import { cn } from '@/lib/utils'
@@ -39,16 +38,37 @@ export function TabBar(): React.ReactElement {
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
 
   // Tab 切换时同步 sidebar 状态
+  const appMode = useAtomValue(appModeAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
+  const setAutomationForm = useSetAtom(automationFormAtom)
 
-  // 统一关闭逻辑：含 Agent 子进程 stop + 流式中的确认对话框
-  // 详见 useCloseTab，修复 Issue #357 的 UI→IPC 断链
+  // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
   const { requestClose } = useCloseTab()
+
+  const workspaceNameBySessionId = React.useMemo(() => {
+    const workspaceNameMap = new Map(agentWorkspaces.map((workspace) => [workspace.id, workspace.name]))
+    const sessionWorkspaceNameMap = new Map<string, string>()
+    for (const session of agentSessions) {
+      if (!session.workspaceId) continue
+      const workspaceName = workspaceNameMap.get(session.workspaceId)
+      if (workspaceName) sessionWorkspaceNameMap.set(session.id, workspaceName)
+    }
+    return sessionWorkspaceNameMap
+  }, [agentSessions, agentWorkspaces])
+
+  const automationSessionIds = React.useMemo(() => {
+    const ids = new Set<string>()
+    for (const s of agentSessions) {
+      if (s.sourceAutomationId) ids.add(s.id)
+    }
+    return ids
+  }, [agentSessions])
 
   // 拖拽状态
   const dragState = React.useRef<{
@@ -60,6 +80,8 @@ export function TabBar(): React.ReactElement {
 
   const handleActivate = React.useCallback((tabId: string) => {
     setActiveTabId(tabId)
+    // 点击任意 tab 都关闭定时任务编辑表单（overlay 否则会盖在内容区上）
+    setAutomationForm({ open: false, draft: null })
 
     const tab = tabs.find((t) => t.id === tabId)
     if (!tab) return
@@ -67,11 +89,11 @@ export function TabBar(): React.ReactElement {
     if (tab.type === 'chat') {
       setAppMode('chat')
       setCurrentConversationId(tab.sessionId)
-    } else if (tab.type === 'agent') {
+    } else if (tab.type === 'agent' || tab.type === 'preview') {
       setAppMode('agent')
       setCurrentAgentSessionId(tab.sessionId)
 
-      // 清除该会话的"已完成未查看"标记
+      // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
       setUnviewedCompleted((prev) => {
         if (!prev.has(tab.sessionId)) return prev
         const next = new Set(prev)
@@ -86,10 +108,13 @@ export function TabBar(): React.ReactElement {
           agentWorkspaceId: session.workspaceId,
         }).catch(console.error)
       }
-    } else if (tab.type === 'scratch') {
-      // Scratch Pad 不改变侧边栏 chat/agent 状态
+    } else if (tab.type === 'scratch' || tab.type === 'tutorial') {
+      setCurrentConversationId(null)
+      if (appMode !== 'agent') {
+        setCurrentAgentSessionId(null)
+      }
     }
-  }, [setActiveTabId, tabs, agentSessions, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
+  }, [setActiveTabId, setAutomationForm, tabs, agentSessions, appMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键
@@ -127,11 +152,12 @@ export function TabBar(): React.ReactElement {
         tabs={tabs}
         activeTabId={activeTabId}
         streamingMap={indicatorMap}
+        workspaceNameBySessionId={workspaceNameBySessionId}
+        automationSessionIds={automationSessionIds}
         onActivate={handleActivate}
         onClose={requestClose}
         onDragStart={handleDragStart}
       />
-      <TabCloseConfirmDialog />
     </>
   )
 }
@@ -141,6 +167,8 @@ function TabBarInner({
   tabs,
   activeTabId,
   streamingMap,
+  workspaceNameBySessionId,
+  automationSessionIds,
   onActivate,
   onClose,
   onDragStart,
@@ -148,6 +176,8 @@ function TabBarInner({
   tabs: TabItem[]
   activeTabId: string | null
   streamingMap: Map<string, SessionIndicatorStatus>
+  workspaceNameBySessionId: Map<string, string>
+  automationSessionIds: Set<string>
   onActivate: (tabId: string) => void
   onClose: (tabId: string) => void
   onDragStart: (tabId: string, e: React.PointerEvent) => void
@@ -244,6 +274,8 @@ function TabBarInner({
             id={tab.id}
             type={tab.type}
             title={tab.title}
+            workspaceName={tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined}
+            isAutomation={tab.type === 'agent' && automationSessionIds.has(tab.sessionId)}
             isActive={tab.id === activeTabId}
             isStreaming={streamingMap.get(tab.id) ?? 'idle'}
             isHovered={hoveredTabId === tab.id}

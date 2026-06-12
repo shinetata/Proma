@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -92,8 +92,6 @@ import type {
   FeishuTestResult,
   FeishuChatBinding,
   FeishuPresenceReport,
-  FeishuNotifyMode,
-  FeishuNotificationSentPayload,
   FeishuUpdateBindingInput,
   DingTalkConfig,
   DingTalkConfigInput,
@@ -103,6 +101,9 @@ import type {
   WeChatBridgeState,
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
+  Automation,
+  CreateAutomationInput,
+  UpdateAutomationInput,
 } from '@proma/shared'
 import type {
   UserProfile,
@@ -161,6 +162,10 @@ export interface ElectronAPI {
   revertFile: (input: import('@proma/shared').RevertFileInput) => Promise<void>
   /** 获取文件新旧版本内容 */
   getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => Promise<{ oldContent: string; newContent: string } | null>
+  /** 列出 Git Worktree */
+  listWorktrees: (repoPath: string, sessionId: string) => Promise<import('@proma/shared').WorktreeInfo[]>
+  /** 获取 Worktree 相对于基准分支的全量变更 */
+  getWorktreeChanges: (worktreePath: string, baseBranch: string, sessionId: string) => Promise<import('@proma/shared').UnstagedChangesResult>
   /** 在独立窗口打开当前文件预览 */
   openDetachedPreview: (input: DetachedPreviewWindowInput) => Promise<string | null>
   /** 获取独立预览窗口数据 */
@@ -425,8 +430,8 @@ export interface ElectronAPI {
   /** 切换 Agent 会话置顶状态 */
   togglePinAgentSession: (id: string) => Promise<AgentSessionMeta>
 
-  /** 切换 Agent 会话手动工作中状态 */
-  toggleManualWorkingAgentSession: (id: string) => Promise<AgentSessionMeta>
+  /** 清除 Agent 会话完成状态（兼容清除旧版 manualWorking） */
+  clearAgentCompletionState: (id: string) => Promise<AgentSessionMeta>
 
   /** 切换 Agent 会话归档状态 */
   toggleArchiveAgentSession: (id: string) => Promise<AgentSessionMeta>
@@ -513,6 +518,9 @@ export interface ElectronAPI {
 
   /** 获取其他工作区的 Skill 列表 */
   getOtherWorkspaceSkills: (currentSlug: string) => Promise<OtherWorkspaceSkillsGroup[]>
+
+  /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+  getDefaultSkillSlugs: () => Promise<string[]>
 
   /** 从其他工作区导入 Skill */
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => Promise<SkillMeta>
@@ -655,6 +663,12 @@ export interface ElectronAPI {
 
   /** 获取工作区附加文件列表 */
   getWorkspaceAttachedFiles: (workspaceSlug: string) => Promise<string[]>
+  /** 获取工作区 worktree 仓库配置列表 */
+  getWorktreeRepos: (workspaceSlug: string) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  /** 添加 worktree 仓库到工作区配置 */
+  addWorktreeRepo: (workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  /** 从工作区配置移除 worktree 仓库 */
+  removeWorktreeRepo: (workspaceSlug: string, repoPath: string) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
 
   // ===== Agent 文件系统操作 =====
 
@@ -678,6 +692,9 @@ export interface ElectronAPI {
 
   /** 扫描系统中可用的编辑器应用（仅 macOS） */
   scanEditors: () => Promise<import('@proma/shared').EditorApp[]>
+
+  /** 查询本机为该文件类型注册的默认打开应用（含图标 dataURL） */
+  getDefaultAppForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').DefaultAppInfo | null>
 
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
@@ -811,12 +828,8 @@ export interface ElectronAPI {
   removeFeishuBinding: (chatId: string) => Promise<boolean>
   /** 上报用户在场状态 */
   reportFeishuPresence: (report: FeishuPresenceReport) => Promise<void>
-  /** 设置会话通知模式 */
-  setFeishuSessionNotify: (sessionId: string, mode: FeishuNotifyMode) => Promise<void>
   /** 订阅飞书 Bridge 状态变化 */
   onFeishuStatusChanged: (callback: (state: FeishuBridgeState) => void) => () => void
-  /** 订阅飞书通知已发送事件 */
-  onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => () => void
 
   // --- 多 Bot v2 API ---
 
@@ -834,6 +847,17 @@ export interface ElectronAPI {
   stopFeishuBot: (botId: string) => Promise<void>
   /** 获取多 Bot 状态 */
   getFeishuMultiStatus: () => Promise<import('@proma/shared').FeishuMultiBridgeState>
+
+  // --- 扫码注册 ---
+
+  /** 启动扫码注册流程，等待用户扫码 + 飞书确认后返回 App ID/Secret */
+  registerFeishuApp: () => Promise<import('@proma/shared').FeishuRegisterAppResult>
+  /** 取消正在进行的扫码注册流程 */
+  cancelFeishuRegistration: () => Promise<void>
+  /** 监听二维码 URL 生成 */
+  onFeishuRegisterQrcode: (callback: (payload: import('@proma/shared').FeishuRegisterAppQRCode) => void) => () => void
+  /** 监听注册流程状态变化 */
+  onFeishuRegisterStatus: (callback: (payload: import('@proma/shared').FeishuRegisterAppStatus) => void) => () => void
 
   // ===== 钉钉集成 =====
 
@@ -982,6 +1006,22 @@ export interface ElectronAPI {
   cleanupTempStorage: () => Promise<unknown>
   /** 取消迁移导入（清理临时解压目录） */
   migrationCancelImport: (tempDir: string) => Promise<void>
+
+  // ===== 定时任务（Automation）=====
+  /** 获取全部定时任务 */
+  listAutomations: () => Promise<Automation[]>
+  /** 创建定时任务 */
+  createAutomation: (input: CreateAutomationInput) => Promise<Automation>
+  /** 更新定时任务 */
+  updateAutomation: (input: UpdateAutomationInput) => Promise<Automation | undefined>
+  /** 删除定时任务 */
+  deleteAutomation: (id: string) => Promise<boolean>
+  /** 切换启用/暂停 */
+  toggleAutomation: (id: string, active: boolean) => Promise<Automation | undefined>
+  /** 立即运行一次 */
+  runAutomationNow: (id: string) => Promise<void>
+  /** 订阅任务列表变更事件 */
+  onAutomationChanged: (callback: () => void) => () => void
 }
 
 interface MigrationExportResult {
@@ -1025,6 +1065,14 @@ const electronAPI: ElectronAPI = {
 
   getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DIFF_CONTENTS, input)
+  },
+
+  listWorktrees: (repoPath: string, sessionId: string) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.LIST_WORKTREES, repoPath, sessionId)
+  },
+
+  getWorktreeChanges: (worktreePath: string, baseBranch: string, sessionId: string) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_WORKTREE_CHANGES, worktreePath, baseBranch, sessionId)
   },
 
   openDetachedPreview: (input: DetachedPreviewWindowInput) => {
@@ -1375,8 +1423,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_PIN, id)
   },
 
-  toggleManualWorkingAgentSession: (id: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_MANUAL_WORKING, id)
+  clearAgentCompletionState: (id: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_COMPLETION_STATE, id)
   },
 
   toggleArchiveAgentSession: (id: string) => {
@@ -1485,6 +1533,10 @@ const electronAPI: ElectronAPI = {
 
   getOtherWorkspaceSkills: (currentSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_OTHER_WORKSPACE_SKILLS, currentSlug)
+  },
+
+  getDefaultSkillSlugs: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS)
   },
 
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => {
@@ -1711,6 +1763,18 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_ATTACHED_FILES, workspaceSlug)
   },
 
+  getWorktreeRepos: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKTREE_REPOS, workspaceSlug)
+  },
+
+  addWorktreeRepo: (workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_WORKTREE_REPO, workspaceSlug, repo)
+  },
+
+  removeWorktreeRepo: (workspaceSlug: string, repoPath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_WORKTREE_REPO, workspaceSlug, repoPath)
+  },
+
   // Agent 文件系统操作
   getAgentSessionPath: (workspaceId: string, sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_PATH, workspaceId, sessionId)
@@ -1738,6 +1802,10 @@ const electronAPI: ElectronAPI = {
 
   scanEditors: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.SCAN_EDITORS)
+  },
+
+  getDefaultAppForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_DEFAULT_APP_FOR_FILE, filePath, access) as Promise<import('@proma/shared').DefaultAppInfo | null>
   },
 
   showInFolder: (filePath: string) => {
@@ -1912,20 +1980,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REPORT_PRESENCE, report)
   },
 
-  setFeishuSessionNotify: (sessionId: string, mode: FeishuNotifyMode) => {
-    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.SET_SESSION_NOTIFY, sessionId, mode)
-  },
-
   onFeishuStatusChanged: (callback: (state: FeishuBridgeState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: FeishuBridgeState): void => callback(state)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.STATUS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.STATUS_CHANGED, listener) }
-  },
-
-  onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: FeishuNotificationSentPayload): void => callback(payload)
-    ipcRenderer.on(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener)
-    return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener) }
   },
 
   // --- 多 Bot v2 API ---
@@ -1956,6 +2014,28 @@ const electronAPI: ElectronAPI = {
 
   getFeishuMultiStatus: () => {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_MULTI_STATUS)
+  },
+
+  // --- 扫码注册 ---
+
+  registerFeishuApp: () => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REGISTER_APP_START)
+  },
+
+  cancelFeishuRegistration: () => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REGISTER_APP_CANCEL)
+  },
+
+  onFeishuRegisterQrcode: (callback: (payload: import('@proma/shared').FeishuRegisterAppQRCode) => void) => {
+    const listener = (_: unknown, payload: import('@proma/shared').FeishuRegisterAppQRCode) => callback(payload)
+    ipcRenderer.on(FEISHU_IPC_CHANNELS.REGISTER_APP_QRCODE, listener)
+    return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.REGISTER_APP_QRCODE, listener) }
+  },
+
+  onFeishuRegisterStatus: (callback: (payload: import('@proma/shared').FeishuRegisterAppStatus) => void) => {
+    const listener = (_: unknown, payload: import('@proma/shared').FeishuRegisterAppStatus) => callback(payload)
+    ipcRenderer.on(FEISHU_IPC_CHANNELS.REGISTER_APP_STATUS, listener)
+    return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.REGISTER_APP_STATUS, listener) }
   },
 
   // ===== 微信集成 =====
@@ -2238,6 +2318,24 @@ const electronAPI: ElectronAPI = {
 
   migrationCancelImport: (tempDir: string) => {
     return ipcRenderer.invoke('migration:cancelImport', tempDir)
+  },
+
+  // ===== 定时任务（Automation）=====
+  listAutomations: () => ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.LIST),
+  createAutomation: (input: CreateAutomationInput) =>
+    ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.CREATE, input),
+  updateAutomation: (input: UpdateAutomationInput) =>
+    ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.UPDATE, input),
+  deleteAutomation: (id: string) =>
+    ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.DELETE, id),
+  toggleAutomation: (id: string, active: boolean) =>
+    ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.TOGGLE, id, active),
+  runAutomationNow: (id: string) =>
+    ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.RUN_NOW, id),
+  onAutomationChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(AUTOMATION_IPC_CHANNELS.CHANGED, listener)
+    return () => { ipcRenderer.removeListener(AUTOMATION_IPC_CHANNELS.CHANGED, listener) }
   },
 }
 

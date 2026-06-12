@@ -6,9 +6,19 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { tabsAtom, activeTabIdAtom, openTab, type TabType } from '@/atoms/tab-atoms'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import {
+  tabsAtom,
+  activeTabIdAtom,
+  openTab,
+  buildOpenTabRestore,
+  sessionViewStateMapAtom,
+  type TabType,
+} from '@/atoms/tab-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
+import { activeViewAtom } from '@/atoms/active-view'
+import { automationFormAtom } from '@/atoms/automation-atoms'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   currentAgentSessionIdAtom,
@@ -20,9 +30,12 @@ import {
 type OpenSessionFn = (type: TabType, sessionId: string, title: string) => void
 
 export function useOpenSession(): OpenSessionFn {
+  const store = useStore()
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
+  const setActiveView = useSetAtom(activeViewAtom)
+  const setAutomationForm = useSetAtom(automationFormAtom)
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
@@ -31,17 +44,28 @@ export function useOpenSession(): OpenSessionFn {
 
   return React.useCallback(
     (type: TabType, sessionId: string, title: string): void => {
-      const result = openTab(tabs, { type, sessionId, title })
+      // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图
+      const restore = type === 'agent'
+        ? buildOpenTabRestore(
+            sessionId,
+            store.get(sessionViewStateMapAtom),
+            store.get(previewFileMapAtom),
+          )
+        : undefined
+      const result = openTab(tabs, { type, sessionId, title }, restore)
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
-      setAppMode(type)
+      setAutomationForm({ open: false, draft: null })
+      setActiveView('conversations')
 
       if (type === 'chat') {
+        setAppMode('chat')
         setCurrentConversationId(sessionId)
-      } else {
+      } else if (type === 'agent' || type === 'preview') {
+        setAppMode('agent')
         setCurrentAgentSessionId(sessionId)
 
-        // 清除该会话的"已完成未查看"标记，与 TabBar.handleActivate 保持一致
+        // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
         setUnviewedCompleted((prev) => {
           if (!prev.has(sessionId)) return prev
           const next = new Set(prev)
@@ -57,8 +81,12 @@ export function useOpenSession(): OpenSessionFn {
             agentWorkspaceId: session.workspaceId,
           }).catch(console.error)
         }
+      } else {
+        setAppMode('scratch')
+        setCurrentConversationId(null)
+        setCurrentAgentSessionId(null)
       }
     },
-    [tabs, setTabs, setActiveTabId, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted],
+    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted],
   )
 }

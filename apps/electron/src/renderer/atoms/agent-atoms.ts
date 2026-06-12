@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage } from '@proma/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 
@@ -59,6 +59,11 @@ export function finalizeStreamingActivities(
 /** Agent 会话的流式状态 */
 export interface AgentStreamState {
   running: boolean
+  /**
+   * 后台任务等待态（软空闲）：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
+   * 此状态下 running 为 false，但服务端 activeSessions 仍保留，新消息必须走注入通道而非新建 run。
+   */
+  backgroundWaiting?: boolean
   content: string
   toolActivities: ToolActivity[]
   model?: string
@@ -74,6 +79,8 @@ export interface AgentStreamState {
   costUsd?: number
   /** 模型上下文窗口大小 */
   contextWindow?: number
+  /** 当前 thinking block 的 token 估算值（SDK 实时估算，非计费值） */
+  thinkingEstimatedTokens?: number
   /** 是否正在压缩上下文 */
   isCompacting?: boolean
   /**
@@ -210,6 +217,12 @@ export const agentSessionModelMapAtom = atom<Map<string, string>>(new Map())
 export const currentAgentSessionIdAtom = atom<string | null>(null)
 export const agentStreamingStatesAtom = atom<Map<string, AgentStreamState>>(new Map())
 
+/** Agent 流式结束后是否保持过程组展开，默认收起以降低结果阅读干扰 */
+export const agentProcessGroupsKeepExpandedAtom = atomWithStorage<boolean>(
+  'proma-agent-process-groups-keep-expanded',
+  false,
+)
+
 /**
  * 单个 session 的 streaming state 派生 atomFamily — 按 sessionId 切片订阅。
  *
@@ -232,8 +245,35 @@ export const liveMessagesMapAtom = atom<Map<string, SDKMessage[]>>(new Map())
 
 export const agentPendingPromptAtom = atom<AgentPendingPrompt | null>(null)
 
-/** Agent 待发送文件列表 */
-export const agentPendingFilesAtom = atom<AgentPendingFile[]>([])
+/**
+ * Agent 待发送文件列表 Map — 以 sessionId 为 key
+ * 切换会话时保留各 session 自己的 pending files，与文字草稿语义一致
+ */
+export const agentSessionPendingFilesAtom = atom<Map<string, AgentPendingFile[]>>(new Map())
+
+/**
+ * 单个 session 的 pending files 派生 atom（读写）— 按 sessionId 切片
+ * read：返回当前 session 的数组（空数组兜底）
+ * write：接受新数组或 updater 函数，写回时空数组转为 delete，避免 Map 长期残留空 entry
+ */
+export const agentPendingFilesAtomFamily = atomFamily((sessionId: string) =>
+  atom(
+    (get) => get(agentSessionPendingFilesAtom).get(sessionId) ?? [],
+    (_get, set, update: AgentPendingFile[] | ((prev: AgentPendingFile[]) => AgentPendingFile[])) => {
+      set(agentSessionPendingFilesAtom, (prev) => {
+        const current = prev.get(sessionId) ?? []
+        const next = typeof update === 'function' ? update(current) : update
+        const map = new Map(prev)
+        if (next.length === 0) {
+          map.delete(sessionId)
+        } else {
+          map.set(sessionId, next)
+        }
+        return map
+      })
+    },
+  ),
+)
 
 /** 工作区能力版本号 — 每次修改 MCP/Skills 后自增，触发侧边栏重新获取 */
 export const workspaceCapabilitiesVersionAtom = atom(0)
@@ -252,8 +292,8 @@ export const agentSidePanelWidthAtom = atomWithStorage<number>('proma-agent-side
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
-/** 侧面板当前 Tab：'files' | 'changes'（per-session Map） */
-export const agentDiffPanelTabAtom = atom<Map<string, 'files' | 'changes'>>(new Map())
+/** 侧面板当前 Tab：'session' | 'workspace' | 'changes'（per-session Map） */
+export const agentDiffPanelTabAtom = atom<Map<string, 'session' | 'workspace' | 'changes'>>(new Map())
 
 /** Diff 视图模式：'split' | 'unified' */
 export const agentDiffViewModeAtom = atom<'split' | 'unified'>('split')
@@ -261,11 +301,23 @@ export const agentDiffViewModeAtom = atom<'split' | 'unified'>('split')
 /** Diff 刷新版本号 — 按 session 隔离，Agent 写工具完成时递增 */
 export const agentDiffRefreshVersionAtom = atom(new Map<string, number>())
 
+/** 当前会话选中的 worktree 路径，null = 默认行为（显示 session 改动） */
+export const agentSelectedWorktreeAtom = atom(new Map<string, string | null>())
+
 /** 是否有未查看的代码改动 — 按 session 隔离 */
 export const agentDiffUnseenChangesAtom = atom(new Map<string, boolean>())
 
 /** Agent 本轮刚修改但用户尚未查看的文件路径 — 按 session 隔离，Map<sessionId, Set<filePath>> */
 export const agentDiffUnseenFilesAtom = atom(new Map<string, Set<string>>())
+
+/**
+ * Diff 数据缓存 — 按 session 隔离，存放上一次 IPC 拉取到的未暂存改动结果。
+ *
+ * 让 DiffChangesList 切走再切回时能立即拿到旧数据渲染（SWR 模式），
+ * 避免 mount 时空数组误命中"没有代码改动"分支造成 ~1s 闪烁。
+ * 数据新鲜度由 [[agentDiffRefreshVersionAtom]] 触发的后台 fetch 维护，无 TTL。
+ */
+export const agentDiffDataAtom = atom(new Map<string, UnstagedChangesResult>())
 
 /** 当前会话的侧面板是否打开（派生只读：全局共享，但仅在有当前会话且为 Agent 模式时显示） */
 export const currentSessionSidePanelOpenAtom = atom<boolean>((get) => {
@@ -286,6 +338,8 @@ export interface FileBrowserAutoReveal {
   sessionId: string
   path: string
   ts: number
+  /** 是否同时将文件设为选中态 */
+  select?: boolean
 }
 export const fileBrowserAutoRevealAtom = atom<FileBrowserAutoReveal | null>(null)
 
@@ -455,8 +509,17 @@ export type SessionIndicatorStatus = 'idle' | 'running' | 'blocked' | 'completed
 /** 已完成但用户尚未查看的会话 ID 集合 */
 export const unviewedCompletedSessionIdsAtom = atom<Set<string>>(new Set<string>())
 
-/** Working 区域"已完成"组：本次 App 会话中完成且 Tab 仍打开的会话 ID（关闭 Tab 时移除） */
-export const workingDoneSessionIdsAtom = atom<Set<string>>(new Set<string>())
+let lastIndicatorSignature = ''
+let lastIndicatorMap = new Map<string, SessionIndicatorStatus>()
+
+function getStableIndicatorMap(entries: Array<[string, SessionIndicatorStatus]>): Map<string, SessionIndicatorStatus> {
+  entries.sort(([a], [b]) => a.localeCompare(b))
+  const signature = entries.map(([id, status]) => `${id}:${status}`).join('|')
+  if (signature === lastIndicatorSignature) return lastIndicatorMap
+  lastIndicatorSignature = signature
+  lastIndicatorMap = new Map(entries)
+  return lastIndicatorMap
+}
 
 /** Dock/Launcher 角标数量：未查看完成会话 + 待处理阻塞请求 */
 export const dockBadgeCountAtom = atom<number>((get) => {
@@ -495,7 +558,7 @@ export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorSta
     }
   }
 
-  return map
+  return getStableIndicatorMap(Array.from(map.entries()))
 })
 
 /**
@@ -609,6 +672,12 @@ export function applyAgentEvent(
     case 'task_notification':
       return prev
 
+    case 'thinking_tokens':
+      return {
+        ...prev,
+        thinkingEstimatedTokens: event.estimatedTokens,
+      }
+
     case 'tool_use_summary':
       // 工具使用摘要 — 目前不影响流式状态，仅用于 UI 展示
       return prev
@@ -623,6 +692,10 @@ export function applyAgentEvent(
         retrying: undefined,
         ...finalizeStreamingActivities(prev.toolActivities),
       }
+
+    case 'run_resumed':
+      // 后台任务完成自动唤醒：从"空闲可输入"恢复到运行态（防御性，监听器已显式处理）。
+      return { ...prev, running: true, backgroundWaiting: false }
 
     case 'typed_error':
       // 处理类型化错误（TypedError）
@@ -765,6 +838,39 @@ export const agentStreamErrorsAtom = atom<Map<string, string>>(new Map())
  * AgentView 监听版本号变化来重新加载消息。
  */
 export const agentMessageRefreshAtom = atom<Map<string, number>>(new Map())
+
+/**
+ * 持久化 SDKMessage 的内存缓存 Map — 以 sessionId 为 key
+ * 用于消除「切换会话时先清空 → 等待 IPC 全量读盘」的可见空窗：
+ * 命中缓存可立即填充消息区，IPC 返回后再覆盖为最新数据。
+ *
+ * 内存安全：缓存条目随会话数增长会无限膨胀（长会话的消息数组很大），
+ * 因此通过 setSessionMessagesCache 做 LRU 淘汰，仅保留最近访问的
+ * AGENT_MSG_CACHE_MAX 个会话；会话删除时也需主动剔除对应条目。
+ */
+export const AGENT_MSG_CACHE_MAX = 20
+export const agentSDKMessagesCacheAtom = atom<Map<string, SDKMessage[]>>(new Map())
+
+/**
+ * 写入会话消息缓存并执行 LRU 淘汰。
+ * 利用 JS Map 的插入顺序：删除已存在的 key 再重新 set，使其移到「最新」位置；
+ * 超出上限时从头部（最旧）删除，直到回到上限内。返回新的 Map（不可变更新）。
+ */
+export function setSessionMessagesCache(
+  prev: Map<string, SDKMessage[]>,
+  sessionId: string,
+  messages: SDKMessage[],
+): Map<string, SDKMessage[]> {
+  const next = new Map(prev)
+  next.delete(sessionId)
+  next.set(sessionId, messages)
+  while (next.size > AGENT_MSG_CACHE_MAX) {
+    const oldest = next.keys().next().value
+    if (oldest === undefined) break
+    next.delete(oldest)
+  }
+  return next
+}
 
 /** 当前 Agent 会话的错误消息（派生只读原子） */
 export const currentAgentErrorAtom = atom<string | null>((get) => {

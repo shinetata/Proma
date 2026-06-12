@@ -35,7 +35,9 @@ import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, m
 import { isTransientNetworkError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
-import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk } from '@proma/core'
+import { injectAutomationMcpServer } from './automation-agent-tools'
+import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
+import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
@@ -49,6 +51,7 @@ import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
+import { applyAgentModelRoutingToEnv, resolveAgentModelRouting } from './agent-model-routing'
 import { getMemoryConfig } from './memory-service'
 import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import { validateToolInput } from './agent-tool-input-validator'
@@ -66,12 +69,18 @@ export interface SessionCallbacks {
   /** 发送流式错误 */
   onError: (error: string) => void
   /** 发送流式完成（携带已持久化的消息列表） */
-  onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string }) => void
+  onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; backgroundTasksPending?: boolean }) => void
   /** 发送标题更新 */
   onTitleUpdated: (title: string) => void
+  /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
+  onRunStarted?: (opts: { startedAt: number }) => void
 }
 
 // ===== 工具函数 =====
+
+function sdkPermissionModeForPromaMode(mode: PromaPermissionMode): PromaPermissionMode {
+  return PROMA_PERMISSION_MODE_CONFIG[mode].sdkMode
+}
 
 /**
  * 从 stderr 中提取 API 错误信息
@@ -213,6 +222,7 @@ function getRetryDelayMs(attempt: number, elapsedRetryDelayMs: number): number {
  */
 function resolveSDKCliPath(): string {
   const subpkg = `claude-agent-sdk-${process.platform}-${process.arch}`
+  const scopedSubpkg = `@anthropic-ai/${subpkg}`
   const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
   let binaryPath: string | null = null
 
@@ -225,18 +235,29 @@ function resolveSDKCliPath(): string {
     const anthropicDir = dirname(dirname(sdkEntryPath))
     binaryPath = join(anthropicDir, subpkg, binaryName)
     console.log(`[Agent 编排] SDK binary 路径 (createRequire): ${binaryPath}`)
+    if (!existsSync(binaryPath)) {
+      const subpkgPackagePath = cjsRequire.resolve(`${scopedSubpkg}/package.json`)
+      binaryPath = join(dirname(subpkgPackagePath), binaryName)
+      console.log(`[Agent 编排] SDK binary 路径 (platform package): ${binaryPath}`)
+    }
   } catch (e) {
     console.warn('[Agent 编排] createRequire 解析 SDK 路径失败:', e)
   }
 
   // 策略 2：全局 require（esbuild CJS bundle 可能保留）
-  if (!binaryPath) {
+  if (!binaryPath || !existsSync(binaryPath)) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const sdkEntryPath = require.resolve('@anthropic-ai/claude-agent-sdk')
       const anthropicDir = dirname(dirname(sdkEntryPath))
       binaryPath = join(anthropicDir, subpkg, binaryName)
       console.log(`[Agent 编排] SDK binary 路径 (require.resolve): ${binaryPath}`)
+      if (!existsSync(binaryPath)) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const subpkgPackagePath = require.resolve(`${scopedSubpkg}/package.json`)
+        binaryPath = join(dirname(subpkgPackagePath), binaryName)
+        console.log(`[Agent 编排] SDK binary 路径 (require platform package): ${binaryPath}`)
+      }
     } catch (e) {
       console.warn('[Agent 编排] require.resolve 解析 SDK 路径失败:', e)
     }
@@ -245,7 +266,7 @@ function resolveSDKCliPath(): string {
   // 策略 3：从当前模块目录手动查找（打包后 __dirname 指向 app/dist/，上一级即 app/）
   // 注意：不使用 process.cwd()，因为打包后的 Electron 应用 cwd 通常是 '/'
   // 或用户主目录，与 app 安装目录无关。
-  if (!binaryPath) {
+  if (!binaryPath || !existsSync(binaryPath)) {
     binaryPath = join(__dirname, '..', 'node_modules', '@anthropic-ai', subpkg, binaryName)
     console.log(`[Agent 编排] SDK binary 路径 (手动): ${binaryPath}`)
   }
@@ -421,20 +442,24 @@ const DEFAULT_MODEL_ID = 'claude-sonnet-4-6'
 
 /**
  * 判断模型是否支持 1M context window beta（context-1m-2025-08-07）
- * 当前支持：Claude Sonnet 4 / 4.5 / 4.6、Opus 4.6 / 4.7、DeepSeek V4 系列
+ * 当前支持：Claude Sonnet 4 / 4.5 / 4.6、Opus 4.6 / 4.7 / 4.8、Fable 5、DeepSeek V4 系列、
+ * 小米 MiMo V2.5 / V2.5 Pro / V2 Pro
  * 参考：https://docs.anthropic.com/en/docs/build-with-claude/context-windows
  */
 function supports1MContext(modelId: string): boolean {
   const m = modelId.toLowerCase()
   if (m.includes('haiku')) return false
-  // Claude: Sonnet 4+ 与 Opus 4.6+ 都支持
+  // Claude: Sonnet 4+ 与 Opus 4.6+、Fable 5 都支持
   if (m.includes('claude')) {
     if (m.includes('sonnet-4')) return true
-    if (m.includes('opus-4-6') || m.includes('opus-4-7')) return true
+    if (m.includes('opus-4-6') || m.includes('opus-4-7') || m.includes('opus-4-8')) return true
+    if (m.includes('fable-5')) return true
     return false
   }
   // DeepSeek V4 系列（deepseek-v4-pro、deepseek-v4-flash）
   if (m.includes('deepseek-v4')) return true
+  // 小米 MiMo：v2.5 / v2.5-pro / v2-pro 为 1M（omni / flash 不支持）
+  if (m.includes('mimo-v2.5') || m.includes('mimo-v2-pro')) return true
   return false
 }
 
@@ -498,6 +523,18 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 消费一次用户手动停止标记。
+   *
+   * SDK 在 query.close() 后不一定走异常路径：某些版本会先正常 yield result 再结束迭代。
+   * 因此停止标记必须在所有终态路径统一消费，而不能只依赖 catch 块。
+   */
+  private consumeStoppedByUser(sessionId: string): boolean {
+    const stoppedByUser = this.stoppedBySessions.has(sessionId)
+    this.stoppedBySessions.delete(sessionId)
+    return stoppedByUser
+  }
+
+  /**
    * 构建 SDK 环境变量
    *
    * 注入 API Key、Base URL、代理、Shell 配置等。
@@ -535,14 +572,13 @@ export class AgentOrchestrator {
     }
 
     // 认证方式按 provider 分支
-    // - Kimi Coding Plan：只认 Bearer，且必须伪装成 coding agent（User-Agent）
+    // - Kimi Coding Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Proma UA
     // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
-    // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer；
-    //   Kimi 额外通过 ANTHROPIC_CUSTOM_HEADERS 注入 User-Agent
+    // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
     // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
-    if (provider === 'kimi-coding') {
+    if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
     } else if (provider === 'minimax') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
       sdkEnv.API_TIMEOUT_MS = '3000000'
@@ -891,7 +927,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, automationContext } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -996,6 +1032,41 @@ export class AgentOrchestrator {
     const streamStartedAt = input.startedAt ?? runGeneration
     this.activeSessions.set(sessionId, runGeneration)
 
+    const releaseActiveRun = (): void => {
+      // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
+      // 主进程仍在 finally 前短暂拒绝下一条消息。
+      if (this.activeSessions.get(sessionId) !== runGeneration) return
+      this.activeSessions.delete(sessionId)
+      this.sessionPermissionModes.delete(sessionId)
+      this.queuedMessageUuids.delete(sessionId)
+    }
+    const completeRun = (
+      messages?: AgentMessage[],
+      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
+    ): void => {
+      releaseActiveRun()
+      callbacks.onComplete(messages, opts)
+    }
+    // 轻量完成：turn 主体结束但仍有后台任务在飞行。
+    // 关键区别——不调用 releaseActiveRun，保留 activeSessions/activeChannels/sessionPermissionModes，
+    // 以便 ① adapter 保持的通道在任务完成时自动续轮 ② 用户在等待期手动注入消息能复用通道。
+    // UI 侧通过 backgroundTasksPending 进入"空闲可输入"态（spinner 停、输入框启用）。
+    const idleComplete = (
+      messages?: AgentMessage[],
+      opts?: { startedAt?: number; resultSubtype?: string },
+    ): void => {
+      callbacks.onComplete(messages, { ...opts, backgroundTasksPending: true })
+    }
+    const failRun = (
+      error: string,
+      messages?: AgentMessage[],
+      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
+    ): void => {
+      releaseActiveRun()
+      callbacks.onError(error)
+      callbacks.onComplete(messages, opts)
+    }
+
     // 3. 构建环境变量
     // 同步凭证到 process.env（SDK in-process 代码可能直接读取 process.env）
     // 先清理再注入，确保 SDK 无论从 env 选项还是 process.env 都拿到正确值
@@ -1006,7 +1077,11 @@ export class AgentOrchestrator {
     if (channel.provider === 'kimi-coding') {
       // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
+    } else if (channel.provider === 'xiaomi-token-plan') {
+      // 小米 Token Plan：Bearer + 必须带 User-Agent
+      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
+      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
     } else if (channel.provider === 'minimax') {
       // MiniMax Coding Plan：Claude Code 兼容配置使用 Bearer
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
@@ -1018,7 +1093,9 @@ export class AgentOrchestrator {
       process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
     }
 
+    const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
     const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
+    applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)
@@ -1045,6 +1122,7 @@ export class AgentOrchestrator {
       _createdAt: Date.now(),
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])
+    callbacks.onRunStarted?.({ startedAt: streamStartedAt })
 
     // 6. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
@@ -1159,6 +1237,13 @@ export class AgentOrchestrator {
       const mcpServers = this.buildMcpServers(workspaceSlug)
       await this.injectMemoryTools(sdk, mcpServers)
       await this.injectNanoBananaTools(sdk, mcpServers, sessionId, agentCwd)
+      await injectAutomationMcpServer(sdk, mcpServers, {
+        sessionId,
+        channelId,
+        modelId,
+        workspaceId,
+        triggeredBy: input.triggeredBy,
+      })
 
       // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
       if (customMcpServers) {
@@ -1219,9 +1304,17 @@ export class AgentOrchestrator {
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
 
+      const emitPlanModeChanged = (active: boolean, source: 'initial' | 'tool' | 'permission'): void => {
+        this.eventBus.emit(sessionId, {
+          kind: 'proma_event',
+          event: { type: 'plan_mode_changed', sessionId, active, source },
+        })
+      }
+
       // 当初始模式为 plan 时，通知渲染进程展示计划模式 UI（如「Agent 正在规划」横幅）
       if (initialPermissionMode === 'plan') {
         this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+        emitPlanModeChanged(true, 'initial')
       }
 
       /** 读取当前会话的实时权限模式（支持运行中切换） */
@@ -1285,9 +1378,28 @@ export class AgentOrchestrator {
         'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
         'ListMcpResourcesTool', 'ReadMcpResourceTool',
       ])
+      const DEFERRED_OR_PROACTIVE_TOOLS = new Set([
+        'REPL', 'Workflow', 'ScheduleWakeup', 'Monitor', 'PushNotification',
+        'CronCreate', 'CronDelete', 'RemoteTrigger',
+      ])
 
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
       let planModeEntered = initialPermissionMode === 'plan'
+
+      const syncPlanModeFromToolUse = (toolName: string): void => {
+        if (toolName === 'EnterPlanMode') {
+          planModeEntered = true
+          emitPlanModeChanged(true, 'tool')
+          return
+        }
+        if (toolName === 'ExitPlanMode' && getPermissionMode() === 'bypassPermissions') {
+          planModeEntered = false
+          emitPlanModeChanged(false, 'tool')
+          return
+        }
+        // auto/plan 下 ExitPlanMode 只是发起退出计划的审批请求。
+        // 真正退出由用户审批结果触发，不能在工具开始时提前清掉计划态。
+      }
 
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
@@ -1318,25 +1430,26 @@ export class AgentOrchestrator {
 
         // ── EnterPlanMode / ExitPlanMode 处理 ──
 
-        // 完全自动模式：透明化（用户选择了完全信任 Agent）
+        // 完全自动模式：计划进入和退出都透明化，保持 bypassPermissions 的无人值守语义。
         if (currentMode === 'bypassPermissions' && (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode')) {
+          const active = toolName === 'EnterPlanMode'
+          planModeEntered = active
+          emitPlanModeChanged(active, 'tool')
           return { behavior: 'allow' as const, updatedInput: input }
         }
 
-        // ExitPlanMode：只有 Agent 确实进入过 Plan 模式才走审批，否则静默放行
+        // ExitPlanMode：auto/plan 模式下必须让用户确认计划。
         if (toolName === 'ExitPlanMode') {
           console.log(`[canUseTool] ExitPlanMode: signal.aborted=${options.signal.aborted}, planModeEntered=${planModeEntered}, mode=${currentMode}`)
-          if (!planModeEntered) {
-            return { behavior: 'allow' as const, updatedInput: input }
-          }
           const result = await handleExitPlanMode(input, options.signal)
           if (result.behavior === 'allow' && 'targetMode' in result && result.targetMode) {
             // 更新 Map，后续 canUseTool 调用使用新模式
             this.sessionPermissionModes.set(sessionId, result.targetMode)
             planModeEntered = false
+            emitPlanModeChanged(false, 'permission')
             // 同步通知 SDK 侧切换权限模式
             if (this.adapter.setPermissionMode) {
-              this.adapter.setPermissionMode(sessionId, result.targetMode).catch((err: unknown) => {
+              this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(result.targetMode)).catch((err: unknown) => {
                 console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
               })
             }
@@ -1347,6 +1460,7 @@ export class AgentOrchestrator {
         // EnterPlanMode：标记进入状态，通知渲染进程
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
+          emitPlanModeChanged(true, 'tool')
           this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
           return { behavior: 'allow' as const, updatedInput: input }
         }
@@ -1391,6 +1505,9 @@ export class AgentOrchestrator {
             if (toolName.startsWith('mcp__')) {
               return { behavior: 'allow' as const, updatedInput: input }
             }
+            if (DEFERRED_OR_PROACTIVE_TOOLS.has(toolName)) {
+              return { behavior: 'deny' as const, message: '计划模式下不允许启动后台、定时、通知或脚本执行能力，请在计划审批通过后再执行' }
+            }
             // 其余工具拒绝
             return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
           }
@@ -1417,15 +1534,16 @@ export class AgentOrchestrator {
         sdkCliPath: cliPath,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
-        sdkPermissionMode: PROMA_PERMISSION_MODE_CONFIG[initialPermissionMode].sdkMode,
-        // 当提供 canUseTool 回调时必须为 false，否则 CLI 同时收到
+        sdkPermissionMode: sdkPermissionModeForPromaMode(initialPermissionMode),
+        // permissionMode 负责表达 auto/plan/bypassPermissions。
+        // 当提供 canUseTool 回调时这里必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
         // 两个矛盾的指令，导致 ExitPlanMode/AskUserQuestion 等交互式工具失败。
-        // canUseTool 已完整处理所有权限模式（plan/auto/bypassPermissions），
-        // Worker 子代理在 bypassPermissions 模式下也会被自动放行。
+        // bypassPermissions 下 SDK 可能在 canUseTool 前直接放行工具，因此计划态还会
+        // 从实际 tool_use 流里同步，避免 UI 停留在计划阶段。
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
-        ...(initialPermissionMode === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(sdkPermissionModeForPromaMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {
@@ -1438,7 +1556,8 @@ export class AgentOrchestrator {
             permissionMode: initialPermissionMode,
             memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
             claudeAvailable,
-          }),
+            deepSeekSubagentModel: modelRouting.subagentModel,
+          }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : ''),
         },
         resumeSessionId: existingSdkSessionId,
         // 回退后 resume：从指定消息处继续（SDK 在同一 JSONL 内创建分支）
@@ -1462,13 +1581,14 @@ export class AgentOrchestrator {
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
         }),
-        // 1M context window: 支持的模型自动启用 beta（Claude: Sonnet 4+ / Opus 4.6+、DeepSeek V4 系列）
+        // 1M context window: 支持的模型自动启用 beta（Claude: Sonnet 4+ / Opus 4.6+ / 4.7 / 4.8、DeepSeek V4 系列）
         // 未启用时 SDK 默认 200K 并在约 150K 触发压缩；启用后上限提升至 1M
         ...(supports1MContext(modelId || DEFAULT_MODEL_ID) && {
           betas: ['context-1m-2025-08-07'] as SdkBeta[],
         }),
         // 内置 SubAgent 定义（code-reviewer / explorer / researcher）
-        // claudeAvailable=false 时 SubAgent 省略 model 字段，自动继承主 Agent 模型
+        // SubAgent 模型最终由 CLAUDE_CODE_SUBAGENT_MODEL 兜底控制：
+        // DeepSeek 系列固定 deepseek-v4-flash，其它模型删除该 env，保留 SDK 默认解析。
         agents: buildBuiltinAgents(claudeAvailable),
         onStderr: (data: string) => {
           stderrChunks.push(data)
@@ -1566,8 +1686,10 @@ export class AgentOrchestrator {
 
             // 等待期间如果会话被中止，退出
             if (!this.activeSessions.has(sessionId)) {
+              const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
               this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
-              callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+              try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
+              completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
               return
             }
           }
@@ -1588,6 +1710,9 @@ export class AgentOrchestrator {
           // 此 timeout 仅作安全网，防止极端情况下 iterator 仍未关闭
           let drainTimeoutPromise: Promise<'drain_timeout'> | null = null
           const RESULT_DRAIN_TIMEOUT_MS = 2_000
+          // 后台任务等待态：result 走轻量完成后置 true，下一轮真正开始（收到 assistant/user/task 消息）时
+          // 置回 false 并发 run_resumed，让 UI 从空闲态恢复运行态。
+          let awaitingBackgroundWake = false
 
           while (true) {
             if (!pendingNext) {
@@ -1617,6 +1742,30 @@ export class AgentOrchestrator {
 
             pendingNext = null
             const msg = iterResult.value
+
+            // 后台任务唤醒：轻量完成后处于等待态，收到新一轮的首条实质消息时
+            // 发 run_resumed，让 UI 从"空闲可输入"恢复到"运行中"。
+            // applyAgentEvent 的流式分支不会重置 running，故必须显式通知。
+            if (awaitingBackgroundWake) {
+              const sub = msg.type === 'system' ? (msg as { subtype?: string }).subtype : undefined
+              if (msg.type === 'assistant' || msg.type === 'user' || sub === 'task_started' || sub === 'task_progress') {
+                awaitingBackgroundWake = false
+                this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'run_resumed', sessionId } })
+              }
+            }
+
+            // SDK 权限模式可能在 canUseTool 前直接批准工具（如 bypassPermissions）。
+            // 因此计划阶段状态要从实际 tool_use 流里同步，不能只依赖权限回调。
+            if (msg.type === 'assistant') {
+              const assistantMsg = msg as SDKAssistantMessage
+              if (!assistantMsg.isReplay) {
+                for (const block of assistantMsg.message.content) {
+                  if (block.type === 'tool_use' && 'name' in block && typeof block.name === 'string') {
+                    syncPlanModeFromToolUse(block.name)
+                  }
+                }
+              }
+            }
 
             // 检测 assistant 消息中的 SDK 错误
             if (msg.type === 'assistant') {
@@ -1672,6 +1821,9 @@ export class AgentOrchestrator {
                   console.log(`[Agent 编排] 可重试错误 (assistant error): ${typedError.code} - ${lastRetryableError}`)
                   this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
                   accumulatedMessages.length = 0
+                  // 与 catch 路径（isAutoRetryableCatchError）和思考签名回填路径保持一致：
+                  // 重试前清空已累积的 stderr，避免 25 次重试上限内字符串无限增长
+                  stderrChunks.length = 0
                   shouldRetryFromError = true
                   break
                 }
@@ -1710,7 +1862,7 @@ export class AgentOrchestrator {
                 // 透传归一化后的错误消息到前端，避免 SDK 原始 API Error 直接暴露给用户。
                 this.eventBus.emit(sessionId, { kind: 'sdk_message', message: errorSDKMsg })
                 try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
-                callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+                completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
                 return
               }
             }
@@ -1753,15 +1905,24 @@ export class AgentOrchestrator {
               // 等待队列或后续消息继续 drive Query，此处跳过 drain 超时以免误关闭事件循环。
               // 完整白名单见 adapters/claude-agent-adapter.ts 的 CONTINUABLE_TERMINAL_REASONS。
               const resultTerminalReason = (msg as { terminal_reason?: string }).terminal_reason
-              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason)
+              // adapter 在"本轮结束但仍有后台任务/定时任务在飞行"时打的注解：
+              // 走轻量完成（UI 空闲可输入、host 保留会话），等待 task_notification 自动续轮。
+              const keptOpenForTasks = (msg as Record<string, unknown>)._keepChannelOpenForTasks === true
+              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
               // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
               const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
               console.log(
                 `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}, ` +
                 `terminal_reason=${resultTerminalReason ?? 'undefined'}, keepChannelOpen=${keepChannelOpen}` +
+                (keptOpenForTasks ? ', keptOpenForTasks=true' : '') +
                 (hasDeferredTool ? ', hasDeferredTool=true' : ''),
               )
-              if (!keepChannelOpen && !drainTimeoutPromise) {
+              if (keptOpenForTasks) {
+                // 轻量完成：UI 置空闲可输入，但 host 保持运行态（不 releaseActiveRun、不 break、不启动 drain 超时），
+                // while 循环继续 park 在 queryIterator.next()，等待后台任务完成时 SDK 自动 yield 的新一轮消息。
+                awaitingBackgroundWake = true
+                idleComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
+              } else if (!keepChannelOpen && !drainTimeoutPromise) {
                 // 启动 drain 超时安全网：adapter 层 channel.close() 应让 iterator 自然关闭，
                 // 此处仅在极端情况下（如 SDK 版本不兼容）保护事件循环不无限挂起
                 drainTimeoutPromise = new Promise((resolve) =>
@@ -1794,8 +1955,10 @@ export class AgentOrchestrator {
             continue
           }
 
+          const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
+
           // 正常完成 — 如果之前有重试，发送 retry_cleared
-          if (retryAttemptsScheduled > 0) {
+          if (!wasStoppedByUser && retryAttemptsScheduled > 0) {
             this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
             console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
           }
@@ -1804,7 +1967,7 @@ export class AgentOrchestrator {
           // 15. 持久化 assistant 消息
           this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
 
-          try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+          try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
           // Plan 模式：Agent 完成规划后注入"接受计划"建议
           if (initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.has(sessionId)) {
@@ -1816,7 +1979,7 @@ export class AgentOrchestrator {
           }
 
           // 发送完成信号
-          callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
+          completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
 
           break  // 成功完成，退出重试循环
 
@@ -1832,12 +1995,12 @@ export class AgentOrchestrator {
 
           // 用户主动中止
           if (!this.activeSessions.has(sessionId)) {
-            const wasStoppedByUser = this.stoppedBySessions.delete(sessionId)
+            const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
             console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             // 持久化中断状态到会话 meta
             try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
-            callbacks.onComplete(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
+            completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
             return
           }
 
@@ -1977,8 +2140,7 @@ export class AgentOrchestrator {
             })
           }
 
-          callbacks.onError(userFacingError)
-          callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+          failRun(userFacingError, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
           // 根据错误类型决定是否保留 sdkSessionId
           const shouldClearSession = !apiError || apiError.statusCode >= 500
@@ -2020,17 +2182,12 @@ export class AgentOrchestrator {
         } as unknown as SDKMessage
         appendSDKMessages(sessionId, [retryErrorSDKMsg])
 
-        callbacks.onError(`${retryFailureMessage}: ${lastRetryableError}`)
-        callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+        failRun(`${retryFailureMessage}: ${lastRetryableError}`, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
       }
 
     } finally {
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
-      if (this.activeSessions.get(sessionId) === runGeneration) {
-        this.activeSessions.delete(sessionId)
-        this.sessionPermissionModes.delete(sessionId)
-        this.queuedMessageUuids.delete(sessionId)
-      }
+      releaseActiveRun()
       permissionService.clearSessionPending(sessionId)
       // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
       // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
@@ -2067,9 +2224,13 @@ export class AgentOrchestrator {
   async updateSessionPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
     if (!this.activeSessions.has(sessionId)) return
     this.sessionPermissionModes.set(sessionId, mode)
+    this.eventBus.emit(sessionId, {
+      kind: 'proma_event',
+      event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
+    })
     // 同步通知 SDK 侧
     if (this.adapter.setPermissionMode) {
-      await this.adapter.setPermissionMode(sessionId, mode)
+      await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(mode))
     }
     console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
   }

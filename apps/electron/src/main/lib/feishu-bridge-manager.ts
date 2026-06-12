@@ -12,9 +12,12 @@ import type {
   FeishuBotBridgeState,
   FeishuTestResult,
   FeishuBotConfig,
+  AgentSessionMeta,
 } from '@proma/shared'
 import { FeishuBridge } from './feishu-bridge'
-import { getFeishuMultiBotConfig, getFeishuBotById, getDecryptedBotAppSecret } from './feishu-config'
+import { getFeishuMultiBotConfig, getFeishuBotById } from './feishu-config'
+import { getSettings } from './settings-service'
+import { resolveSessionMirrorBot } from './feishu/session-mirror'
 
 class FeishuBridgeManager {
   /** botId → Bridge 实例 */
@@ -123,6 +126,42 @@ class FeishuBridgeManager {
     return this.bridges
   }
 
+  /** 为桌面端 Proma Session 创建或恢复飞书镜像群。 */
+  async ensureSessionMirror(session: AgentSessionMeta): Promise<void> {
+    const config = getFeishuMultiBotConfig()
+    const bot = resolveSessionMirrorBot(getSettings().feishuSessionMirror, config.bots)
+    if (!bot) return
+
+    const bridge = this.bridges.get(bot.id)
+    if (!bridge || bridge.getStatus().status !== 'connected') {
+      console.warn(`[飞书 Session 镜像] Bot "${bot.name}" 未连接，跳过 session=${session.id.slice(0, 8)}`)
+      return
+    }
+
+    await bridge.ensureSessionMirror(session)
+  }
+
+  /** 在 Agent 运行前创建 Session 镜像群里的流式卡片。 */
+  async startSessionMirrorRun(session: AgentSessionMeta): Promise<void> {
+    const mirrorSettings = getSettings().feishuSessionMirror
+    if (mirrorSettings?.mode !== 'stream') return
+
+    const config = getFeishuMultiBotConfig()
+    const bot = resolveSessionMirrorBot(mirrorSettings, config.bots)
+    if (!bot) return
+
+    const bridge = this.bridges.get(bot.id)
+    if (!bridge || bridge.getStatus().status !== 'connected') return
+
+    await bridge.startSessionMirrorRun(session)
+  }
+
+  stopSessionMirrorRun(sessionId: string): void {
+    for (const bridge of this.bridges.values()) {
+      bridge.stopSessionMirrorRun(sessionId)
+    }
+  }
+
   // ===== 聚合查询 =====
 
   /** 跨所有 Bot 的绑定列表 */
@@ -143,6 +182,18 @@ class FeishuBridgeManager {
       }
     }
     return undefined
+  }
+
+  /** 直接向指定飞书聊天发送卡片（用于定时任务完成通知等主动推送场景） */
+  async sendCardToChat(botId: string, chatId: string, card: Record<string, unknown>): Promise<void> {
+    const bridge = this.bridges.get(botId) ?? this.findBridgeByChatId(chatId)
+    if (!bridge) {
+      throw new Error(`飞书 Bot 未连接或未找到聊天绑定: bot=${botId}, chat=${chatId}`)
+    }
+    if (bridge.getStatus().status !== 'connected') {
+      throw new Error(`飞书 Bot 未连接: bot=${botId}`)
+    }
+    await bridge.sendCardToChat(chatId, card)
   }
 
   // ===== 连接测试（静态，不影响运行中的 Bridge） =====
