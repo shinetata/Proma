@@ -78,7 +78,7 @@ import {
   type RunState,
 } from './feishu/card-run-state'
 import { renderCard as renderRunCard } from './feishu/card-renderer-v2'
-import { buildSessionMirrorGroupName } from './feishu/session-mirror'
+import { buildSessionMirrorGroupName, formatDesktopMirrorUserMessage } from './feishu/session-mirror'
 import { resolveGroupMessageAccess } from './feishu/group-message-policy'
 import { ScopedQueue } from './feishu/scoped-queue'
 import { RunCoordinator } from './feishu/run-coordinator'
@@ -564,6 +564,21 @@ class FeishuBridge {
 
   stopSessionMirrorRun(sessionId: string): void {
     this.markStreamingInterrupted(sessionId)
+  }
+
+  /** 将桌面端用户消息镜像到 Session 对应的飞书群。 */
+  async mirrorDesktopUserMessage(session: AgentSessionMeta, rawUserMessage: string): Promise<void> {
+    if (!this.client) return
+
+    const displayText = formatDesktopMirrorUserMessage(rawUserMessage)
+    if (!displayText) return
+
+    await this.ensureSessionMirror(session)
+
+    const binding = this.findBindingBySessionId(session.id)
+    if (!binding || binding.source !== 'session-mirror') return
+
+    await this.sendTextMessage(binding.chatId, displayText)
   }
 
   // ===== 连接测试 =====

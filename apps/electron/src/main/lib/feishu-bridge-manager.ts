@@ -156,6 +156,24 @@ class FeishuBridgeManager {
     await bridge.startSessionMirrorRun(session)
   }
 
+  /** 将桌面端用户消息镜像到 Session 对应的飞书群。 */
+  async mirrorDesktopUserMessage(session: AgentSessionMeta, rawUserMessage: string): Promise<void> {
+    const mirrorSettings = getSettings().feishuSessionMirror
+    if (mirrorSettings?.mode !== 'stream') return
+
+    const config = getFeishuMultiBotConfig()
+    const bot = resolveSessionMirrorBot(mirrorSettings, config.bots)
+    if (!bot) return
+
+    const bridge = this.bridges.get(bot.id)
+    if (!bridge || bridge.getStatus().status !== 'connected') {
+      console.warn(`[飞书 Session 镜像] Bot "${bot.name}" 未连接，跳过桌面消息镜像 session=${session.id.slice(0, 8)}`)
+      return
+    }
+
+    await bridge.mirrorDesktopUserMessage(session, rawUserMessage)
+  }
+
   stopSessionMirrorRun(sessionId: string): void {
     for (const bridge of this.bridges.values()) {
       bridge.stopSessionMirrorRun(sessionId)
