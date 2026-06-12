@@ -129,6 +129,41 @@ export function buildAttachedFilesBlock(refs: Array<{ label: string; path: strin
   return `<attached_files>\n${lines.join('\n')}\n</attached_files>\n\n`
 }
 
+/** 从 <attached_files> 块解析附件标签（`- label: path` 行） */
+function parseAttachedFileLabels(content: string): string[] {
+  const match = content.match(/<attached_files>\n?([\s\S]*?)\n?<\/attached_files>/)
+  if (!match) return []
+  const labels: string[] = []
+  for (const line of match[1]!.split('\n')) {
+    const lineMatch = line.match(/^-\s+(.+?):\s+(.+)$/)
+    if (lineMatch) labels.push(lineMatch[1]!.trim())
+  }
+  return labels
+}
+
+/**
+ * 剥离 Proma 注入的附件/引用 XML，供标题生成使用。
+ *
+ * 与 UI 侧 parseAttachedFiles 对齐：去掉 <attached_files>、<quoted_file> 后取正文；
+ * 若仅有附件无文字，回退为首个附件名（去扩展名）。
+ */
+export function stripMessageForTitle(content: string): string {
+  const attachmentLabels = parseAttachedFileLabels(content)
+
+  const text = content
+    .replace(/<attached_files>\n?[\s\S]*?\n?<\/attached_files>\n*/g, '')
+    .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
+    .trim()
+
+  if (text) return text
+
+  const firstLabel = attachmentLabels[0]
+  if (!firstLabel) return ''
+
+  const withoutExt = firstLabel.replace(/\.[^.]+$/, '')
+  return withoutExt || firstLabel
+}
+
 /** 文件树渲染时忽略的非点前缀条目（点文件统一由 startsWith('.') 过滤） */
 const FILE_TREE_IGNORE = new Set(['node_modules'])
 

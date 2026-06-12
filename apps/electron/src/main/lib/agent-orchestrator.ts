@@ -64,6 +64,7 @@ import { getMemoryConfig } from './memory-service'
 import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
+import { stripMessageForTitle } from './bridge-attachment-utils'
 
 // ===== 类型定义 =====
 
@@ -815,7 +816,12 @@ export class AgentOrchestrator {
    */
   async generateTitle(input: AgentGenerateTitleInput): Promise<string | null> {
     const { userMessage, channelId, modelId } = input
-    console.log('[Agent 标题生成] 开始生成标题:', { channelId, modelId, userMessage: userMessage.slice(0, 50) })
+    const titleMessage = stripMessageForTitle(userMessage)
+    if (!titleMessage) {
+      console.warn('[Agent 标题生成] 消息无可用正文（仅附件），跳过')
+      return null
+    }
+    console.log('[Agent 标题生成] 开始生成标题:', { channelId, modelId, userMessage: titleMessage.slice(0, 50) })
 
     try {
       const channels = listChannels()
@@ -831,7 +837,7 @@ export class AgentOrchestrator {
         if (channel.provider === 'cursor') {
           try {
             const apiKey = decryptApiKey(channelId)
-            const cliTitle = await generateCursorTitle(apiKey, modelId, TITLE_PROMPT + userMessage)
+            const cliTitle = await generateCursorTitle(apiKey, modelId, TITLE_PROMPT + titleMessage)
             const cleaned = cliTitle ? cleanTitle(cliTitle) : null
             if (cleaned) {
               console.log(`[Agent 标题生成] Cursor CLI 标题: "${cleaned}"`)
@@ -842,7 +848,7 @@ export class AgentOrchestrator {
             console.warn('[Agent 标题生成] Cursor CLI 标题生成失败，回退本地启发式:', error)
           }
         }
-        const localTitle = localHeuristicTitle(userMessage)
+        const localTitle = localHeuristicTitle(titleMessage)
         console.log(`[Agent 标题生成] 本地启发式标题（${channel.provider}）: "${localTitle}"`)
         return localTitle
       }
@@ -853,7 +859,7 @@ export class AgentOrchestrator {
         baseUrl: channel.baseUrl,
         apiKey,
         modelId,
-        prompt: TITLE_PROMPT + userMessage,
+        prompt: TITLE_PROMPT + titleMessage,
       })
 
       const proxyUrl = await getEffectiveProxyUrl()

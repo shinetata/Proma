@@ -30,6 +30,7 @@ import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getEnabledTools } from './chat-tool-registry'
 import { executeToolCalls } from './chat-tool-executor'
+import { stripMessageForTitle } from './bridge-attachment-utils'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
@@ -558,10 +559,15 @@ const MAX_TITLE_LENGTH = 20
  */
 export async function generateTitle(input: GenerateTitleInput): Promise<string | null> {
   const { userMessage, channelId, modelId } = input
-  console.log('[标题生成] 开始生成标题:', { channelId, modelId, userMessage: userMessage.slice(0, 50) })
+  const titleMessage = stripMessageForTitle(userMessage)
+  if (!titleMessage) {
+    console.warn('[标题生成] 消息无可用正文（仅附件），跳过')
+    return null
+  }
+  console.log('[标题生成] 开始生成标题:', { channelId, modelId, userMessage: titleMessage.slice(0, 50) })
 
   // 短消息直接使用原文作为标题，避免 AI 幻觉
-  const trimmedMessage = userMessage.trim()
+  const trimmedMessage = titleMessage.trim()
   if (trimmedMessage.length <= SHORT_MESSAGE_THRESHOLD) {
     const shortTitle = trimmedMessage.slice(0, MAX_TITLE_LENGTH)
     console.log('[标题生成] 消息过短，直接使用原文作为标题:', shortTitle)
@@ -591,7 +597,7 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
       baseUrl: channel.baseUrl,
       apiKey,
       modelId,
-      prompt: TITLE_PROMPT + userMessage,
+      prompt: TITLE_PROMPT + titleMessage,
     })
 
     const proxyUrl = await getEffectiveProxyUrl()
