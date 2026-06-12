@@ -112,6 +112,9 @@ import XiaomiLogo from '@/assets/models/xiaomi.png'
 // Proma
 import PromaLogo from '@/assets/models/proma.png'
 
+// Cursor
+import CursorLogo from '@/assets/models/cursor.png'
+
 // Cohere
 import CohereLogo from '@/assets/models/cohere.png'
 import CohereDarkLogo from '@/assets/models/cohere_dark.png'
@@ -227,6 +230,9 @@ const MODEL_LOGO_MAP: Record<string, string> = {
   // === Embedding 通用 ===
   'text-embedding': EmbeddingLogo,
   embedding: EmbeddingLogo,
+
+  // === Cursor / Composer ===
+  composer: CursorLogo,
 }
 
 /**
@@ -250,7 +256,7 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   xiaomi: XiaomiLogo,
   'xiaomi-token-plan': XiaomiLogo,
   custom: DefaultLogo,
-  cursor: DefaultLogo,
+  cursor: CursorLogo,
 }
 
 // ===== 公共 API =====
