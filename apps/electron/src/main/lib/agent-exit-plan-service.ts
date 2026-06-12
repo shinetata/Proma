@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   ExitPlanModeRequest,
+  ExitPlanModeRequestSource,
   ExitPlanModeResponse,
   ExitPlanAllowedPrompt,
   PromaPermissionMode,
@@ -51,6 +52,46 @@ export class AgentExitPlanService {
   /** 待处理的请求 Map（requestId → PendingExitPlan） */
   private pendingRequests = new Map<string, PendingExitPlan>()
 
+  /** 创建 ExitPlanMode 请求对象 */
+  createExitPlanRequest(
+    sessionId: string,
+    input: Record<string, unknown>,
+    source: ExitPlanModeRequestSource = 'tool',
+  ): ExitPlanModeRequest {
+    const allowedPrompts = this.parseAllowedPrompts(input)
+    const planPath = typeof input.planPath === 'string' ? input.planPath : undefined
+    const planSummary = typeof input.planSummary === 'string' ? input.planSummary : undefined
+
+    return {
+      requestId: randomUUID(),
+      sessionId,
+      toolInput: input,
+      allowedPrompts,
+      source,
+      ...(planPath ? { planPath } : {}),
+      ...(planSummary ? { planSummary } : {}),
+    }
+  }
+
+  /**
+   * Cursor 渠道：规划回合结束后发起审批（非阻塞，不等待工具回调）
+   */
+  requestPlanApproval(
+    sessionId: string,
+    input: Record<string, unknown>,
+    sendToRenderer: (request: ExitPlanModeRequest) => void,
+  ): ExitPlanModeRequest {
+    const request = this.createExitPlanRequest(sessionId, input, 'cursor_synthetic')
+    console.log(`[ExitPlanService] requestPlanApproval: sessionId=${sessionId}, planPath=${request.planPath ?? '无'}`)
+    sendToRenderer(request)
+    this.pendingRequests.set(request.requestId, {
+      resolve: () => { /* Cursor 合成审批无工具回调 */ },
+      request,
+      toolInput: input,
+    })
+    return request
+  }
+
   /**
    * 处理 ExitPlanMode 工具调用
    *
@@ -63,15 +104,7 @@ export class AgentExitPlanService {
     sendToRenderer: (request: ExitPlanModeRequest) => void,
   ): Promise<ExitPlanPermissionResult> {
     console.log(`[ExitPlanService] handleExitPlanMode 开始: sessionId=${sessionId}, signal.aborted=${signal.aborted}`)
-    const allowedPrompts = this.parseAllowedPrompts(input)
-
-    const request: ExitPlanModeRequest = {
-      requestId: randomUUID(),
-      sessionId,
-      toolInput: input,
-      allowedPrompts,
-    }
-
+    const request = this.createExitPlanRequest(sessionId, input, 'tool')
     sendToRenderer(request)
 
     return new Promise<ExitPlanPermissionResult>((resolve) => {

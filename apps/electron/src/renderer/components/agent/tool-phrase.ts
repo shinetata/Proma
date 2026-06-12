@@ -217,6 +217,24 @@ export function getToolPhrase(toolName: string, input: Record<string, unknown>):
       return phrase('退出计划模式')
     }
 
+    case 'CreatePlan': {
+      const name = input.name
+      if (typeof name === 'string' && name.trim()) {
+        return phrase(`生成计划 ${truncate(name.trim(), 60)}`)
+      }
+      const overview = input.overview
+      if (typeof overview === 'string' && overview.trim()) {
+        return phrase(`生成计划 ${truncate(overview.trim(), 60)}`)
+      }
+      return phrase('生成计划')
+    }
+
+    case 'SwitchMode': {
+      const target = input.target_mode_id
+      if (typeof target === 'string') return phrase(`切换模式 ${target}`)
+      return phrase('切换模式')
+    }
+
     case 'generate_image': {
       const prompt = input.prompt
       if (typeof prompt === 'string') return phrase(`生成图片 ${truncate(prompt, 60)}`)

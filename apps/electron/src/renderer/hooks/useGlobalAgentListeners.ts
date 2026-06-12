@@ -192,7 +192,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
           const tb = block as SDKContentBlock & { id: string; name: string; input: Record<string, unknown> }
           const intent = (tb.input._intent as string | undefined)
             ?? (tb.name === 'Bash' ? (tb.input.description as string | undefined) : undefined)
-          const planModeChange = getPlanModeChangeFromToolName(tb.name)
+          const planModeChange = getPlanModeChangeFromToolName(tb.name, tb.input)
           if (planModeChange) {
             events.push({
               type: 'plan_mode_changed',

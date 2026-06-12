@@ -478,7 +478,8 @@ RouterAgentAdapter  ── provider=cursor ─→ CursorAgentAdapter → spawn c
 
 **已知限制（按设计降级）**：
 
-- 单轮 headless 进程：`sendQueuedMessage`（报错）、`interruptQuery`（no-op）、`setPermissionMode`（no-op）由 Router 兜底。
+- 单轮 headless 进程：`sendQueuedMessage`（报错）、`interruptQuery`（no-op）；`setPermissionMode` 记录 pending，**下轮** spawn 生效。
+- Plan 模式闭环：回合结束后 `cursor-plan-complete` 扫描 `.context/plan/*.md` 并触发合成 `ExitPlanMode` 审批；`SwitchMode` 工具事件桥接计划态 UI（详见 `docs/cursor-cli-plan-mode.md`）。
 - 不上报 token 用量：`cursor-agent` 的 `result` 事件不含 token 计数（仅 `duration_ms`/`request_id`），`usage` 恒为 0，Cursor 会话不展示上下文/token 统计。
 - 暂不支持 MCP：Proma 内置工具（automation/mem/nano-banana/feishu）为 `createSdkMcpServer` 进程内对象，无法注入 cursor-agent；外部 MCP 透传受上游 headless 注入限制，暂未接入。
 

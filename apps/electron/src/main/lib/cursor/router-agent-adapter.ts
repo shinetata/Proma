@@ -29,6 +29,8 @@ type Backend = 'claude' | 'cursor'
 export class RouterAgentAdapter implements AgentProviderAdapter {
   /** sessionId → channelId（agent-service 每轮运行前登记） */
   private readonly sessionChannel = new Map<string, string>()
+  /** Cursor 会话待生效的权限模式（下轮 spawn 时应用） */
+  private readonly sessionPendingMode = new Map<string, string>()
 
   constructor(
     private readonly claudeAdapter: AgentProviderAdapter,
@@ -65,6 +67,12 @@ export class RouterAgentAdapter implements AgentProviderAdapter {
       const options = input as CursorAgentQueryOptions
       options.cursorCliPath = cli.path
       options.cursorApiKey = decryptApiKey(channelId)
+      const pendingMode = this.sessionPendingMode.get(input.sessionId)
+      if (pendingMode) {
+        options.sdkPermissionMode = pendingMode
+        this.sessionPendingMode.delete(input.sessionId)
+        console.log(`[Router] Cursor 应用待生效权限模式: sessionId=${input.sessionId}, mode=${pendingMode}`)
+      }
       yield* this.cursorAdapter.query(options)
       return
     }
@@ -101,7 +109,17 @@ export class RouterAgentAdapter implements AgentProviderAdapter {
   }
 
   async setPermissionMode(sessionId: string, mode: string): Promise<void> {
-    if (this.resolveBackend(sessionId) === 'cursor') return // cursor 启动时固定模式，运行中不可切换
+    if (this.resolveBackend(sessionId) === 'cursor') {
+      // Cursor 单轮进程无法在运行中改 CLI flags；记录 pending，下轮 query 时应用
+      this.sessionPendingMode.set(sessionId, mode)
+      console.log(`[Router] Cursor 权限模式已记录（下轮生效）: sessionId=${sessionId}, mode=${mode}`)
+      return
+    }
     await this.claudeAdapter.setPermissionMode?.(sessionId, mode)
+  }
+
+  /** 当前会话是否走 Cursor 后端 */
+  isCursorBackend(sessionId: string): boolean {
+    return this.resolveBackend(sessionId) === 'cursor'
   }
 }

@@ -9,11 +9,21 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Zap, Compass, Map as MapIcon } from 'lucide-react'
+import { toast } from 'sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
-import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom } from '@/atoms/agent-atoms'
+import {
+  agentPermissionModeMapAtom,
+  agentDefaultPermissionModeAtom,
+  sessionPersistedPermissionModeAtom,
+  sessionExistsAtom,
+  agentPlanModeSessionsAtom,
+  agentSessionChannelMapAtom,
+  agentStreamingStatesAtom,
+} from '@/atoms/agent-atoms'
+import { channelsAtom } from '@/atoms/chat-atoms'
 import type { PromaPermissionMode } from '@proma/shared'
-import { PROMA_PERMISSION_MODE_CONFIG, PROMA_PERMISSION_MODE_ORDER } from '@proma/shared'
+import { PROMA_PERMISSION_MODE_CONFIG, PROMA_PERMISSION_MODE_ORDER, isAgentOnlyProvider } from '@proma/shared'
 import { updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 
 const MODE_ICONS: Record<PromaPermissionMode, React.ComponentType<{ className?: string }>> = {
@@ -33,6 +43,18 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
   const persistedSessionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
   const mode = modeMap.get(sessionId) ?? persistedSessionMode ?? defaultMode
   const sessionExistsInList = useAtomValue(sessionExistsAtom(sessionId))
+  const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
+  const globalChannels = useAtomValue(channelsAtom)
+  const streamingStates = useAtomValue(agentStreamingStatesAtom)
+
+  const channelId = sessionChannelMap.get(sessionId)
+  const isCursorChannel = React.useMemo(() => {
+    if (!channelId) return false
+    const channel = globalChannels.find((c) => c.id === channelId)
+    return channel ? isAgentOnlyProvider(channel.provider) && channel.provider === 'cursor' : false
+  }, [channelId, globalChannels])
+
+  const isStreaming = streamingStates.get(sessionId)?.running ?? false
 
   // 初始化：如果当前 session 不在 Map 中，按以下优先级读回：
   // 1. session meta.permissionMode（每个 tab 独立持久化，重启恢复各自的值）
@@ -69,6 +91,9 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
     // 热切换运行中的当前 session；失败时回滚 modeMap 保持 UI/后端一致
     try {
       await window.electronAPI.updateSessionPermissionMode(sessionId, nextMode)
+      if (isCursorChannel && isStreaming) {
+        toast.info('Cursor 渠道：权限模式已记录，将在本轮结束后下一条消息生效')
+      }
     } catch (error) {
       console.error('[PermissionModeSelector] 运行中切换权限模式失败，回滚 UI:', error)
       setModeMap((prev: Map<string, PromaPermissionMode>) => {
@@ -80,7 +105,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
         updatePlanModeSessionSet(prev, sessionId, prevMode === 'plan')
       )
     }
-  }, [mode, sessionId, setModeMap, setPlanModeSessions])
+  }, [mode, sessionId, setModeMap, setPlanModeSessions, isCursorChannel, isStreaming])
 
   const config = PROMA_PERMISSION_MODE_CONFIG[mode]
   const Icon = MODE_ICONS[mode]
@@ -100,9 +125,12 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
             <Icon className="size-5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-[200px]">
+        <TooltipContent side="bottom" className="max-w-[220px]">
           <p className="font-medium">{config.label}</p>
           <p className="text-xs text-muted-foreground mt-0.5">{config.description}</p>
+          {isCursorChannel && (
+            <p className="text-xs text-muted-foreground mt-1">Cursor 渠道：模式在下一条消息生效</p>
+          )}
           <p className="text-xs text-muted-foreground mt-1">点击切换模式</p>
         </TooltipContent>
       </Tooltip>

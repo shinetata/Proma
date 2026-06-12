@@ -27,6 +27,7 @@ import { ToolResultRenderer } from './tool-result-renderers'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
+import { parseCreatePlanInput } from './tool-result-renderers/create-plan-result'
 import { formatDuration } from './AgentMessages'
 import type {
   SDKContentBlock,
@@ -295,6 +296,34 @@ function TaskGetCollapsedSummary({ task }: { task: ParsedTaskGetResult }): React
   )
 }
 
+function CreatePlanCollapsedSummary({
+  overview,
+  todoCount,
+}: {
+  overview: string
+  todoCount: number
+}): React.ReactElement {
+  const preview = overview.length > 80 ? `${overview.slice(0, 80)}…` : overview
+
+  return (
+    <>
+      {preview && (
+        <>
+          <span className="shrink-0 text-muted-foreground/35">·</span>
+          <span className="hidden min-w-0 truncate text-[13px] text-muted-foreground/60 sm:inline">
+            {preview}
+          </span>
+        </>
+      )}
+      {todoCount > 0 && (
+        <span className="shrink-0 rounded-full bg-muted/50 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground/75">
+          {todoCount} 项待办
+        </span>
+      )}
+    </>
+  )
+}
+
 function TaskListCollapsedSummary({ tasks }: { tasks: ParsedTaskListItem[] }): React.ReactElement {
   const completedCount = tasks.filter((task) => task.status === 'completed').length
   const activeCount = tasks.filter((task) => task.status === 'in_progress').length
@@ -348,6 +377,12 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
     if (block.name !== 'TaskList' || !resultText || isError) return null
     return parseTaskListResult(resultText)
   }, [block.name, resultText, isError])
+  const createPlanSummary = React.useMemo(() => {
+    if (block.name !== 'CreatePlan' || isError) return null
+    const { overview, todos } = parseCreatePlanInput(block.input)
+    if (!overview && todos.length === 0) return null
+    return { overview, todoCount: todos.length }
+  }, [block.name, block.input, isError])
   const isAgentTool = block.name === 'Agent' || block.name === 'Task'
   const hasChildren = isAgentTool && childBlocks && childBlocks.length > 0
   const subAgentMeta = useSubAgentMeta(block.id, allMessages)
@@ -495,7 +530,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
 
         <span className={cn(
           'min-w-0 truncate text-[14px]',
-          taskGetSummary || taskListSummary ? 'shrink-0' : '',
+          taskGetSummary || taskListSummary || createPlanSummary ? 'shrink-0' : '',
           dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
         )}>{displayLabel}</span>
 
@@ -520,6 +555,15 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         {taskListSummary && (
           <span className="flex min-w-0 items-center gap-1.5">
             <TaskListCollapsedSummary tasks={taskListSummary} />
+          </span>
+        )}
+
+        {createPlanSummary && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <CreatePlanCollapsedSummary
+              overview={createPlanSummary.overview}
+              todoCount={createPlanSummary.todoCount}
+            />
           </span>
         )}
 

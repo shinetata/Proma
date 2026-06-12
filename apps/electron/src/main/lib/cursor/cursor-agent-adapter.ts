@@ -87,6 +87,10 @@ const TOOL_NAME_MAP: Record<string, string> = {
   web_search: 'WebSearch',
   todo: 'TodoWrite',
   todo_write: 'TodoWrite',
+  switchmode: 'SwitchMode',
+  switch_mode: 'SwitchMode',
+  createplan: 'CreatePlan',
+  create_plan: 'CreatePlan',
 }
 
 /** 将 cursor 工具 key（如 readToolCall / writeToolCall / function）归一化为展示名 */

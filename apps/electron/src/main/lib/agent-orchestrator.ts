@@ -38,6 +38,12 @@ import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { generateCursorTitle } from './cursor/cursor-models'
+import {
+  resolveCursorPlanArtifact,
+  buildSyntheticExitPlanInput,
+  extractCreatePlanFromMessages,
+} from './cursor/cursor-plan-complete'
+import type { RouterAgentAdapter } from './cursor/router-agent-adapter'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
@@ -82,6 +88,22 @@ export interface SessionCallbacks {
 
 function sdkPermissionModeForPromaMode(mode: PromaPermissionMode): PromaPermissionMode {
   return PROMA_PERMISSION_MODE_CONFIG[mode].sdkMode
+}
+
+/** 从累积的 SDK 消息中提取最后一条 assistant 文本（用于 Cursor 合成计划摘要） */
+function extractLastAssistantText(messages: SDKMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg?.type !== 'assistant') continue
+    const assistant = msg as SDKAssistantMessage
+    const text = (assistant.message?.content ?? [])
+      .filter((b): b is { type: 'text'; text: string } => b?.type === 'text' && typeof (b as { text?: string }).text === 'string')
+      .map((b) => b.text)
+      .join('\n')
+      .trim()
+    if (text) return text.slice(0, 2000)
+  }
+  return undefined
 }
 
 /**
@@ -1445,10 +1467,17 @@ export class AgentOrchestrator {
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
       let planModeEntered = initialPermissionMode === 'plan'
 
-      const syncPlanModeFromToolUse = (toolName: string): void => {
+      const syncPlanModeFromToolUse = (toolName: string, toolInput?: Record<string, unknown>): void => {
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
           emitPlanModeChanged(true, 'tool')
+          return
+        }
+        if (toolName === 'SwitchMode') {
+          const target = typeof toolInput?.target_mode_id === 'string' ? toolInput.target_mode_id : ''
+          const active = target.toLowerCase().includes('plan')
+          planModeEntered = active
+          emitPlanModeChanged(active, 'tool')
           return
         }
         if (toolName === 'ExitPlanMode' && getPermissionMode() === 'bypassPermissions') {
@@ -1613,6 +1642,7 @@ export class AgentOrchestrator {
             workspaceSlug,
             sessionId,
             permissionMode: initialPermissionMode,
+            channelProvider: channel.provider,
             memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
             claudeAvailable,
             deepSeekSubagentModel: modelRouting.subagentModel,
@@ -1820,7 +1850,10 @@ export class AgentOrchestrator {
               if (!assistantMsg.isReplay) {
                 for (const block of assistantMsg.message.content) {
                   if (block.type === 'tool_use' && 'name' in block && typeof block.name === 'string') {
-                    syncPlanModeFromToolUse(block.name)
+                    const input = 'input' in block && block.input && typeof block.input === 'object'
+                      ? block.input as Record<string, unknown>
+                      : undefined
+                    syncPlanModeFromToolUse(block.name, input)
                   }
                 }
               }
@@ -2028,13 +2061,40 @@ export class AgentOrchestrator {
 
           try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
-          // Plan 模式：Agent 完成规划后注入"接受计划"建议
+          // Plan 模式：规划完成后触发审批或注入执行建议
           if (initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.has(sessionId)) {
-            this.eventBus.emit(sessionId, {
-              kind: 'sdk_message',
-              message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
-            })
-            console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
+            const isCursorChannel = channel.provider === 'cursor'
+            if (isCursorChannel) {
+              // result 处理时 accumulatedMessages 可能已被清空，从持久化会话读取完整流
+              const sessionMessages = getAgentSessionSDKMessages(sessionId)
+              const artifact = resolveCursorPlanArtifact(agentCwd, sessionMessages)
+              const createPlan = extractCreatePlanFromMessages(sessionMessages)
+              const assistantSummary = extractLastAssistantText(sessionMessages)
+                ?? createPlan?.overview
+                ?? createPlan?.plan?.slice(0, 2000)
+              if (artifact || assistantSummary) {
+                exitPlanService.requestPlanApproval(
+                  sessionId,
+                  buildSyntheticExitPlanInput(artifact, assistantSummary),
+                  (request: ExitPlanModeRequest) => {
+                    this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
+                  },
+                )
+                console.log(`[Agent 编排] Cursor Plan 模式：已发起合成计划审批`)
+              } else {
+                this.eventBus.emit(sessionId, {
+                  kind: 'sdk_message',
+                  message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
+                })
+                console.log(`[Agent 编排] Cursor Plan 模式：无计划文件，回退 prompt_suggestion`)
+              }
+            } else {
+              this.eventBus.emit(sessionId, {
+                kind: 'sdk_message',
+                message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
+              })
+              console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
+            }
           }
 
           // 发送完成信号
@@ -2287,7 +2347,21 @@ export class AgentOrchestrator {
       kind: 'proma_event',
       event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
     })
-    // 同步通知 SDK 侧
+    const router = this.adapter as RouterAgentAdapter
+    const isCursor = typeof router.isCursorBackend === 'function' && router.isCursorBackend(sessionId)
+    if (isCursor) {
+      if (this.adapter.setPermissionMode) {
+        await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(mode))
+      }
+      try {
+        updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      } catch (err) {
+        console.warn(`[Agent 编排] Cursor 权限模式持久化失败:`, err)
+      }
+      console.log(`[Agent 编排] Cursor 运行中权限模式已记录（下轮生效）: sessionId=${sessionId}, mode=${mode}`)
+      return
+    }
+    // 同步通知 Claude SDK 侧
     if (this.adapter.setPermissionMode) {
       await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(mode))
     }

@@ -13,6 +13,20 @@ describe('Agent 计划阶段状态', () => {
     expect(getPlanModeChangeFromToolName('ExitPlanMode')).toBeNull()
   })
 
+  test('Given SwitchMode 切到 plan When 解析计划状态 Then 标记进入计划阶段', () => {
+    expect(getPlanModeChangeFromToolName('SwitchMode', { target_mode_id: 'plan' })).toEqual({
+      active: true,
+      source: 'tool',
+    })
+  })
+
+  test('Given SwitchMode 切到 agent When 解析计划状态 Then 标记离开计划阶段', () => {
+    expect(getPlanModeChangeFromToolName('SwitchMode', { target_mode_id: 'agent' })).toEqual({
+      active: false,
+      source: 'tool',
+    })
+  })
+
   test('Given 普通工具 When 解析计划状态 Then 不产生状态变化', () => {
     expect(getPlanModeChangeFromToolName('Read')).toBeNull()
   })

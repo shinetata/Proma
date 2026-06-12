@@ -1163,6 +1163,9 @@ export interface ExitPlanAllowedPrompt {
   prompt: string
 }
 
+/** ExitPlanMode 请求来源 */
+export type ExitPlanModeRequestSource = 'tool' | 'cursor_synthetic'
+
 /** ExitPlanMode 请求（主进程 → 渲染进程） */
 export interface ExitPlanModeRequest {
   /** 请求唯一 ID */
@@ -1173,6 +1176,12 @@ export interface ExitPlanModeRequest {
   toolInput: Record<string, unknown>
   /** 解析后的 allowedPrompts 列表 */
   allowedPrompts: ExitPlanAllowedPrompt[]
+  /** 请求来源：Claude ExitPlanMode 工具 或 Cursor 合成审批 */
+  source?: ExitPlanModeRequestSource
+  /** Cursor 合成审批时的计划文件路径 */
+  planPath?: string
+  /** 计划摘要（Cursor 合成审批时展示） */
+  planSummary?: string
 }
 
 /** ExitPlanMode 用户选择行为 */

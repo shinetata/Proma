@@ -218,9 +218,25 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
           </button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Agent 已完成计划，请选择如何继续
+          {request.source === 'cursor_synthetic'
+            ? 'Agent 已完成规划，请选择如何继续'
+            : 'Agent 已完成计划，请选择如何继续'}
         </p>
+        {request.planPath && (
+          <p className="text-[11px] text-muted-foreground/80 mt-1 font-mono truncate" title={request.planPath}>
+            计划文件：{request.planPath}
+          </p>
+        )}
       </div>
+
+      {request.planSummary && (
+        <div className="px-4 pb-2">
+          <p className="text-[11px] text-muted-foreground mb-1">计划摘要：</p>
+          <p className="text-xs text-foreground/80 whitespace-pre-wrap line-clamp-6 bg-muted/30 rounded-lg px-3 py-2">
+            {request.planSummary}
+          </p>
+        </div>
+      )}
 
       {/* allowedPrompts 展示 */}
       {request.allowedPrompts.length > 0 && (
