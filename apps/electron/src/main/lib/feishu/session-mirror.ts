@@ -1,8 +1,13 @@
 import type {
+  AgentSendInput,
   AgentSessionMeta,
   FeishuBotConfig,
   FeishuSessionMirrorSettings,
 } from '@proma/shared'
+
+const DESKTOP_MIRROR_PREFIX = '📱 Proma 桌面'
+const MAX_FEISHU_MIRROR_BODY_LENGTH = 3900
+const TRUNCATION_SUFFIX = '…（完整内容见 Proma 桌面）'
 
 export const DEFAULT_FEISHU_SESSION_MIRROR: FeishuSessionMirrorSettings = { mode: 'off' }
 
@@ -36,4 +41,84 @@ export function buildSessionMirrorGroupName(session: Pick<AgentSessionMeta, 'id'
 
 function truncateGroupName(name: string): string {
   return name.length > 60 ? `${name.slice(0, 57)}...` : name
+}
+
+function countAttachedFileRefs(content: string): number {
+  const match = content.match(/<attached_files>\n?([\s\S]*?)\n?<\/attached_files>/)
+  if (!match) return 0
+  let count = 0
+  for (const line of match[1]!.split('\n')) {
+    if (/^-\s+(.+?):\s+(.+)$/.test(line.trim())) count++
+  }
+  return count
+}
+
+function firstAttachedFileLabel(content: string): string | null {
+  const match = content.match(/<attached_files>\n?([\s\S]*?)\n?<\/attached_files>/)
+  if (!match) return null
+  for (const line of match[1]!.split('\n')) {
+    const lineMatch = line.match(/^-\s+(.+?):\s+(.+)$/)
+    if (lineMatch) return lineMatch[1]!.trim()
+  }
+  return null
+}
+
+/** 剥离 Proma 注入的 XML / 注释块，提取用户可见正文。 */
+export function stripPromaInjectedBlocks(content: string): string {
+  let text = content
+    .replace(/<!--[\s\S]*?-->\n?/g, '')
+    .replace(/<attached_files>\n?[\s\S]*?\n?<\/attached_files>\n*/g, '')
+    .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
+    .replace(/<bridge_context>\n?[\s\S]*?\n?<\/bridge_context>\n*/g, '')
+    .replace(/<quoted_message>\n?[\s\S]*?\n?<\/quoted_message>\n*/g, '')
+    .replace(/<interactive_card>\n?[\s\S]*?\n?<\/interactive_card>\n*/g, '')
+    .replace(/<group_extra>\n?[\s\S]*?\n?<\/group_extra>\n*/g, '')
+
+  const userMessageMatch = text.match(/<user_message>\n?([\s\S]*?)\n?<\/user_message>/)
+  if (userMessageMatch) {
+    text = userMessageMatch[1]!
+  }
+
+  return text.trim()
+}
+
+/** 将桌面端 userMessage 格式化为飞书镜像群可见文本。 */
+export function formatDesktopMirrorUserMessage(raw: string): string {
+  const attachmentCount = countAttachedFileRefs(raw)
+  let body = stripPromaInjectedBlocks(raw)
+
+  if (!body && attachmentCount > 0) {
+    const firstLabel = firstAttachedFileLabel(raw)
+    const withoutExt = firstLabel?.replace(/\.[^.]+$/, '') ?? '文件'
+    body = `[附件] ${withoutExt || firstLabel || '文件'}`
+  }
+
+  if (!body && attachmentCount === 0) return ''
+
+  if (body.length > MAX_FEISHU_MIRROR_BODY_LENGTH) {
+    body = `${body.slice(0, MAX_FEISHU_MIRROR_BODY_LENGTH - TRUNCATION_SUFFIX.length)}${TRUNCATION_SUFFIX}`
+  }
+
+  let result = `${DESKTOP_MIRROR_PREFIX}\n${body}`
+  if (attachmentCount > 0) {
+    result += `\n📎 附带 ${attachmentCount} 个文件（请在 Proma 桌面查看）`
+  }
+  return result
+}
+
+/** 判断桌面端发起的 Agent 消息是否应镜像到飞书群。 */
+export function shouldMirrorDesktopUserMessage(
+  input: AgentSendInput,
+  mirrorSettings: FeishuSessionMirrorSettings | undefined,
+): boolean {
+  if (normalizeFeishuSessionMirrorSettings(mirrorSettings).mode !== 'stream') return false
+  if (input.triggeredBy === 'automation') return false
+  if (input.automationContext) return false
+
+  const trimmed = input.userMessage.trim()
+  if (!trimmed) return false
+  if (trimmed.startsWith('/compact')) return false
+  if (trimmed.startsWith('请执行该计划')) return false
+
+  return true
 }

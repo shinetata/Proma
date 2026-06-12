@@ -2056,12 +2056,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
-      const session = getAgentSessionMeta(input.sessionId)
-      if (session) {
-        await feishuBridgeManager.startSessionMirrorRun(session).catch((error) => {
-          console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error)
-        })
-      }
       await runAgent(input, event.sender)
     }
   )

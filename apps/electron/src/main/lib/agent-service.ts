@@ -34,6 +34,9 @@ import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
+import { feishuBridgeManager } from './feishu-bridge-manager'
+import { getSettings } from './settings-service'
+import { shouldMirrorDesktopUserMessage } from './feishu/session-mirror'
 
 // ===== 实例创建 =====
 
@@ -113,6 +116,21 @@ eventBus.use((sessionId, payload, next) => {
 
 // ===== IPC 薄包装函数 =====
 
+async function prepareFeishuSessionMirror(input: AgentSendInput): Promise<void> {
+  const session = getAgentSessionMeta(input.sessionId)
+  if (!session) return
+
+  const mirrorSettings = getSettings().feishuSessionMirror
+  try {
+    if (shouldMirrorDesktopUserMessage(input, mirrorSettings)) {
+      await feishuBridgeManager.mirrorDesktopUserMessage(session, input.userMessage)
+    }
+    await feishuBridgeManager.startSessionMirrorRun(session)
+  } catch (error) {
+    console.error('[飞书 Session 镜像] 准备镜像失败:', error)
+  }
+}
+
 /**
  * 运行 Agent 并流式推送事件到渲染进程
  *
@@ -130,6 +148,7 @@ export async function runAgent(
   try {
     updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
   } catch { /* 新会话可能尚未写入索引 */ }
+  await prepareFeishuSessionMirror(input)
   try {
     await orchestrator.sendMessage(input, {
       onError: (error) => {

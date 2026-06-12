@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import type { FeishuBotConfig } from '@proma/shared'
 import {
   buildSessionMirrorGroupName,
+  formatDesktopMirrorUserMessage,
   normalizeFeishuSessionMirrorSettings,
   resolveSessionMirrorBot,
+  shouldMirrorDesktopUserMessage,
+  stripPromaInjectedBlocks,
 } from './session-mirror'
 
 const enabledBot: FeishuBotConfig = {
@@ -57,5 +60,59 @@ describe('飞书 Session 镜像设置', () => {
       id: '1234567890abcdef',
       title: '新 Agent 会话',
     })).toBe('Proma - 新会话 12345678')
+  })
+})
+
+describe('桌面端消息镜像', () => {
+  test('Given 含 attached_files When 格式化 Then 剥离 XML 并保留正文', () => {
+    const raw = '<attached_files>\n- screenshot.png: /tmp/a.png\n</attached_files>\n\n请分析这张图'
+    expect(stripPromaInjectedBlocks(raw)).toBe('请分析这张图')
+    expect(formatDesktopMirrorUserMessage(raw)).toBe(
+      '📱 Proma 桌面\n请分析这张图\n📎 附带 1 个文件（请在 Proma 桌面查看）',
+    )
+  })
+
+  test('Given 仅附件无正文 When 格式化 Then 回退附件标签', () => {
+    const raw = '<attached_files>\n- report.pdf: /tmp/report.pdf\n</attached_files>\n\n'
+    expect(formatDesktopMirrorUserMessage(raw)).toBe(
+      '📱 Proma 桌面\n[附件] report\n📎 附带 1 个文件（请在 Proma 桌面查看）',
+    )
+  })
+
+  test('Given stream 关闭 When 判断是否镜像 Then 返回 false', () => {
+    expect(shouldMirrorDesktopUserMessage(
+      { sessionId: 's1', userMessage: 'hello', channelId: 'c1' },
+      { mode: 'off' },
+    )).toBe(false)
+  })
+
+  test('Given 定时任务 When 判断是否镜像 Then 返回 false', () => {
+    expect(shouldMirrorDesktopUserMessage(
+      {
+        sessionId: 's1',
+        userMessage: 'run task',
+        channelId: 'c1',
+        triggeredBy: 'automation',
+      },
+      { mode: 'stream', botId: enabledBot.id },
+    )).toBe(false)
+  })
+
+  test('Given 计划自动续跑 When 判断是否镜像 Then 返回 false', () => {
+    expect(shouldMirrorDesktopUserMessage(
+      {
+        sessionId: 's1',
+        userMessage: '请执行该计划\n\n计划文件：.context/plan/a.md',
+        channelId: 'c1',
+      },
+      { mode: 'stream', botId: enabledBot.id },
+    )).toBe(false)
+  })
+
+  test('Given 普通桌面消息 When 判断是否镜像 Then 返回 true', () => {
+    expect(shouldMirrorDesktopUserMessage(
+      { sessionId: 's1', userMessage: '你好', channelId: 'c1' },
+      { mode: 'stream', botId: enabledBot.id },
+    )).toBe(true)
   })
 })
