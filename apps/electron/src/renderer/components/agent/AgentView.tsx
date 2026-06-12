@@ -1253,6 +1253,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // - streaming：本轮真正进行中，注入时需先软中断当前 turn
     // - backgroundWaiting：软空闲、无活跃 turn，直接注入即可，无需中断
     if (streaming || backgroundWaiting) {
+      // Cursor 渠道经 ACP 适配器已支持运行中追加消息（session/prompt 队列 + 软中断），
+      // 与 Claude 直连一致走注入通道；仅旧版 CLI headless 回退时后端会 throw 并由下方 catch 兜底提示。
       // 流式追加时不处理附件（仅支持纯文本）
       if (pendingFilesSnapshot.length > 0) {
         toast.info('Agent 运行中暂不支持追加发送附件', {

@@ -25,6 +25,7 @@ import type {
   SDKResultMessage,
   SDKSystemMessage,
 } from '@proma/shared'
+import { materializeCursorMcpConfig } from './cursor-mcp-bridge'
 
 // ============================================================================
 // 查询选项
@@ -55,6 +56,11 @@ export interface CursorAgentQueryOptions extends AgentQueryInput {
   onSessionId?: (sessionId: string) => void
   /** 模型确认回调（从 system/init 读取） */
   onModelResolved?: (model: string) => void
+  /**
+   * 编排层构建的 MCP 服务器配置（含外部 stdio/http/sse 与内置 sdk 工具）。
+   * Cursor headless 仅能用外部 MCP，query 前会把其中外部项物化为会话 cwd 的 .cursor/mcp.json。
+   */
+  mcpServers?: Record<string, Record<string, unknown>>
 }
 
 // ============================================================================
@@ -325,7 +331,7 @@ export class CursorAgentAdapter implements AgentProviderAdapter {
   }
 
   /** 构建 cursor-agent headless 启动参数 */
-  private buildArgs(options: CursorAgentQueryOptions, prompt: string): string[] {
+  private buildArgs(options: CursorAgentQueryOptions, prompt: string, approveMcps: boolean): string[] {
     const args: string[] = ['-p', '--output-format', 'stream-json']
 
     // 权限：plan → 只读规划；其它 → 自动放行（headless 无交互式逐工具授权）
@@ -338,6 +344,9 @@ export class CursorAgentAdapter implements AgentProviderAdapter {
 
     // headless 信任工作区，避免交互式确认
     args.push('--trust')
+
+    // 物化了外部 MCP 时自动放行其工具审批（headless 无交互式 MCP 审批）
+    if (approveMcps) args.push('--approve-mcps')
 
     if (options.cwd) args.push(`--workspace=${options.cwd}`)
     if (options.model) args.push('--model', options.model)
@@ -374,10 +383,12 @@ export class CursorAgentAdapter implements AgentProviderAdapter {
     const { sessionId } = options
 
     const prompt = this.buildPrompt(options)
-    const args = this.buildArgs(options, prompt)
+    // 物化外部 MCP 到会话 cwd 的 .cursor/mcp.json（仅 stdio/http/sse，内置 sdk 工具跳过）
+    const mcpResult = materializeCursorMcpConfig(options.cwd, options.mcpServers)
+    const args = this.buildArgs(options, prompt, mcpResult.wrote)
     const env = this.buildEnv(options)
 
-    console.log(`[Cursor 适配器] 启动 cursor-agent: sessionId=${sessionId}, model=${options.model || '默认'}, resume=${options.resumeSessionId || '无'}`)
+    console.log(`[Cursor 适配器] 启动 cursor-agent: sessionId=${sessionId}, model=${options.model || '默认'}, resume=${options.resumeSessionId || '无'}, mcp=${mcpResult.wrote ? mcpResult.names.join('/') : '无'}`)
 
     const child = spawn(options.cursorCliPath, args, {
       cwd: options.cwd,
