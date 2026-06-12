@@ -592,6 +592,37 @@ export function useGlobalAgentListeners(): void {
           activateExternalAgentRun(payload.event)
         }
 
+        if (payload.kind === 'proma_event' && payload.event.type === 'plan_execution_auto_start') {
+          const autoStartEvent = payload.event
+          store.set(agentStreamingStatesAtom, (prev) => {
+            const current = prev.get(sessionId)
+            if (current?.running) return prev
+            const map = new Map(prev)
+            map.set(sessionId, {
+              ...(current ?? {
+                running: false,
+                content: '',
+                toolActivities: [],
+                model: undefined,
+                startedAt: autoStartEvent.startedAt,
+              }),
+              running: true,
+              startedAt: autoStartEvent.startedAt,
+            })
+            return map
+          })
+        }
+
+        if (payload.kind === 'proma_event' && payload.event.type === 'plan_execution_auto_start_failed') {
+          const failedEvent = payload.event
+          const description = failedEvent.reason === 'session_still_active'
+            ? '会话仍在运行，请稍后手动发送「请执行该计划」'
+            : failedEvent.reason === 'missing_channel'
+              ? '会话渠道信息缺失，请手动发送执行指令'
+              : '无法自动执行计划，请手动发送执行指令'
+          toast.error('计划自动执行失败', { description })
+        }
+
         // 如果收到未知会话的事件（跨工作区场景），立即刷新会话列表
         const knownSessions = store.get(agentSessionsAtom)
         if (!knownSessions.some((s) => s.id === sessionId)) {

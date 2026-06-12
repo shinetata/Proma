@@ -67,7 +67,8 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * 仅依赖 finally 块清理无法覆盖窗口关闭、渲染进程崩溃、headless 路径主窗口被替换等
  * webContents 提前销毁的场景——destroyed 事件兜底。
  */
-function registerWebContents(sessionId: string, wc: WebContents): void {
+/** 注册 sessionId → webContents，供 EventBus 转发流式事件（含 Plan 续跑等场景） */
+export function registerAgentWebContents(sessionId: string, wc: WebContents): void {
   // 同一 sessionId 切换 webContents 时直接覆盖；旧 wc 的 destroyed 钩子仍由 WeakSet 持有，
   // 触发时会扫描 sessionWebContents 清理所有指向旧 wc 的条目（见下方实现）。
   sessionWebContents.set(sessionId, wc)
@@ -122,7 +123,7 @@ export async function runAgent(
   webContents: WebContents,
 ): Promise<void> {
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
-  registerWebContents(input.sessionId, webContents)
+  registerAgentWebContents(input.sessionId, webContents)
   // 登记会话渠道，供 Router 判定后端（claude / cursor）
   adapter.setSessionBackend(input.sessionId, input.channelId)
   // 开始新一轮执行时清除"完成未确认"标记
@@ -207,7 +208,7 @@ export async function runAgentHeadless(
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const startedAt = runInput.startedAt!
   if (wc) {
-    registerWebContents(runInput.sessionId, wc)
+    registerAgentWebContents(runInput.sessionId, wc)
   }
   // 登记会话渠道，供 Router 判定后端（claude / cursor）
   adapter.setSessionBackend(runInput.sessionId, runInput.channelId)

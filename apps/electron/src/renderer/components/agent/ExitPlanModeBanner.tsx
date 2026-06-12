@@ -21,8 +21,16 @@ import {
   FileText,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { allPendingExitPlanRequestsAtom, agentStreamingStatesAtom, finalizeStreamingActivities } from '@/atoms/agent-atoms'
-import type { ExitPlanModeAction, ExitPlanAllowedPrompt } from '@proma/shared'
+import { toast } from 'sonner'
+import {
+  allPendingExitPlanRequestsAtom,
+  agentPermissionModeMapAtom,
+  agentPlanModeSessionsAtom,
+  agentStreamingStatesAtom,
+  finalizeStreamingActivities,
+} from '@/atoms/agent-atoms'
+import { updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
+import type { ExitPlanModeAction, ExitPlanAllowedPrompt, PromaPermissionMode } from '@proma/shared'
 
 /** 选项定义 */
 interface PlanOption {
@@ -77,6 +85,8 @@ interface ExitPlanModeBannerProps {
 export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingExitPlanRequestsAtom)
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
+  const setPermissionModeMap = useSetAtom(agentPermissionModeMapAtom)
+  const setPlanModeSessions = useSetAtom(agentPlanModeSessionsAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [focusedIdx, setFocusedIdx] = React.useState(0)
   const [showFeedback, setShowFeedback] = React.useState(false)
@@ -104,9 +114,21 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
     setFeedbackText('')
   }, [request?.requestId])
 
+  const applyApproveOptimisticUi = React.useCallback((action: ExitPlanModeAction): void => {
+    if (action !== 'approve_auto' && action !== 'approve_edit') return
+    const targetMode: PromaPermissionMode = action === 'approve_auto' ? 'bypassPermissions' : 'auto'
+    setPermissionModeMap((prev) => {
+      const next = new Map(prev)
+      next.set(sessionId, targetMode)
+      return next
+    })
+    setPlanModeSessions((prev) => updatePlanModeSessionSet(prev, sessionId, false))
+  }, [sessionId, setPermissionModeMap, setPlanModeSessions])
+
   const handleAction = async (action: ExitPlanModeAction): Promise<void> => {
     if (submitting || !request) return
     setSubmitting(true)
+    applyApproveOptimisticUi(action)
     try {
       await window.electronAPI.respondExitPlanMode({
         requestId: request.requestId,
@@ -124,6 +146,17 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
       })
     } catch (error) {
       console.error('[ExitPlanModeBanner] 响应失败:', error)
+      if (action === 'approve_auto' || action === 'approve_edit') {
+        setPermissionModeMap((prev) => {
+          const next = new Map(prev)
+          next.delete(sessionId)
+          return next
+        })
+        setPlanModeSessions((prev) => updatePlanModeSessionSet(prev, sessionId, true))
+      }
+      toast.error('计划审批失败', {
+        description: error instanceof Error ? error.message : '请重试或手动发送执行指令',
+      })
     } finally {
       setSubmitting(false)
     }

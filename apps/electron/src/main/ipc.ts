@@ -2366,43 +2366,55 @@ export function registerIpcHandlers(): void {
     async (event, response: ExitPlanModeResponse): Promise<void> => {
       const result = exitPlanService.respondToExitPlanMode(response)
 
-      if (result) {
-        const { sessionId, targetMode, planPath, shouldAutoContinue } = result
+      if (!result) {
+        console.warn(`[IPC] ExitPlanMode 请求未找到或已过期: requestId=${response.requestId}`)
+        throw new Error('计划审批请求已过期，请重新规划后再批准')
+      }
 
-        // 通知渲染进程请求已处理
+      const { sessionId, targetMode, planPath, shouldAutoContinue } = result
+
+      // 通知渲染进程请求已处理
+      event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+        sessionId,
+        payload: { kind: 'proma_event', event: { type: 'exit_plan_mode_resolved', requestId: response.requestId } },
+      })
+
+      // 如果用户选择了新的权限模式，通知渲染进程更新 UI
+      if (targetMode) {
+        const meta = getAgentSessionMeta(sessionId)
+        // 持久化到 session meta，和 cycleMode 路径保持一致（重启后该 session 能恢复）
+        if (meta) {
+          try {
+            updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+          } catch (err) {
+            console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
+          }
+        }
         event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
           sessionId,
-          payload: { kind: 'proma_event', event: { type: 'exit_plan_mode_resolved', requestId: response.requestId } },
+          payload: { kind: 'proma_event', event: { type: 'permission_mode_changed', mode: targetMode } },
         })
-
-        // 如果用户选择了新的权限模式，通知渲染进程更新 UI
-        if (targetMode) {
-          const meta = getAgentSessionMeta(sessionId)
-          // 持久化到 session meta，和 cycleMode 路径保持一致（重启后该 session 能恢复）
-          if (meta) {
-            try {
-              updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
-            } catch (err) {
-              console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
-            }
-          }
+        if (shouldAutoContinue) {
           event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
             sessionId,
-            payload: { kind: 'proma_event', event: { type: 'permission_mode_changed', mode: targetMode } },
+            payload: {
+              kind: 'proma_event',
+              event: { type: 'plan_mode_changed', sessionId, active: false, source: 'permission' },
+            },
           })
-          console.log(`[IPC] ExitPlanMode 权限模式切换: ${targetMode}`)
         }
+        console.log(`[IPC] ExitPlanMode 权限模式切换: ${targetMode}`)
+      }
 
-        if (shouldAutoContinue && targetMode) {
-          void continuePlanAfterApproval({
-            sessionId,
-            targetMode,
-            planPath,
-            webContents: event.sender,
-          }).catch((err: unknown) => {
-            console.error('[IPC] Cursor Plan 批准后自动执行失败:', err)
-          })
-        }
+      if (shouldAutoContinue && targetMode) {
+        void continuePlanAfterApproval({
+          sessionId,
+          targetMode,
+          planPath,
+          webContents: event.sender,
+        }).catch((err: unknown) => {
+          console.error('[IPC] Cursor Plan 批准后自动执行失败:', err)
+        })
       }
     }
   )

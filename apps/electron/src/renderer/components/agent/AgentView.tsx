@@ -387,7 +387,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
   const persistedPermissionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
   const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
-  const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
   const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
@@ -2060,14 +2059,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
-              (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
+              isPlanMode && !isDragOver && 'plan-mode-border',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
-            {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
+            {isPlanMode && !isDragOver && <PlanModeDashedBorder />}
             {/* 无 Agent 渠道或无可用模型提示 */}
             {(!agentChannelId || !hasAvailableModel) && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">

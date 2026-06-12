@@ -563,6 +563,8 @@ export type PromaEvent =
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number }
   | { type: 'run_resumed'; sessionId: string }
+  | { type: 'plan_execution_auto_start'; sessionId: string; startedAt: number; targetMode: PromaPermissionMode }
+  | { type: 'plan_execution_auto_start_failed'; sessionId: string; reason: string }
 
 /** 外部入口触发 Agent 运行的来源 */
 export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge'

@@ -2061,11 +2061,12 @@ export class AgentOrchestrator {
 
           try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
-          // Plan 模式：规划完成后触发审批或注入执行建议
-          if (initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.has(sessionId)) {
+          // Plan 模式：规划完成后触发审批或注入执行建议（Cursor 合成审批延至 completeRun 之后，
+          // 确保 releaseActiveRun 已执行，避免用户立即批准时 continuePlanAfterApproval 被 activeSessions 拦截）
+          let deferredCursorPlanApproval: (() => void) | null = null
+          if (initialPermissionMode === 'plan' && planModeEntered) {
             const isCursorChannel = channel.provider === 'cursor'
             if (isCursorChannel) {
-              // result 处理时 accumulatedMessages 可能已被清空，从持久化会话读取完整流
               const sessionMessages = getAgentSessionSDKMessages(sessionId)
               const artifact = resolveCursorPlanArtifact(agentCwd, sessionMessages)
               const createPlan = extractCreatePlanFromMessages(sessionMessages)
@@ -2073,14 +2074,16 @@ export class AgentOrchestrator {
                 ?? createPlan?.overview
                 ?? createPlan?.plan?.slice(0, 2000)
               if (artifact || assistantSummary) {
-                exitPlanService.requestPlanApproval(
-                  sessionId,
-                  buildSyntheticExitPlanInput(artifact, assistantSummary),
-                  (request: ExitPlanModeRequest) => {
-                    this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
-                  },
-                )
-                console.log(`[Agent 编排] Cursor Plan 模式：已发起合成计划审批`)
+                deferredCursorPlanApproval = () => {
+                  exitPlanService.requestPlanApproval(
+                    sessionId,
+                    buildSyntheticExitPlanInput(artifact, assistantSummary),
+                    (request: ExitPlanModeRequest) => {
+                      this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
+                    },
+                  )
+                  console.log(`[Agent 编排] Cursor Plan 模式：已发起合成计划审批`)
+                }
               } else {
                 this.eventBus.emit(sessionId, {
                   kind: 'sdk_message',
@@ -2097,8 +2100,12 @@ export class AgentOrchestrator {
             }
           }
 
-          // 发送完成信号
+          // 发送完成信号（释放 activeSessions 槽位）
           completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
+
+          if (deferredCursorPlanApproval) {
+            deferredCursorPlanApproval()
+          }
 
           break  // 成功完成，退出重试循环
 
@@ -2308,9 +2315,9 @@ export class AgentOrchestrator {
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       releaseActiveRun()
       permissionService.clearSessionPending(sessionId)
-      // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
+      // askUserService / exitPlanService 不在 turn 结束时清理——生命周期由用户审批交互决定，
       // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
-      exitPlanService.clearSessionPending(sessionId)
+      // Cursor 合成审批在 completeRun 之后才注册 pending，若此处清理会导致批准后 respondToExitPlanMode 返回 null。
     }
   }
 
