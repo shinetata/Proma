@@ -34,4 +34,18 @@ describe('stripMessageForTitle', () => {
 
     expect(stripMessageForTitle(msg)).toBe('解释这段代码')
   })
+
+  test('Given 飞书桥完整 XML When 剥离 Then 保留 user_message 正文', () => {
+    const msg = [
+      '<!-- bridge prelude -->',
+      '<bridge_context>',
+      'chat_id: oc_abc',
+      'chat_type: group',
+      '</bridge_context>',
+      '<group_extra>[群聊: Test]</group_extra>',
+      '<user_message>开始优化吧</user_message>',
+    ].join('\n')
+
+    expect(stripMessageForTitle(msg)).toBe('开始优化吧')
+  })
 })

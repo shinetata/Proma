@@ -64,6 +64,7 @@ import {
   THINKING_SIGNATURE_ERROR_TITLE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   isThinkingSignatureError,
+  stripPromaInjectedBlocks,
 } from '@proma/shared'
 import type { ToolActivity } from '@/atoms/agent-atoms'
 
@@ -898,7 +899,9 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
   const regex = /<attached_files>\n?([\s\S]*?)\n?<\/attached_files>\n*/
   const match = content.match(regex)
   if (!match) {
-    const cleanText = content.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '').trim()
+    const cleanText = stripPromaInjectedBlocks(
+      content.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, ''),
+    )
     return { files: [], quotes, text: cleanText }
   }
 
@@ -916,7 +919,7 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
 
   let text = content.replace(regex, '')
   text = text.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
-  text = text.trim()
+  text = stripPromaInjectedBlocks(text)
   return { files, quotes, text }
 }
 
@@ -1376,10 +1379,8 @@ export function getGroupId(group: MessageGroup): string {
  */
 export function getGroupPreview(group: MessageGroup): string {
   if (group.type === 'user') {
-    return stripScheduledRunMarker(extractUserText(group.message) ?? '')
-      .replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '')
-      .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
-      .slice(0, 200)
+    const raw = stripScheduledRunMarker(extractUserText(group.message) ?? '')
+    return stripPromaInjectedBlocks(raw).slice(0, 200)
   }
   if (group.type === 'system') {
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'

@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import type { FeishuBotConfig } from '@proma/shared'
+import { stripPromaInjectedBlocks } from '@proma/shared'
 import {
   buildSessionMirrorGroupName,
   formatDesktopMirrorUserMessage,
   normalizeFeishuSessionMirrorSettings,
   resolveSessionMirrorBot,
   shouldMirrorDesktopUserMessage,
-  stripPromaInjectedBlocks,
 } from './session-mirror'
 
 const enabledBot: FeishuBotConfig = {

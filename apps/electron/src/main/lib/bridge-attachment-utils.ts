@@ -7,6 +7,7 @@
 
 import { mkdirSync, writeFileSync, readdirSync } from 'node:fs'
 import { join, resolve, basename, relative } from 'node:path'
+import { stripPromaInjectedBlocks } from '@proma/shared'
 import { getAgentSessionWorkspacePath, resolveAgentSessionWorkspacePath } from './config-paths'
 
 /** 图片大小警告阈值 */
@@ -149,11 +150,7 @@ function parseAttachedFileLabels(content: string): string[] {
  */
 export function stripMessageForTitle(content: string): string {
   const attachmentLabels = parseAttachedFileLabels(content)
-
-  const text = content
-    .replace(/<attached_files>\n?[\s\S]*?\n?<\/attached_files>\n*/g, '')
-    .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
-    .trim()
+  const text = stripPromaInjectedBlocks(content)
 
   if (text) return text
 
