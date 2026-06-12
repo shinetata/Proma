@@ -657,6 +657,7 @@ export function AutomationFormView(): React.ReactElement | null {
                 externalSelectedModel={selectedModel}
                 showChannelInTrigger
                 onModelSelect={(opt) => update({ channelId: opt.channelId, modelId: opt.modelId })}
+                allowAgentOnly
               />
             )}
           </div>

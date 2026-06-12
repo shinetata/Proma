@@ -24,6 +24,7 @@ import type {
 import { PROVIDER_DEFAULT_URLS } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
+import { fetchCursorModels, testCursorConnection } from './cursor/cursor-models'
 import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -99,8 +100,11 @@ function decryptKey(encryptedKey: string): string {
     const buffer = Buffer.from(encryptedKey, 'base64')
     return safeStorage.decryptString(buffer)
   } catch (error) {
-    console.error('[渠道管理] 解密 API Key 失败:', error)
-    throw new Error('解密 API Key 失败')
+    // 兼容场景：曾在 safeStorage 不可用时以明文存储（如 Keychain 提示被取消），
+    // 之后加密恢复可用，旧明文值无法解密。此时退回当作明文返回，避免硬失败。
+    // 重新保存该渠道即可写入正确的密文。
+    console.warn('[渠道管理] 解密失败，按明文处理（可能为旧明文密钥）:', error)
+    return encryptedKey
   }
 }
 
@@ -285,6 +289,8 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
         return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl)
       case 'google':
         return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
+      case 'cursor':
+        return await testCursorConnection(apiKey)
       default:
         return { success: false, message: `不支持的供应商: ${channel.provider}。你可能过去使用的是 Proma 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。` }
     }
@@ -454,6 +460,8 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
         return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl)
       case 'google':
         return await testGoogle(input.baseUrl, input.apiKey, proxyUrl)
+      case 'cursor':
+        return await testCursorConnection(input.apiKey)
       default:
         return { success: false, message: `不支持的提供商: ${input.provider}` }
     }
@@ -494,6 +502,8 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
         return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl)
       case 'google':
         return await fetchGoogleModels(input.baseUrl, input.apiKey, proxyUrl)
+      case 'cursor':
+        return await fetchCursorModels(input.apiKey)
       default:
         return { success: false, message: `不支持的供应商: ${input.provider}`, models: [] }
     }

@@ -72,7 +72,7 @@ interface ChannelFormProps {
 }
 
 /** 所有可选供应商 */
-const PROVIDER_OPTIONS: ProviderType[] = ['anthropic', 'anthropic-compatible', 'openai', 'deepseek', 'google', 'kimi-api', 'kimi-coding', 'zhipu', 'zhipu-coding', 'minimax', 'doubao', 'qwen', 'xiaomi', 'xiaomi-token-plan', 'custom']
+const PROVIDER_OPTIONS: ProviderType[] = ['anthropic', 'anthropic-compatible', 'openai', 'deepseek', 'google', 'kimi-api', 'kimi-coding', 'zhipu', 'zhipu-coding', 'minimax', 'doubao', 'qwen', 'xiaomi', 'xiaomi-token-plan', 'cursor', 'custom']
 
 /** 供应商选项（用于 SettingsSelect） */
 const PROVIDER_SELECT_OPTIONS = PROVIDER_OPTIONS.map((p) => ({
@@ -98,6 +98,8 @@ const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
   xiaomi: '/v1/messages',
   'xiaomi-token-plan': '/v1/messages',
   custom: '/chat/completions',
+  // Cursor 通过本地 CLI 接入，无 HTTP 端点
+  cursor: '',
 }
 
 /** 走 Anthropic 协议的供应商集合（共用 /v1/messages 端点） */
@@ -164,6 +166,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
   const lastAgentEligibleRef = React.useRef(channel ? isAgentEligibleChannel(channel) : false)
+
+  /** Cursor 通过本地 CLI 接入，无需 Base URL；其余供应商需要 */
+  const isCursor = provider === 'cursor'
+  const requiresBaseUrl = !isCursor
 
   React.useEffect(() => {
     lastAgentEligibleRef.current = channel ? isAgentEligibleChannel(channel) : false
@@ -323,7 +329,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 从供应商 API 拉取可用模型列表 */
   const handleFetchModels = async (): Promise<void> => {
-    if (!apiKey.trim() || !baseUrl.trim()) return
+    if (!apiKey.trim() || (requiresBaseUrl && !baseUrl.trim())) return
 
     setFetchingModels(true)
     setFetchResult(null)
@@ -356,7 +362,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 测试连接（直接使用表单当前值，无需先保存） */
   const handleTest = async (): Promise<void> => {
-    if (!apiKey.trim() || !baseUrl.trim()) return
+    if (!apiKey.trim() || (requiresBaseUrl && !baseUrl.trim())) return
 
     setTesting(true)
     setTestResult(null)
@@ -519,13 +525,21 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             placeholder="例如: My Anthropic"
             required
           />
-          <SettingsInput
-            label="Base URL"
-            value={baseUrl}
-            onChange={setBaseUrl}
-            placeholder="https://api.example.com"
-            description={baseUrl.trim() ? `预览：${buildPreviewUrl(baseUrl, provider)}` : undefined}
-          />
+          {requiresBaseUrl && (
+            <SettingsInput
+              label="Base URL"
+              value={baseUrl}
+              onChange={setBaseUrl}
+              placeholder="https://api.example.com"
+              description={baseUrl.trim() ? `预览：${buildPreviewUrl(baseUrl, provider)}` : undefined}
+            />
+          )}
+          {isCursor && (
+            <div className="px-4 py-3 text-xs text-muted-foreground leading-relaxed">
+              Cursor 通过本地 cursor-agent CLI 接入，仅用于 Agent 模式（首次使用会自动安装 CLI）。
+              请在 Cursor 控制台 Dashboard → Integrations 创建 API Key 后填入下方。
+            </div>
+          )}
           {/* API Key + 测试连接同行 */}
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
@@ -535,7 +549,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                 size="sm"
                 type="button"
                 onClick={handleTest}
-                disabled={testing || !apiKey.trim() || !baseUrl.trim()}
+                disabled={testing || !apiKey.trim() || (requiresBaseUrl && !baseUrl.trim())}
                 className="h-7 text-xs"
               >
                 {testing ? (
@@ -631,7 +645,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             size="sm"
             type="button"
             onClick={handleFetchModels}
-            disabled={fetchingModels || !apiKey.trim() || !baseUrl.trim()}
+            disabled={fetchingModels || !apiKey.trim() || (requiresBaseUrl && !baseUrl.trim())}
             className="h-7 text-xs"
           >
             {fetchingModels ? (

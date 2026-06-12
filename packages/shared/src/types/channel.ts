@@ -24,6 +24,8 @@ export type ProviderType =
   | 'xiaomi'
   | 'xiaomi-token-plan'
   | 'custom'
+  // Cursor 订阅：通过本地 cursor-agent CLI 接入，仅用于 Agent 模式（非 Anthropic 协议）
+  | 'cursor'
 
 /**
  * 各供应商的默认 Base URL
@@ -44,6 +46,8 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   xiaomi: 'https://api.xiaomimimo.com/anthropic',
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   custom: '',
+  // Cursor 走本地 CLI，无需 Base URL
+  cursor: '',
 }
 
 /**
@@ -65,13 +69,15 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   xiaomi: '小米 MiMo (API)',
   'xiaomi-token-plan': '小米 MiMo Token Plan',
   custom: 'OpenAI 兼容格式',
+  cursor: 'Cursor (CLI)',
 }
 
 /**
  * 支持 Agent 模式的供应商类型
  *
- * Agent SDK 通过 Anthropic 兼容协议调用 `/v1/messages` 端点，
- * 因此所有 Anthropic 协议兼容的供应商都可以用于 Agent。
+ * 两类来源：
+ * 1. Anthropic 兼容协议供应商：Agent SDK 通过 `/v1/messages` 端点调用。
+ * 2. Cursor：通过本地 cursor-agent CLI 接入（非 Anthropic 协议，见 AGENT_ONLY_PROVIDERS）。
  */
 export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'anthropic',
@@ -83,6 +89,17 @@ export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<Pro
   'minimax',
   'xiaomi',
   'xiaomi-token-plan',
+  'cursor',
+])
+
+/**
+ * 仅支持 Agent 模式的供应商类型（不应出现在 Chat 模式模型选择中）
+ *
+ * Cursor 通过本地 cursor-agent CLI 提供完整 Agent 能力（文件编辑、工具、MCP），
+ * 不暴露原始 Chat Completions / Messages 接口，因此不能用于 Chat 模式。
+ */
+export const AGENT_ONLY_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
+  'cursor',
 ])
 
 /**
@@ -90,6 +107,13 @@ export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<Pro
  */
 export function isAgentCompatibleProvider(provider: ProviderType): boolean {
   return AGENT_COMPATIBLE_PROVIDERS.has(provider)
+}
+
+/**
+ * 判断供应商是否仅支持 Agent 模式（Chat 模式应过滤掉）
+ */
+export function isAgentOnlyProvider(provider: ProviderType): boolean {
+  return AGENT_ONLY_PROVIDERS.has(provider)
 }
 
 /**

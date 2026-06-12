@@ -28,6 +28,7 @@ import {
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
+  isAgentOnlyProvider,
 } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
@@ -763,6 +764,14 @@ export class AgentOrchestrator {
       if (!channel) {
         console.warn('[Agent 标题生成] 渠道不存在:', channelId)
         return null
+      }
+
+      // 仅 Agent 模式的供应商（如 Cursor）无 HTTP 标题端点，改用本地截断生成标题
+      if (isAgentOnlyProvider(channel.provider)) {
+        const firstLine = userMessage.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? ''
+        const localTitle = firstLine.replace(/^["'""''「《]+|["'""''」》]+$/g, '').trim().slice(0, MAX_TITLE_LENGTH) || null
+        console.log(`[Agent 标题生成] 本地标题（${channel.provider}）: "${localTitle}"`)
+        return localTitle
       }
 
       const apiKey = decryptApiKey(channelId)

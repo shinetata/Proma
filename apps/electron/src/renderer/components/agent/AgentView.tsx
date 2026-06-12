@@ -99,7 +99,7 @@ import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { activeTabIdAtom, getPreviewTabTitle, openTab, tabsAtom } from '@/atoms/tab-atoms'
 import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { MAX_ATTACHMENT_SIZE, isAgentOnlyProvider } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 
@@ -462,6 +462,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
   const globalChannels = useAtomValue(channelsAtom)
+
+  // 当前会话渠道是否为 Agent 专属（如 Cursor）：不上报 token，隐藏上下文徽标
+  const isAgentOnlyChannel = React.useMemo(() => {
+    const channel = globalChannels.find((c) => c.id === agentChannelId)
+    return channel ? isAgentOnlyProvider(channel.provider) : false
+  }, [globalChannels, agentChannelId])
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = React.useMemo(() => {
@@ -1863,6 +1869,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           filterChannelIds={agentChannelIds}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
+          allowAgentOnly
         />
       ),
     },
@@ -1937,6 +1944,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           isCompacting={contextStatus.isCompacting}
           isProcessing={streaming}
           onCompact={handleCompact}
+          hidden={isAgentOnlyChannel}
         />
       ),
     },
@@ -1968,6 +1976,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     contextStatus.isCompacting,
     streaming,
     handleCompact,
+    isAgentOnlyChannel,
     autoPreviewEnabled,
     processGroupsKeepExpanded,
     setAutoPreviewEnabled,

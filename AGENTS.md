@@ -23,11 +23,11 @@ Bun workspace monorepo：
 ```
 proma-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.20)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.9)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.6)
+│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.29)
+│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.11)
+│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.10.7)
+    └── electron/   # Electron 桌面应用 (v0.12.1)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -40,23 +40,23 @@ proma-v2/
 
 ### 包职责详解
 
-#### @proma/shared (v0.1.20)
+#### @proma/shared (v0.1.29)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @proma/core (v0.2.9)
+#### @proma/core (v0.2.11)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
 - **依赖**：`@proma/shared`、`shiki`
 - **Peer 依赖**：`@anthropic-ai/Codex-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
-#### @proma/ui (v0.1.6)
+#### @proma/ui (v0.1.9)
 - **关键组件**：共享 React UI 组件库
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.10.7)
+#### @proma/electron (v0.12.1)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@anthropic-ai/Codex-agent-sdk@0.2.120` - Agent SDK
@@ -210,6 +210,18 @@ bun run generate:icons    # 生成应用图标
 | `settings-service.ts` | 应用设置持久化（主题等） |
 | `updater/` | 自动更新：Electron Updater 集成 |
 
+#### Cursor 渠道（`main/lib/cursor/`）
+
+通过本机 `cursor-agent` CLI 接入 Cursor 订阅（仅 Agent 模式），编排层零改动（详见“Agent SDK 集成架构 → Cursor 渠道集成”）。
+
+| 服务 | 职责 |
+|------|------|
+| `router-agent-adapter.ts` | 路由适配器：实现 `AgentProviderAdapter`，按会话 `provider` 把编排层调用分发到 Claude / Cursor 适配器；Cursor 不支持的能力（流式追加/软中断/动态权限）在此优雅降级 |
+| `cursor-agent-adapter.ts` | Cursor 适配器：spawn `cursor-agent -p --output-format stream-json`，把 NDJSON 事件翻译为统一 `SDKMessage` 流（工具名归一化、tool_use/tool_result 配对、合成 result） |
+| `cursor-cli-finder.ts` | CLI 定位：按 `PROMA_CURSOR_AGENT_PATH` → `~/.local/bin` → 版本目录 → PATH 顺序查找 |
+| `cursor-cli-installer.ts` | CLI 托管安装：调用 Cursor 官方脚本安装到 `~/.local/bin`（不分发二进制），更新走 `cursor-agent update` |
+| `cursor-models.ts` | 模型列表 / 连通性测试：通过 `cursor-agent --list-models` 验证 API Key 并解析模型 |
+
 ### AI Provider 适配器（`packages/core/src/providers/`）
 
 基于适配器模式的多 Provider 支持，通过注册表统一管理：
@@ -232,6 +244,8 @@ bun run generate:icons    # 生成应用图标
 | **通义千问** | `openai-adapter.ts` | Chat Completions | OpenAI 兼容 |
 | **Google** | `google-adapter.ts` | Generative Language API | Gemini 系列 |
 | **Custom** | `openai-adapter.ts` | Chat Completions | 自定义 OpenAI 兼容端点 |
+
+> **Cursor 不在此表**：Cursor 为 Agent 专属渠道（`AGENT_ONLY_PROVIDERS`），无 HTTP Chat 适配器，不在 Chat 模式出现。其集成走 `main/lib/cursor/` 的 CLI 路径，详见“Agent SDK 集成架构 → Cursor 渠道集成”。
 
 #### 多模态支持
 - **图片**：各 Provider 格式不同，适配器自动转换
@@ -360,6 +374,11 @@ bun run generate:icons    # 生成应用图标
   - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖
 - **常见错误**：将普通 npm 包标记为 external 但忘记在 `files` 中包含，导致打包后找不到模块（如 `Cannot find module 'universalify'`）
 
+**Cursor CLI 的打包策略：**
+- `cursor-agent` **不随应用分发**，由 `cursor-cli-installer.ts` 在首次使用时调用 Cursor 官方脚本安装到 `~/.local/bin`（运行时下载）。
+- 因此 `electron-builder.yml` **无需为 Cursor 增加任何 `files` / `asarUnpack` / `extraResources` 条目**；`main/lib/cursor/` 的 TS 代码已由 esbuild 打进 `main.cjs`。
+- 前提：打包后的应用首启需能 spawn 系统 `bash` + `curl`（macOS/Linux）或 `powershell`（Windows）并具备网络访问。
+
 ## 代码风格
 
 - 永远不要使用 `any` 类型 — 创建合适的 interface
@@ -437,6 +456,31 @@ React UI 更新
 - **全局 IPC 监听**：`useGlobalAgentListeners`（`renderer/hooks/`）在 `main.tsx` 顶层挂载，通过 `useStore()` 直接操作 atoms，永不销毁。确保页面切换（如设置页）时流式输出、权限请求不丢失
 - **权限请求排队**：权限/AskUser 请求按 sessionId 入队到 Map atoms（`allPendingPermissionRequestsAtom` / `allPendingAskUserRequestsAtom`），不区分当前/后台会话，SDK Promise 等待用户回来响应
 - **工作区隔离**：每个工作区独立的 MCP Server 配置和 cwd，Agent 会话按工作区过滤
+
+### Cursor 渠道集成（cursor-agent CLI）
+
+通过 `RouterAgentAdapter` 在编排层与底层适配器之间做分发，使 `AgentOrchestrator` 完全无感、零改动即可同时支持 Claude（原生 SDK）与 Cursor（CLI）两类后端。
+
+```
+AgentOrchestrator（逻辑未改）
+  ↓ AgentProviderAdapter
+RouterAgentAdapter  ── provider=cursor ─→ CursorAgentAdapter → spawn cursor-agent (headless)
+  └────────────────── 其它 ───────────→ ClaudeAgentAdapter（原生 SDK）
+```
+
+- **后端判定**：`sessionId → channelId → channel.provider`；`agent-service` 每轮运行前 `setSessionBackend(sessionId, channelId)` 显式登记，回退会话元数据中的 `channelId`。
+- **Provider 分类**：`@proma/shared` 的 `AGENT_ONLY_PROVIDERS`（含 `cursor`）+ `isAgentOnlyProvider()`；`ModelSelector` 在 Chat 模式过滤，Agent 模式（`allowAgentOnly`）放行。
+- **CLI 托管安装**：`ensureCursorCli()` 缺失时调用 Cursor 官方脚本安装到 `~/.local/bin`，不随应用分发二进制；运行时下载，因此 `electron-builder.yml` 无需为 Cursor 增加打包条目。
+- **参数映射**：`-p --output-format stream-json --trust`；权限 plan → `--mode plan`，其它 → `--force`；`--model` / `--workspace=cwd` / `--resume=<chatId>`；系统提示词 append 作为 prompt 前缀。
+- **凭证与环境**：`CURSOR_API_KEY` 注入子进程；复用编排层 `sdkEnv`（含增强 PATH/HOME），并剥离 `ANTHROPIC_*`。
+- **事件翻译**：`system/init` → `onSessionId`（持久化为 `sdkSessionId` 供 `--resume`）+ `onModelResolved`；`assistant` → 文本块；`tool_call started/completed` → `tool_use`/`tool_result`；`result` → `SDKResultMessage`（进程异常退出则合成 error result，避免编排层挂起）。
+- **自动标题**：Cursor 等 agent-only 渠道无 HTTP 标题端点，`generateTitle()` 对其改用本地截断（首句裁剪），不调用 Provider HTTP。
+
+**已知限制（按设计降级）**：
+
+- 单轮 headless 进程：`sendQueuedMessage`（报错）、`interruptQuery`（no-op）、`setPermissionMode`（no-op）由 Router 兜底。
+- 不上报 token 用量：`cursor-agent` 的 `result` 事件不含 token 计数（仅 `duration_ms`/`request_id`），`usage` 恒为 0，Cursor 会话不展示上下文/token 统计。
+- 暂不支持 MCP：Proma 内置工具（automation/mem/nano-banana/feishu）为 `createSdkMcpServer` 进程内对象，无法注入 cursor-agent；外部 MCP 透传受上游 headless 注入限制，暂未接入。
 
 ### SDK 版本升级注意事项
 

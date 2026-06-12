@@ -32,6 +32,8 @@ interface ContextUsageBadgeProps {
   isCompacting: boolean
   isProcessing: boolean
   onCompact: () => void
+  /** 强制隐藏（如 Cursor 等不上报 token 用量、且不支持 /compact 的渠道） */
+  hidden?: boolean
 }
 
 /** 格式化 token 数为可读字符串（如 1234 → "1.2k"） */
@@ -119,6 +121,7 @@ export function ContextUsageBadge({
   isCompacting,
   isProcessing,
   onCompact,
+  hidden,
 }: ContextUsageBadgeProps): React.ReactElement | null {
   // 保留最近一次有效的 token 值，避免切换会话时闪烁消失
   const stableRef = React.useRef<{
@@ -148,6 +151,9 @@ export function ContextUsageBadge({
   }, [cancelClose])
 
   React.useEffect(() => cancelClose, [cancelClose])
+
+  // 强制隐藏（如 Cursor 渠道）：放在所有 Hook 之后，避免读到上次会话的残留 token
+  if (hidden) return null
 
   // 压缩中 → 按钮位置显示 spinner
   if (isCompacting) {

@@ -28,6 +28,8 @@ import type {
   AgentExternalRunSource,
 } from '@proma/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
+import { CursorAgentAdapter } from './cursor/cursor-agent-adapter'
+import { RouterAgentAdapter } from './cursor/router-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
@@ -36,7 +38,8 @@ import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-man
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-const adapter = new ClaudeAgentAdapter()
+// Router 适配器：按会话渠道分发到 Claude SDK 或 Cursor CLI，编排层无感复用
+const adapter = new RouterAgentAdapter(new ClaudeAgentAdapter(), new CursorAgentAdapter())
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
@@ -120,6 +123,8 @@ export async function runAgent(
 ): Promise<void> {
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
+  // 登记会话渠道，供 Router 判定后端（claude / cursor）
+  adapter.setSessionBackend(input.sessionId, input.channelId)
   // 开始新一轮执行时清除"完成未确认"标记
   try {
     updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
@@ -204,6 +209,8 @@ export async function runAgentHeadless(
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
   }
+  // 登记会话渠道，供 Router 判定后端（claude / cursor）
+  adapter.setSessionBackend(runInput.sessionId, runInput.channelId)
 
   try {
     await orchestrator.sendMessage(runInput, {

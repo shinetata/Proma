@@ -250,6 +250,7 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   xiaomi: XiaomiLogo,
   'xiaomi-token-plan': XiaomiLogo,
   custom: DefaultLogo,
+  cursor: DefaultLogo,
 }
 
 // ===== 公共 API =====

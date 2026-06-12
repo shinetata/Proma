@@ -28,13 +28,16 @@ import { useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
 import type { Channel, ModelOption } from '@proma/shared'
+import { isAgentOnlyProvider } from '@proma/shared'
 
 /** 从渠道列表构建扁平化的模型选项 */
-function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[]): ModelOption[] {
+function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[], allowAgentOnly = false): ModelOption[] {
   const options: ModelOption[] = []
 
   for (const channel of channels) {
     if (!channel.enabled) continue
+    // 仅 Agent 模式的供应商（如 Cursor）不出现在 Chat 模型选择中；Agent 模式显式放开
+    if (!allowAgentOnly && isAgentOnlyProvider(channel.provider)) continue
     if (filterChannelId && channel.id !== filterChannelId) continue
     if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
 
@@ -80,6 +83,8 @@ interface ModelSelectorProps {
   onModelSelect?: (option: ModelOption) => void
   /** 触发按钮是否显示「渠道 · 模型」（默认只显示模型名） */
   showChannelInTrigger?: boolean
+  /** 是否包含仅 Agent 模式的供应商（如 Cursor）；Chat 模式默认 false */
+  allowAgentOnly?: boolean
 }
 
 export function ModelSelector({
@@ -88,6 +93,7 @@ export function ModelSelector({
   externalSelectedModel,
   onModelSelect,
   showChannelInTrigger = false,
+  allowAgentOnly = false,
 }: ModelSelectorProps = {}): React.ReactElement {
   const [conversationModel, setConversationModel] = useConversationModelOptional()
   const conversationId = useConversationIdOptional()
@@ -110,7 +116,7 @@ export function ModelSelector({
     }
   }, [open, setChannels])
 
-  const modelOptions = React.useMemo(() => buildModelOptions(channels, filterChannelId, filterChannelIds), [channels, filterChannelId, filterChannelIds])
+  const modelOptions = React.useMemo(() => buildModelOptions(channels, filterChannelId, filterChannelIds, allowAgentOnly), [channels, filterChannelId, filterChannelIds, allowAgentOnly])
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
 
   // 搜索过滤
