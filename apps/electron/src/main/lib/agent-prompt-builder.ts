@@ -497,6 +497,10 @@ interface DynamicContext {
   workspaceName?: string
   workspaceSlug?: string
   agentCwd?: string
+  /** 当前会话的实时权限模式（用于 Cursor 渠道注入显式模式信号） */
+  permissionMode?: PromaPermissionMode
+  /** 当前 Agent 渠道 provider */
+  channelProvider?: ProviderType
 }
 
 /**
@@ -556,5 +560,35 @@ export function buildDynamicContext(ctx: DynamicContext): string {
     sections.push(`<working_directory>${ctx.agentCwd}</working_directory>`)
   }
 
+  // 当前权限模式信号（仅 Cursor 渠道）
+  //
+  // Cursor CLI 单轮单进程，靠 --resume 衔接上下文，且 Proma 把系统提示拼进每轮 prompt 正文。
+  // 计划回合的"你处于计划模式"声明会写进 chat 历史，退出计划模式后被 --resume 带回，
+  // 导致模型误判仍在计划模式。此处每轮注入最新的模式声明，用最新信号压过历史中的旧表述。
+  if (ctx.channelProvider === 'cursor' && ctx.permissionMode) {
+    sections.push(buildCursorCurrentModeSignal(ctx.permissionMode))
+  }
+
   return sections.join('\n\n')
+}
+
+/** 非计划执行态的中文标签（显式枚举，新增模式时这里会有类型提示而非静默归类） */
+const CURSOR_EXEC_MODE_LABELS: Record<Exclude<PromaPermissionMode, 'plan'>, string> = {
+  bypassPermissions: '完全自动模式',
+  auto: '自动审批模式',
+}
+
+/** 构建 Cursor 渠道的当前权限模式信号块 */
+function buildCursorCurrentModeSignal(mode: PromaPermissionMode): string {
+  if (mode === 'plan') {
+    return `<current_mode>
+你当前处于**计划模式**：只做调研和规划，不要执行写操作。完成后用 CreatePlan 工具输出计划，由 Proma 弹出审批 UI。
+</current_mode>`
+  }
+
+  const label = CURSOR_EXEC_MODE_LABELS[mode]
+  return `<current_mode>
+你当前处于**${label}**，**不在**计划模式。请直接按用户当前请求执行（包括写文件、运行打包/构建、git 等命令），不要再声称自己处于计划模式或拒绝执行。
+**忽略历史对话中任何关于"计划模式""只做规划不执行"的旧表述**——那是更早回合的状态，现在已不再适用。若用户询问当前是否为计划模式，明确回答"不是"。
+</current_mode>`
 }

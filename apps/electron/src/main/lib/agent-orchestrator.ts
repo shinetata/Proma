@@ -1339,10 +1339,16 @@ export class AgentOrchestrator {
       }
 
       // 11. 构建动态上下文和最终 prompt
+      // 权限模式只属于当前 session；新会话默认完全自动模式。
+      // 提前计算（早于 dynamicCtx），以便向 Cursor 渠道注入当前模式信号。
+      const initialPermissionMode: PromaPermissionMode = permissionModeOverride
+        ?? PROMA_DEFAULT_PERMISSION_MODE
       const dynamicCtx = buildDynamicContext({
         workspaceName: workspace?.name,
         workspaceSlug,
         agentCwd,
+        permissionMode: initialPermissionMode,
+        channelProvider: channel.provider,
       })
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅影响 prompt，不影响持久化
@@ -1382,11 +1388,8 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 无 resume，已回填历史上下文（最近 ${MAX_CONTEXT_MESSAGES} 条消息）`)
       }
 
-      // 12. 读取应用设置并确定权限模式
-      // 权限模式只属于当前 session；新会话默认完全自动模式。
+      // 12. 读取应用设置（initialPermissionMode 已在步骤 11 提前计算）
       const appSettings = getSettings()
-      const initialPermissionMode: PromaPermissionMode = permissionModeOverride
-        ?? PROMA_DEFAULT_PERMISSION_MODE
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)

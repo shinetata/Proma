@@ -68,14 +68,14 @@ describe('桌面端消息镜像', () => {
     const raw = '<attached_files>\n- screenshot.png: /tmp/a.png\n</attached_files>\n\n请分析这张图'
     expect(stripPromaInjectedBlocks(raw)).toBe('请分析这张图')
     expect(formatDesktopMirrorUserMessage(raw)).toBe(
-      '📱 Proma 桌面\n请分析这张图\n📎 附带 1 个文件（请在 Proma 桌面查看）',
+      '💻\n请分析这张图\n📎 附带 1 个文件',
     )
   })
 
   test('Given 仅附件无正文 When 格式化 Then 回退附件标签', () => {
     const raw = '<attached_files>\n- report.pdf: /tmp/report.pdf\n</attached_files>\n\n'
     expect(formatDesktopMirrorUserMessage(raw)).toBe(
-      '📱 Proma 桌面\n[附件] report\n📎 附带 1 个文件（请在 Proma 桌面查看）',
+      '💻\n[附件] report\n📎 附带 1 个文件',
     )
   })
 
