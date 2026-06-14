@@ -28,7 +28,6 @@ import type {
   AgentExternalRunSource,
 } from '@proma/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
-import { CursorAgentAdapter } from './cursor/cursor-agent-adapter'
 import { CursorAcpAdapter } from './cursor/cursor-acp-adapter'
 import { RouterAgentAdapter } from './cursor/router-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
@@ -42,8 +41,8 @@ import { shouldMirrorDesktopUserMessage } from './feishu/session-mirror'
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-// Router 适配器：按会话渠道分发到 Claude SDK 或 Cursor（ACP 优先，headless 回退），编排层无感复用
-const adapter = new RouterAgentAdapter(new ClaudeAgentAdapter(), new CursorAgentAdapter(), new CursorAcpAdapter())
+// Router 适配器：按会话渠道分发到 Claude SDK 或 Cursor（ACP），编排层无感复用
+const adapter = new RouterAgentAdapter(new ClaudeAgentAdapter(), new CursorAcpAdapter())
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */

@@ -16,15 +16,10 @@ describe('Plan 批准后自动续跑', () => {
     )
   })
 
-  test('Given cursor_synthetic 批准 When 判断是否自动续跑 Then 返回 true', () => {
-    expect(shouldAutoContinuePlanExecution('cursor_synthetic', 'approve_auto')).toBe(true)
-    expect(shouldAutoContinuePlanExecution('cursor_synthetic', 'approve_edit')).toBe(true)
-  })
-
-  test('Given 非批准或 tool 来源 When 判断是否自动续跑 Then 返回 false', () => {
-    expect(shouldAutoContinuePlanExecution('cursor_synthetic', 'deny')).toBe(false)
-    expect(shouldAutoContinuePlanExecution('cursor_synthetic', 'feedback')).toBe(false)
+  test('Given 任意来源 When 判断是否自动续跑 Then 返回 false（统一 tool_callback 路径）', () => {
     expect(shouldAutoContinuePlanExecution('tool', 'approve_auto')).toBe(false)
+    expect(shouldAutoContinuePlanExecution('tool', 'approve_edit')).toBe(false)
     expect(shouldAutoContinuePlanExecution(undefined, 'approve_auto')).toBe(false)
+    expect(shouldAutoContinuePlanExecution('old_source', 'deny')).toBe(false)
   })
 })

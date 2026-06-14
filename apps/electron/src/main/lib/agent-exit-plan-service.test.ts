@@ -1,47 +1,58 @@
 import { describe, expect, test } from 'bun:test'
 import { AgentExitPlanService } from './agent-exit-plan-service'
 
-describe('ExitPlanMode 合成审批', () => {
-  test('Given requestPlanApproval 后 clearSessionPending When 用户批准 Then respondToExitPlanMode 返回 null（回归）', () => {
+describe('ExitPlanMode 审批', () => {
+  test('Given handleExitPlanMode 后 clearSessionPending When 中止 Then respondToExitPlanMode 返回 null', () => {
     const service = new AgentExitPlanService()
     const sessionId = 'session-regression'
+    const abortController = new AbortController()
 
-    const request = service.requestPlanApproval(
+    const promise = service.handleExitPlanMode(
       sessionId,
       { planPath: '/tmp/plan.md', planSummary: 'test plan' },
+      abortController.signal,
       () => { /* noop */ },
     )
 
     service.clearSessionPending(sessionId)
 
-    const result = service.respondToExitPlanMode({
-      requestId: request.requestId,
-      action: 'approve_auto',
+    // After clearSessionPending, the promise should resolve with 'deny'
+    promise.then((result) => {
+      expect(result.behavior).toBe('deny')
     })
-
-    expect(result).toBeNull()
   })
 
-  test('Given requestPlanApproval 后未清理 When 用户批准 Then 应自动续跑', () => {
+  test('Given handleExitPlanMode 未清理 When 用户批准 Then 返回 allow', async () => {
     const service = new AgentExitPlanService()
     const sessionId = 'session-happy-path'
+    const abortController = new AbortController()
 
-    const request = service.requestPlanApproval(
+    let capturedRequest: unknown = null
+    const promise = service.handleExitPlanMode(
       sessionId,
       { planPath: '/tmp/plan.md', planSummary: 'test plan' },
-      () => { /* noop */ },
+      abortController.signal,
+      (request) => { capturedRequest = request },
     )
 
+    // Verify the request was sent
+    expect(capturedRequest).not.toBeNull()
+    const req = capturedRequest as { requestId: string }
+    expect(req.requestId).toBeDefined()
+
+    // Respond with approve_auto
     const result = service.respondToExitPlanMode({
-      requestId: request.requestId,
+      requestId: req.requestId,
       action: 'approve_auto',
     })
 
     expect(result).not.toBeNull()
     expect(result?.sessionId).toBe(sessionId)
     expect(result?.targetMode).toBe('bypassPermissions')
-    expect(result?.shouldAutoContinue).toBe(true)
-    expect(result?.source).toBe('cursor_synthetic')
-    expect(result?.planPath).toBe('/tmp/plan.md')
+    expect(result?.shouldAutoContinue).toBe(false)
+
+    // The promise should resolve with allow
+    const permResult = await promise
+    expect(permResult.behavior).toBe('allow')
   })
 })

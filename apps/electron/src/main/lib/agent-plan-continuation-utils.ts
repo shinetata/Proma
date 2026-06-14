@@ -1,4 +1,4 @@
-import type { ExitPlanModeAction, ExitPlanModeRequestSource } from '@proma/shared'
+import type { ExitPlanModeAction } from '@proma/shared'
 
 export function buildPlanExecutionUserMessage(planPath?: string): string {
   const trimmed = planPath?.trim()
@@ -9,9 +9,10 @@ export function buildPlanExecutionUserMessage(planPath?: string): string {
 }
 
 export function shouldAutoContinuePlanExecution(
-  source: ExitPlanModeRequestSource | undefined,
-  action: ExitPlanModeAction,
+  _source: string | undefined,
+  _action: ExitPlanModeAction,
 ): boolean {
-  if (source !== 'cursor_synthetic') return false
-  return action === 'approve_auto' || action === 'approve_edit'
+  // ExitPlanMode 统一由 tool_callback 路径处理，不再有 cursor_synthetic。
+  // 保留此函数供未来需要时扩展。
+  return false
 }

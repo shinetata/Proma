@@ -2,12 +2,12 @@
  * Cursor ACP 适配器
  *
  * 通过 `cursor-agent acp`（Agent Client Protocol，JSON-RPC 2.0 over stdio NDJSON）运行 Agent，
- * 取代 headless 单轮模式（cursor-agent-adapter.ts），对齐 Claude 直连渠道的交互能力：
+ * 是 Cursor 渠道的唯一后端，对齐 Claude 直连渠道的交互能力：
  * - 持久会话 + 多轮 prompt（session/prompt 顺序注入）→ 支持流式追加消息
  * - 逐工具权限审批（session/request_permission → canUseTool → allow/reject）
  * - 运行中软中断（session/cancel）
  * - 运行中切换权限模式（session/set_mode，即时生效，无需下轮）
- * - thinking 推理流（agent_thought_chunk，headless 下被 suppress）
+ * - thinking 推理流（agent_thought_chunk）
  * - 自动标题（session_info_update）
  *
  * 上游硬限制：ACP 流不含 token 用量（result 仅 stopReason），与 headless 一致，usage 合成为 0。
@@ -27,6 +27,7 @@
 import { spawn, execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import type { ChildProcess } from 'node:child_process'
+import { resolveToolName } from './cursor-tool-names'
 import type {
   AgentQueryInput,
   AgentProviderAdapter,
@@ -83,23 +84,55 @@ export interface CursorAcpQueryOptions extends AgentQueryInput {
 // 协议映射辅助
 // ============================================================================
 
+/**
+ * 基于字符数估算 token 用量。
+ * Cursor ACP 协议不返回 token 统计，使用启发式估算：
+ * - 纯英文/代码：约 4 字符 = 1 token
+ * - CJK 混合文本：约 1.8 字符 = 1 token（CJK 字符 token 密度更高）
+ * 混合文本按 CJK 字符占比动态计算。
+ */
+function estimateTokens(text: string): number {
+  if (!text) return 0
+  const cjkChars = (text.match(/[一-鿿㐀-䶿豈-﫿]/g) ?? []).length
+  const cjkRatio = cjkChars / text.length
+  const charsPerToken = cjkRatio > 0.15 ? 1.8 + (3.5 - 1.8) * (1 - cjkRatio) : 3.5
+  return Math.max(1, Math.round(text.length / charsPerToken))
+}
+
+/** Cursor CLI 错误分类 */
+type CursorErrorCategory = 'network' | 'rate_limit' | 'crash' | 'auth' | 'unknown'
+
+interface CategorizedCursorError {
+  category: CursorErrorCategory
+  message: string
+}
+
+/** 将 CLI stderr/error 文本分类为结构化错误 */
+function classifyCursorError(stderrText: string, exitCode?: number): CategorizedCursorError {
+  const text = stderrText.toLowerCase()
+  if (/econnrefused|etimedout|enotfound|socket hang up|network.*unreachable|dns|proxy/i.test(text)) {
+    return { category: 'network', message: `网络连接失败：${stderrText.slice(0, 200)}` }
+  }
+  if (/429|rate.?limit|too many requests/i.test(text)) {
+    return { category: 'rate_limit', message: '请求频率过高，请稍后重试' }
+  }
+  if (/segmentation fault|out of memory|killed|signal|exit.*13/i.test(text) || (exitCode === -1 && !text.includes('unauthor'))) {
+    return { category: 'crash', message: `cursor-agent 进程异常退出${exitCode ? ` (exit ${exitCode})` : ''}` }
+  }
+  if (/unauthor|invalid.*(key|token)|forbidden|401|403|not logged in|login expired|token revoked/i.test(text)) {
+    return { category: 'auth', message: 'API Key 无效或未授权，请检查 Cursor API Key' }
+  }
+  return { category: 'unknown', message: stderrText.slice(0, 300) || `cursor-agent 异常退出 (exit ${exitCode ?? '未知'})` }
+}
+
 /** Proma/SDK 权限模式 → ACP modeId */
 function toAcpMode(sdkPermissionMode: string | undefined): 'agent' | 'plan' {
   if (typeof sdkPermissionMode === 'string' && sdkPermissionMode.toLowerCase().includes('plan')) return 'plan'
   return 'agent'
 }
 
-/** ACP toolCall.kind → Proma/Claude 风格工具名（供 canUseTool 决策） */
-const ACP_KIND_TO_TOOL: Record<string, string> = {
-  read: 'Read',
-  edit: 'Edit',
-  delete: 'Delete',
-  move: 'Bash',
-  search: 'Grep',
-  execute: 'Bash',
-  fetch: 'WebFetch',
-  think: 'TodoWrite',
-}
+/** ACP toolCall.kind → Proma 标准工具名（委托 cursor-tool-names 共享模块） */
+const getAcpToolName = (acpKind: string, title?: string): string => resolveToolName(acpKind, title)
 
 /** 从 ACP currentModelId（如 "claude-opus-4-8[thinking=true,context=300k,...]"）解析展示名 */
 function parseAcpModelName(modelId: string): string {
@@ -568,12 +601,14 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
       isNewSession = ready.isNewSession
     } catch (err) {
       this.controllers.delete(sessionId)
+      const errText = err instanceof Error ? err.message : String(err)
+      const classified = classifyCursorError(errText)
       const errResult: SDKResultMessage = {
         type: 'result',
         subtype: 'error',
         usage: { input_tokens: 0, output_tokens: 0 },
         session_id: sessionId,
-        errors: [err instanceof Error ? err.message : String(err)],
+        errors: [classified.message],
       }
       yield errResult
       return
@@ -623,6 +658,8 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
     // ── 流式累积器：thinking / text 分别累积，遇 tool_call 或回合末 flush ──
     let textBuf = ''
     let thinkingBuf = ''
+    let roundTextChars = 0
+    let roundThinkingChars = 0
     const flushThinking = (): void => {
       if (!thinkingBuf) return
       const msg: SDKAssistantMessage = {
@@ -668,6 +705,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
           if (text) {
             if (textBuf) flushText() // text 在前则先收口（极少见）
             thinkingBuf += text
+            roundThinkingChars += text.length
           }
           break
         }
@@ -676,6 +714,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
           if (text) {
             if (thinkingBuf) flushThinking()
             textBuf += text
+            roundTextChars += text.length
           }
           break
         }
@@ -686,7 +725,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
           const acpKind = typeof u.kind === 'string' ? u.kind : 'other'
           const title = typeof u.title === 'string' ? u.title : acpKind
           const rawInput = (u.rawInput && typeof u.rawInput === 'object' ? u.rawInput : {}) as Record<string, unknown>
-          const toolName = ACP_KIND_TO_TOOL[acpKind] ?? (title || 'Tool')
+          const toolName = getAcpToolName(acpKind, title)
           rawInputByToolCall.set(toolCallId, rawInput)
           toolNameByToolCall.set(toolCallId, toolName)
           const assistant: SDKAssistantMessage = {
@@ -749,8 +788,18 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
 
     // ── prompt 驱动循环（IIFE）：初始 prompt + 队列续轮 ──
     void (async () => {
+      let promptText = ''
+      /** 基于本轮累积字符 + 输入 prompt 长度估算 token 用量 */
+      const makeEstimatedUsage = (outputOverride?: number): { input_tokens: number; output_tokens: number } => {
+        const outputChars = roundTextChars + roundThinkingChars
+        return {
+          input_tokens: estimateTokens(promptText),
+          output_tokens: outputOverride ?? Math.max(1, Math.round(outputChars / 3.5)),
+        }
+      }
+
       try {
-        let promptText = options.prompt
+        promptText = options.prompt
         // 仅新建会话首轮注入系统提示词（后续轮依赖 ACP 会话上下文留存）
         if (isNewSession && !conn.systemPromptInjected) {
           const sp = this.extractSystemPrompt(options)
@@ -759,6 +808,8 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
         }
 
         while (true) {
+          roundTextChars = 0
+          roundThinkingChars = 0
           let result: Record<string, unknown>
           try {
             result = await conn.request('session/prompt', {
@@ -770,12 +821,14 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
             if (controller.signal.aborted) break
             flushThinking()
             flushText()
+            const errText = err instanceof Error ? err.message : String(err)
+            const classified = classifyCursorError(errText)
             pushMsg({
               type: 'result',
               subtype: 'error',
-              usage: { input_tokens: 0, output_tokens: 0 },
+              usage: makeEstimatedUsage(),
               session_id: sessionId,
-              errors: [err instanceof Error ? err.message : String(err)],
+              errors: [classified.message],
             } as SDKResultMessage)
             break
           }
@@ -797,7 +850,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
             pushMsg({
               type: 'result',
               subtype: isErr ? 'error' : 'success',
-              usage: { input_tokens: 0, output_tokens: 0 },
+              usage: makeEstimatedUsage(),
               total_cost_usd: 0,
               session_id: sessionId,
               terminal_reason: 'aborted_streaming',
@@ -810,7 +863,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
           pushMsg({
             type: 'result',
             subtype: isErr ? 'error' : 'success',
-            usage: { input_tokens: 0, output_tokens: 0 },
+            usage: makeEstimatedUsage(),
             total_cost_usd: 0,
             session_id: sessionId,
           } as SDKResultMessage)
@@ -822,7 +875,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
           pushMsg({
             type: 'result',
             subtype: 'error',
-            usage: { input_tokens: 0, output_tokens: 0 },
+            usage: makeEstimatedUsage(),
             session_id: sessionId,
             errors: [err instanceof Error ? err.message : String(err)],
           } as SDKResultMessage)
@@ -905,7 +958,7 @@ export class CursorAcpAdapter implements AgentProviderAdapter {
 
     const toolCallId = typeof toolCall.toolCallId === 'string' ? toolCall.toolCallId : ''
     const acpKind = typeof toolCall.kind === 'string' ? toolCall.kind : 'other'
-    const toolName = toolNameByToolCall.get(toolCallId) ?? ACP_KIND_TO_TOOL[acpKind] ?? 'Tool'
+    const toolName = toolNameByToolCall.get(toolCallId) ?? getAcpToolName(acpKind) ?? 'Tool'
     const toolInput = rawInputByToolCall.get(toolCallId) ?? {}
 
     // 无 canUseTool（理论上不该发生）：默认放行

@@ -41,23 +41,19 @@ interface PlanOption {
   variant: 'default' | 'secondary' | 'destructive'
 }
 
-function buildPlanOptions(isCursorSynthetic: boolean): PlanOption[] {
+function buildPlanOptions(): PlanOption[] {
   return [
     {
       action: 'approve_auto',
       label: '批准并完全自动执行',
-      description: isCursorSynthetic
-        ? '批准后自动开始执行，工具全部自动允许'
-        : '后续工具调用全部自动允许',
+      description: '后续工具调用全部自动允许，开始执行计划',
       icon: <Check className="size-3.5" />,
       variant: 'default',
     },
     {
       action: 'approve_edit',
       label: '批准并自动审批',
-      description: isCursorSynthetic
-        ? '批准后自动开始执行，危险操作需确认'
-        : '使用 SDK 自动审批器判断后续操作',
+      description: '使用自动审批器判断后续操作，开始执行计划',
       icon: <ShieldCheck className="size-3.5" />,
       variant: 'secondary',
     },
@@ -71,7 +67,7 @@ function buildPlanOptions(isCursorSynthetic: boolean): PlanOption[] {
     {
       action: 'feedback',
       label: '提供修改意见',
-      description: '告诉 Agent 需要调整什么',
+      description: '告诉 Agent 需要调整什么，将反馈发回给 Agent',
       icon: <MessageSquare className="size-3.5" />,
       variant: 'secondary',
     },
@@ -94,10 +90,9 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
   const [submitting, setSubmitting] = React.useState(false)
 
   const request = requests[0] ?? null
-  const isCursorSynthetic = request?.source === 'cursor_synthetic'
   const planOptions = React.useMemo(
-    () => buildPlanOptions(isCursorSynthetic),
-    [isCursorSynthetic],
+    () => buildPlanOptions(),
+    [],
   )
 
   // ===== Refs：确保 keydown handler 始终读取最新值，消除闭包过期问题 =====
@@ -262,9 +257,7 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
           </button>
         </div>
         <p className="text-xs text-muted-foreground">
-          {isCursorSynthetic
-            ? 'Agent 已完成规划，批准后 Proma 将自动发送执行指令'
-            : 'Agent 已完成计划，请选择如何继续'}
+          Agent 已完成计划，请选择如何继续
         </p>
         {request.planPath && (
           <p className="text-[11px] text-muted-foreground/80 mt-1 font-mono truncate" title={request.planPath}>

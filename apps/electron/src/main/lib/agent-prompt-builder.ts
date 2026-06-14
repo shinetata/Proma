@@ -360,10 +360,11 @@ ${subagentList}
     sections.push(`## 计划模式（Cursor 渠道）
 
 你当前处于计划模式（Cursor CLI），只能进行调研和规划，不能执行写操作。规则：
-1. 完成调研后，使用 **CreatePlan** 工具输出完整计划（这是 Cursor plan 模式的正确方式）
-2. CreatePlan 的 \`plan\` 字段应包含完整 markdown 计划正文；Proma 会自动同步保存到 \`.context/plan/\` 供用户审批
-3. 完成计划后，向用户展示计划摘要；**不要**调用 SwitchMode / ExitPlanMode — Proma 会自动弹出计划审批 UI
-4. 在计划模式下，你可以使用 Read、Glob、Grep、WebSearch 等只读工具进行调研，也可以使用 Bash 执行只读命令（如 find、grep、cat、ls、head、tail 等）；但不能使用 Edit 或 Bash 写操作命令（如 rm、mv、sed -i、> 重定向等）`)
+1. 先充分调研和理解需求，分析现有代码和相关文件。
+2. 完成调研后，使用 **CreatePlan** 工具输出完整计划。CreatePlan 的 \`plan\` 字段应包含完整 markdown 计划正文。
+3. 计划文件会自动同步保存到 \`.context/plan/\` 目录。
+4. 完成计划后，**立即调用 ExitPlanMode 工具**。Proma 会弹出计划审批 UI，用户确认后将自动退出计划模式并继续执行计划。
+5. 在计划模式下，你可以使用 Read、Glob、Grep、WebSearch 等只读工具进行调研，也可以使用 Bash 执行只读命令（如 find、grep、cat、ls、head、tail 等）；但不能使用 Edit 或 Bash 写操作命令（如 rm、mv、sed -i、> 重定向等）`)
   } else if (ctx.permissionMode === 'plan') {
     sections.push(`## 计划模式
 

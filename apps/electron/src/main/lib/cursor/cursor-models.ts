@@ -6,16 +6,26 @@
  */
 
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import type { ChannelModel, ChannelTestResult, FetchModelsResult } from '@proma/shared'
 import { ensureCursorCli } from './cursor-cli-installer'
+
+/** 模型列表缓存（key = hash(apiKey)，5 分钟 TTL） */
+interface ModelCacheEntry {
+  models: ChannelModel[]
+  ts: number
+}
+const modelCache = new Map<string, ModelCacheEntry>()
+const MODEL_CACHE_TTL_MS = 5 * 60 * 1000  // 5 分钟
+const MODEL_LIST_TIMEOUT_MS = 15_000       // 从 30s 缩短至 15s
 
 /** 运行 cursor-agent 并收集输出 */
 function runCursorCli(
   cliPath: string,
   args: string[],
   apiKey: string,
-  timeoutMs = 30_000,
+  timeoutMs = MODEL_LIST_TIMEOUT_MS,
   cwd?: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -69,7 +79,7 @@ function parseModelList(stdout: string): string[] {
 
 /** 判断 stderr 是否为认证失败 */
 function isAuthError(stderr: string): boolean {
-  return /unauthor|invalid.*(key|token)|forbidden|401|403|not logged in|please run .*login/i.test(stderr)
+  return /unauthor|invalid.*(key|token)|forbidden|401|403|not logged in|please run .*login|login expired|token revoked|subscription.*expired|key.*revoked|auth.*failed/i.test(stderr)
 }
 
 /** 拉取 Cursor 可用模型列表 */
@@ -77,6 +87,14 @@ export async function fetchCursorModels(apiKey: string): Promise<FetchModelsResu
   if (!apiKey.trim()) {
     return { success: false, message: '请先填写 Cursor API Key', models: [] }
   }
+
+  // 检查缓存
+  const cacheKey = createHash('sha256').update(apiKey).digest('hex').slice(0, 16)
+  const cached = modelCache.get(cacheKey)
+  if (cached && Date.now() - cached.ts < MODEL_CACHE_TTL_MS) {
+    return { success: true, message: `成功获取 ${cached.models.length} 个模型（缓存）`, models: cached.models }
+  }
+
   let cliPath: string
   try {
     cliPath = (await ensureCursorCli()).path
@@ -98,6 +116,10 @@ export async function fetchCursorModels(apiKey: string): Promise<FetchModelsResu
   }
 
   const models: ChannelModel[] = modelIds.map((id) => ({ id, name: id, enabled: true }))
+
+  // 写入缓存
+  modelCache.set(cacheKey, { models, ts: Date.now() })
+
   return { success: true, message: `成功获取 ${models.length} 个模型`, models }
 }
 

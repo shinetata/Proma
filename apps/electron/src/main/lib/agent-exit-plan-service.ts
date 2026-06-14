@@ -84,25 +84,6 @@ export class AgentExitPlanService {
   }
 
   /**
-   * Cursor 渠道：规划回合结束后发起审批（非阻塞，不等待工具回调）
-   */
-  requestPlanApproval(
-    sessionId: string,
-    input: Record<string, unknown>,
-    sendToRenderer: (request: ExitPlanModeRequest) => void,
-  ): ExitPlanModeRequest {
-    const request = this.createExitPlanRequest(sessionId, input, 'cursor_synthetic')
-    console.log(`[ExitPlanService] requestPlanApproval: sessionId=${sessionId}, planPath=${request.planPath ?? '无'}`)
-    sendToRenderer(request)
-    this.pendingRequests.set(request.requestId, {
-      resolve: () => { /* Cursor 合成审批无工具回调 */ },
-      request,
-      toolInput: input,
-    })
-    return request
-  }
-
-  /**
    * 处理 ExitPlanMode 工具调用
    *
    * 解析 allowedPrompts，发送到渲染进程，阻塞等待用户选择。

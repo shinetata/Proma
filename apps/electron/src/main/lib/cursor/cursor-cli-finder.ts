@@ -122,28 +122,4 @@ export function findCursorCli(useCache = true): CursorCliInfo | null {
 /** 清除定位缓存 */
 export function clearCursorCliCache(): void {
   cached = null
-  acpSupportCache.clear()
-}
-
-/** ACP 子命令支持探测缓存（cliPath → 是否支持 `agent acp`） */
-const acpSupportCache = new Map<string, boolean>()
-
-/**
- * 探测 cursor-agent 是否支持 `acp` 子命令（Agent Client Protocol 服务端）。
- *
- * 用于 Router 决定走 ACP 适配器还是回退 headless 适配器。结果按 cliPath 缓存。
- * 旧版本 CLI 无 acp 子命令时 `acp --help` 退出非 0，execFileSync 抛错 → 返回 false。
- */
-export function cursorSupportsAcp(cliPath: string): boolean {
-  const hit = acpSupportCache.get(cliPath)
-  if (hit !== undefined) return hit
-  let supported = false
-  try {
-    execFileSync(cliPath, ['acp', '--help'], { timeout: 5000, stdio: ['ignore', 'ignore', 'ignore'] })
-    supported = true
-  } catch {
-    supported = false
-  }
-  acpSupportCache.set(cliPath, supported)
-  return supported
 }

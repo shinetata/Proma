@@ -39,8 +39,6 @@ import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { generateCursorTitle } from './cursor/cursor-models'
 import {
-  resolveCursorPlanArtifact,
-  buildSyntheticExitPlanInput,
   extractCreatePlanFromMessages,
 } from './cursor/cursor-plan-complete'
 import type { RouterAgentAdapter } from './cursor/router-agent-adapter'
@@ -105,6 +103,27 @@ function extractLastAssistantText(messages: SDKMessage[]): string | undefined {
     if (text) return text.slice(0, 2000)
   }
   return undefined
+}
+
+/**
+ * Cursor 渠道：从会话消息中提取 CreatePlan 产物并丰富 ExitPlanMode 工具输入。
+ * 确保计划审批 UI 能展示计划摘要和文件路径。
+ */
+function enrichExitPlanInputFromCreatePlan(
+  sessionId: string,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const sessionMessages = getAgentSessionSDKMessages(sessionId)
+  const createPlan = extractCreatePlanFromMessages(sessionMessages)
+  if (!createPlan) return input
+
+  return {
+    ...input,
+    planSummary: (typeof input.planSummary === 'string' && input.planSummary)
+      ? input.planSummary
+      : createPlan.overview || createPlan.plan?.slice(0, 2000),
+    ...(typeof input.planPath !== 'string' ? {} : {}),
+  }
 }
 
 /**
@@ -1538,7 +1557,11 @@ export class AgentOrchestrator {
         // ExitPlanMode：auto/plan 模式下必须让用户确认计划。
         if (toolName === 'ExitPlanMode') {
           console.log(`[canUseTool] ExitPlanMode: signal.aborted=${options.signal.aborted}, planModeEntered=${planModeEntered}, mode=${currentMode}`)
-          const result = await handleExitPlanMode(input, options.signal)
+          // Cursor 渠道：从 CreatePlan 工具调用中提取计划摘要并填入 ExitPlanMode 输入
+          const enrichedInput = channel.provider === 'cursor'
+            ? enrichExitPlanInputFromCreatePlan(sessionId, input)
+            : input
+          const result = await handleExitPlanMode(enrichedInput, options.signal)
           if (result.behavior === 'allow' && 'targetMode' in result && result.targetMode) {
             // 更新 Map，后续 canUseTool 调用使用新模式
             this.sessionPermissionModes.set(sessionId, result.targetMode)
@@ -2070,51 +2093,18 @@ export class AgentOrchestrator {
 
           try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
-          // Plan 模式：规划完成后触发审批或注入执行建议（Cursor 合成审批延至 completeRun 之后，
-          // 确保 releaseActiveRun 已执行，避免用户立即批准时 continuePlanAfterApproval 被 activeSessions 拦截）
-          let deferredCursorPlanApproval: (() => void) | null = null
+          // Plan 模式：若 planModeEntered 仍为 true（Agent 中途未调用 ExitPlanMode），
+          // 注入执行建议提示用户手动发起下一步。
           if (initialPermissionMode === 'plan' && planModeEntered) {
-            const isCursorChannel = channel.provider === 'cursor'
-            if (isCursorChannel) {
-              const sessionMessages = getAgentSessionSDKMessages(sessionId)
-              const artifact = resolveCursorPlanArtifact(agentCwd, sessionMessages)
-              const createPlan = extractCreatePlanFromMessages(sessionMessages)
-              const assistantSummary = extractLastAssistantText(sessionMessages)
-                ?? createPlan?.overview
-                ?? createPlan?.plan?.slice(0, 2000)
-              if (artifact || assistantSummary) {
-                deferredCursorPlanApproval = () => {
-                  exitPlanService.requestPlanApproval(
-                    sessionId,
-                    buildSyntheticExitPlanInput(artifact, assistantSummary),
-                    (request: ExitPlanModeRequest) => {
-                      this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
-                    },
-                  )
-                  console.log(`[Agent 编排] Cursor Plan 模式：已发起合成计划审批`)
-                }
-              } else {
-                this.eventBus.emit(sessionId, {
-                  kind: 'sdk_message',
-                  message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
-                })
-                console.log(`[Agent 编排] Cursor Plan 模式：无计划文件，回退 prompt_suggestion`)
-              }
-            } else {
-              this.eventBus.emit(sessionId, {
-                kind: 'sdk_message',
-                message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
-              })
-              console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
-            }
+            this.eventBus.emit(sessionId, {
+              kind: 'sdk_message',
+              message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
+            })
+            console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
           }
 
           // 发送完成信号（释放 activeSessions 槽位）
           completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
-
-          if (deferredCursorPlanApproval) {
-            deferredCursorPlanApproval()
-          }
 
           break  // 成功完成，退出重试循环
 
@@ -2326,7 +2316,6 @@ export class AgentOrchestrator {
       permissionService.clearSessionPending(sessionId)
       // askUserService / exitPlanService 不在 turn 结束时清理——生命周期由用户审批交互决定，
       // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
-      // Cursor 合成审批在 completeRun 之后才注册 pending，若此处清理会导致批准后 respondToExitPlanMode 返回 null。
     }
   }
 
