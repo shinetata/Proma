@@ -6,7 +6,7 @@ import type {
 } from '@proma/shared'
 import { stripPromaInjectedBlocks } from '@proma/shared'
 
-const DESKTOP_MIRROR_PREFIX = '📱 Proma 桌面'
+const DESKTOP_MIRROR_PREFIX = '💻'
 const MAX_FEISHU_MIRROR_BODY_LENGTH = 3900
 const TRUNCATION_SUFFIX = '…（完整内容见 Proma 桌面）'
 
