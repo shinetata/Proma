@@ -141,6 +141,7 @@ import {
 import { buildQuotedSelectionBlock, expandAgentHistoryQuoteMentions } from '@/lib/quoted-selection'
 import { INSERT_AGENT_INPUT_QUOTE_EVENT, type InsertAgentInputQuoteDetail } from '@/lib/agent-input-quote'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
+import { saveFilesAsInlineReferences } from '@/lib/agent-file-references'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import {
   buildQueuedMessageSendPayload,
@@ -1482,6 +1483,62 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     }
   }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
 
+  /**
+   * 把文件落盘到会话目录并在光标处插入 `@file:` 引用 chip（与商业版一致的粘贴/拖拽主路径）。
+   *
+   * 引用本身占住输入框位置，发送后消息里就是原位置上的文件 chip；
+   * 只有未绑定项目、超过大小上限或落盘失败的文件才回退成待发送附件。
+   */
+  const referenceFilesAsInlineMentions = React.useCallback(async (
+    files: File[],
+    sourcePaths?: Map<File, string>,
+  ): Promise<void> => {
+    if (files.length === 0) return
+
+    const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
+    const { references, fallback } = await saveFilesAsInlineReferences(
+      files.map((file) => ({ item: file, filename: file.name, size: file.size, readBase64: () => fileToBase64(file) })),
+      {
+        sessionId,
+        workspaceSlug: workspace?.slug,
+        maxAttachmentSize: MAX_ATTACHMENT_SIZE,
+        save: (input) => window.electronAPI.saveFilesToAgentSession(input),
+        onSaveError: (input, error) => {
+          console.error('[AgentView] 文件引用落盘失败，回退为附件:', input.filename, error)
+        },
+      },
+    )
+
+    if (references.length > 0) {
+      const inserted = richTextInputRef.current?.insertFileMentions(references.map((reference) => ({
+        path: reference.path,
+        name: reference.name,
+        isDirectory: false,
+        scope: 'session' as const,
+      }))) ?? false
+
+      if (inserted) {
+        toast.success(`已引用 ${references.length} 个文件`)
+      } else {
+        // 输入框不可用（例如正在切换会话）：已落盘的文件直接作为路径附件引用，不再重复拷贝。
+        setPendingFiles((prev) => [
+          ...prev,
+          ...references.map((reference) => ({
+            id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            filename: reference.name,
+            mediaType: reference.item.type || 'application/octet-stream',
+            size: reference.item.size,
+            previewUrl: reference.item.type.startsWith('image/') ? URL.createObjectURL(reference.item) : undefined,
+            sourcePath: reference.path,
+          })),
+        ])
+      }
+    }
+    if (fallback.length > 0) {
+      await addFilesAsAttachments(fallback, sourcePaths)
+    }
+  }, [addFilesAsAttachments, currentWorkspaceId, sessionId, setPendingFiles, workspaces])
+
   const addLargeDialogFilesAsReferences = React.useCallback(async (files: FileDialogLargeFile[]): Promise<void> => {
     if (files.length === 0) return
     const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
@@ -1689,10 +1746,10 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     return pending
   }, [setPendingFiles])
 
-  /** 粘贴文件处理 */
+  /** 粘贴文件处理：优先落盘为内联 @ 引用，无项目或超限时回退附件 */
   const handlePasteFiles = React.useCallback((files: File[]): void => {
-    addFilesAsAttachments(files)
-  }, [addFilesAsAttachments])
+    void referenceFilesAsInlineMentions(files)
+  }, [referenceFilesAsInlineMentions])
 
   /** 粘贴超长文本时转为待发送附件，避免把大段内容直接塞进输入框 */
   const handlePasteLongText = React.useCallback((text: string): void => {
@@ -1835,9 +1892,10 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
           }
         }
 
-        // 普通文件：复制到会话私有目录后插入 @ 引用（方案 B）
+        // 普通文件：复制到会话私有目录后插入 @ 引用
         // 引用指向会话私有工作目录内的副本路径，Agent 通过会话私有目录即可访问，
-        // 与右侧面板拖拽/键盘 @ 引用保持一致；超大文件或无项目时回退附件逻辑。
+        // 与右侧面板拖拽/键盘 @ 引用、以及粘贴图片保持一致；
+        // 超大文件或无项目时回退附件逻辑。
         const regularFiles = filePaths.map((p) => pathMap.get(p)!).filter(Boolean)
         if (regularFiles.length > 0) {
           const sourcePaths = new Map<File, string>()
@@ -1846,51 +1904,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
             if (file) sourcePaths.set(file, path)
           }
 
-          const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
-          const canSave = Boolean(workspace?.slug)
-          const savedRefs: Array<{ path: string; name: string }> = []
-          const fallbackFiles: File[] = []
-
-          for (const file of regularFiles) {
-            if (!canSave || file.size > MAX_ATTACHMENT_SIZE) {
-              fallbackFiles.push(file)
-              continue
-            }
-            try {
-              const data = await fileToBase64(file)
-              const saved = await window.electronAPI.saveFilesToAgentSession({
-                workspaceSlug: workspace!.slug,
-                sessionId,
-                files: [{ filename: file.name, data }],
-              })
-              if (saved && saved.length > 0) {
-                const [savedFile] = saved
-                if (savedFile) {
-                  savedRefs.push({ path: savedFile.targetPath, name: savedFile.filename })
-                } else {
-                  fallbackFiles.push(file)
-                }
-              } else {
-                fallbackFiles.push(file)
-              }
-            } catch (error) {
-              console.error('[AgentView] 外部文件复制到会话目录失败:', error)
-              fallbackFiles.push(file)
-            }
-          }
-
-          if (savedRefs.length > 0) {
-            richTextInputRef.current?.insertFileMentions(savedRefs.map((r) => ({
-              path: r.path,
-              name: r.name,
-              isDirectory: false,
-              scope: 'session',
-            })))
-            toast.success(`已引用 ${savedRefs.length} 个文件`)
-          }
-          if (fallbackFiles.length > 0) {
-            addFilesAsAttachments(fallbackFiles, sourcePaths)
-          }
+          await referenceFilesAsInlineMentions(regularFiles, sourcePaths)
         }
       } catch (error) {
         console.error('[AgentView] 路径检测失败，回退处理:', error)
@@ -1900,7 +1914,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       // 无路径信息：回退，所有项按普通文件处理
       addFilesAsAttachments(droppedFiles)
     }
-  }, [sessionId, addFilesAsAttachments, addPanelDirectory, setAttachedDirsMap, workspaces, currentWorkspaceId, isComposerDisabled])
+  }, [sessionId, addFilesAsAttachments, addPanelDirectory, referenceFilesAsInlineMentions, setAttachedDirsMap, workspaces, currentWorkspaceId, isComposerDisabled])
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {

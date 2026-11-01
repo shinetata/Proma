@@ -194,8 +194,8 @@ interface RichTextInputProps {
 export interface RichTextInputHandle {
   /** 返回最新 Markdown 草稿，并同步尚未提交的编辑。 */
   getMarkdown: () => string
-  /** 在光标处插入文件引用（右侧文件面板拖入时调用） */
-  insertFileMentions: (items: FilePanelDragItem[]) => void
+  /** 在光标处插入文件引用（粘贴/拖拽文件时调用）；插入失败返回 false，由调用方回落。 */
+  insertFileMentions: (items: FilePanelDragItem[]) => boolean
   /** 在光标处插入会话引用（左侧会话行拖入时调用）。 */
   insertSessionMention: (item: SessionReferenceDragItem) => boolean
   /** 在光标处插入可定位的 Agent 历史引用 chip。 */
@@ -1067,8 +1067,8 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
     getMarkdown(): string {
       return flushPendingDraftSync(editor ?? undefined)
     },
-    insertFileMentions(items: FilePanelDragItem[]): void {
-      if (!editor || items.length === 0) return
+    insertFileMentions(items: FilePanelDragItem[]): boolean {
+      if (!editor || items.length === 0) return false
       let chain = editor.chain().focus()
       for (const item of items) {
         chain = chain
@@ -1083,7 +1083,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           })
           .insertContent(' ')
       }
-      chain.run()
+      return chain.run()
     },
     insertSessionMention(item: SessionReferenceDragItem): boolean {
       if (!editor || !editor.isEditable) return false

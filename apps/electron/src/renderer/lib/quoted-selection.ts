@@ -16,6 +16,19 @@ const QUOTED_CONTEXT_REGEX = /<quoted_context[^>]*>[\s\S]*?<\/quoted_context>(?:
 const AGENT_HISTORY_QUOTE_MENTION_PREFIX = '&quote:'
 const AGENT_HISTORY_QUOTE_MENTION_REGEX = /&quote:[A-Za-z0-9%_.!~*'()-]+/g
 
+/**
+ * 编码展示用 marker 的 payload。
+ *
+ * `encodeURIComponent` 不会转义 `*` 和 `_`，而正文里的这两个字符会让消息 Markdown
+ * 把它们当成强调定界符，截图/复制时可能把 marker 拆开。展示 marker 只用来渲染 chip，
+ * 额外转义两者即可让解析稳定，同时不影响 `decodeURIComponent` 还原。
+ */
+function encodeQuoteMarkerPayload(payload: unknown): string {
+  return encodeURIComponent(JSON.stringify(payload))
+    .replace(/\*/g, '%2A')
+    .replace(/_/g, '%5F')
+}
+
 type AgentHistoryMessageRole = Exclude<QuotedSelection['messageRole'], undefined>
 
 interface AgentHistoryQuoteMarkerPayload {
@@ -168,12 +181,10 @@ export function serializeAgentHistoryQuoteMention(quote: QuotedSelection): strin
   return `${AGENT_HISTORY_QUOTE_MENTION_PREFIX}${encodeURIComponent(JSON.stringify(payload))}`
 }
 
-/** 将文件/Vault 选区编码为与历史引用同款的内联 chip marker，可在一条草稿中累积多次。 */
-export function serializeQuotedSelectionMention(quote: QuotedSelection): string | null {
+/** 文件 / Vault 选区引用的内联 chip payload。 */
+function buildFileQuotedSelectionPayload(quote: QuotedSelection): InlineQuotedSelectionPayload | null {
   if (!isNonEmptyString(quote.text) || !isNonEmptyString(quote.filePath)) return null
-  if (quote.sourceType === 'agent-history') return serializeAgentHistoryQuoteMention(quote)
-
-  const payload: InlineQuotedSelectionPayload = {
+  return {
     version: 2,
     text: quote.text,
     filePath: quote.filePath,
@@ -182,7 +193,14 @@ export function serializeQuotedSelectionMention(quote: QuotedSelection): string 
     ...(isPositiveInteger(quote.startLine) && { startLine: quote.startLine }),
     ...(isPositiveInteger(quote.endLine) && { endLine: quote.endLine }),
   }
-  return `${AGENT_HISTORY_QUOTE_MENTION_PREFIX}${encodeURIComponent(JSON.stringify(payload))}`
+}
+
+/** 将文件/Vault 选区编码为与历史引用同款的内联 chip marker，可在一条草稿中累积多次。 */
+export function serializeQuotedSelectionMention(quote: QuotedSelection): string | null {
+  if (quote.sourceType === 'agent-history') return serializeAgentHistoryQuoteMention(quote)
+
+  const payload = buildFileQuotedSelectionPayload(quote)
+  return payload ? `${AGENT_HISTORY_QUOTE_MENTION_PREFIX}${encodeURIComponent(JSON.stringify(payload))}` : null
 }
 
 /** 为输入框内的历史或文件选区构建简短 chip 标签。 */
@@ -212,7 +230,20 @@ export function serializeAgentHistoryQuoteDisplayMention(quote: QuotedSelection)
       && { selectionStart: quote.selectionStart, selectionEnd: quote.selectionEnd, turn: quote.turn }),
   }
 
-  return `${AGENT_HISTORY_QUOTE_MENTION_PREFIX}${encodeURIComponent(JSON.stringify(payload))}`
+  return `${AGENT_HISTORY_QUOTE_MENTION_PREFIX}${encodeQuoteMarkerPayload(payload)}`
+}
+
+/**
+ * 为已发送消息生成展示用引用 marker。
+ *
+ * 历史引用保留可定位字段（可点击跳转），文件/Vault 选区保留正文与来源路径，
+ * 让两种引用在消息里都停在原始位置并复用同一个 chip 组件。
+ */
+export function serializeQuotedSelectionDisplayMention(quote: QuotedSelection): string | null {
+  if (quote.sourceType === 'agent-history') return serializeAgentHistoryQuoteDisplayMention(quote)
+
+  const payload = buildFileQuotedSelectionPayload(quote)
+  return payload ? `${AGENT_HISTORY_QUOTE_MENTION_PREFIX}${encodeQuoteMarkerPayload(payload)}` : null
 }
 
 /** 将选区引用 marker 替换为可复制的 chip 文案，避免把内部 payload 暴露给剪贴板。 */
@@ -299,8 +330,25 @@ function normalizeContextSourceType(_value: string | undefined): QuotedSelection
 }
 
 export interface ParseQuotedSelectionRefsOptions {
-  /** 将 Agent 历史引用保留为展示用 inline mention marker。 */
+  /**
+   * 将选区引用保留为展示用 inline mention marker。
+   * - `all`：文件/Vault 选区与 Agent 历史引用都内联（发送后仍停在原文位置）
+   * - `agent-history`：仅历史引用内联
+   */
+  inlineQuotes?: 'none' | 'agent-history' | 'all'
+  /** @deprecated 使用 `inlineQuotes: 'agent-history'`。 */
   inlineAgentHistoryQuotes?: boolean
+}
+
+/** 判断某条引用是否需要在展示文本里回填为 inline chip marker。 */
+function shouldInlineQuotedSelection(
+  quote: QuotedSelection,
+  options: ParseQuotedSelectionRefsOptions,
+): boolean {
+  const mode = options.inlineQuotes ?? (options.inlineAgentHistoryQuotes ? 'agent-history' : 'none')
+  if (mode === 'all') return true
+  if (mode === 'agent-history') return quote.sourceType === 'agent-history'
+  return false
 }
 
 export function parseQuotedSelectionRefs(
@@ -308,6 +356,7 @@ export function parseQuotedSelectionRefs(
   options: ParseQuotedSelectionRefsOptions = {},
 ): { quotes: ParsedQuotedSelectionRef[]; text: string } {
   const quotes: ParsedQuotedSelectionRef[] = []
+  const fileQuotes: ParsedQuotedSelectionRef[] = []
 
   let quoteMatch: RegExpExecArray | null
   QUOTED_FILE_REGEX.lastIndex = 0
@@ -315,11 +364,27 @@ export function parseQuotedSelectionRefs(
     const pathMatch = quoteMatch[0].match(/path="([^"]*)"/)
     if (!pathMatch) continue
     const filePath = decodeXmlAttribute(pathMatch[1]!)
-    quotes.push({
+    const bodyMatch = quoteMatch[0].match(/>\r?\n([\s\S]*?)\r?\n<\/quoted_file>/)
+    const quoteText = bodyMatch ? bodyMatch[1]! : ''
+    const filename = filePath.split('/').pop() ?? filePath
+    // 保存正文，让文件/Vault 选区引用也能在消息里渲染成带预览文案的 chip。
+    const quote: QuotedSelection | undefined = isNonEmptyString(quoteText)
+      ? {
+          text: quoteText,
+          filePath,
+          sourceType: 'file',
+          sourceLabel: filePath,
+          capturedAt: 0,
+        }
+      : undefined
+    const ref: ParsedQuotedSelectionRef = {
       path: filePath,
-      filename: filePath.split('/').pop() ?? filePath,
+      filename,
       sourceType: 'file',
-    })
+      ...(quote && { quote }),
+    }
+    fileQuotes.push(ref)
+    quotes.push(ref)
   }
 
   const contextQuotes: Array<QuotedSelection | undefined> = []
@@ -369,13 +434,19 @@ export function parseQuotedSelectionRefs(
     })
   }
 
+  let fileQuoteIndex = 0
   let contextQuoteIndex = 0
   const text = content
-    .replace(QUOTED_FILE_REGEX, '')
+    .replace(QUOTED_FILE_REGEX, () => {
+      const ref = fileQuotes[fileQuoteIndex++]
+      const quote = ref?.quote
+      if (!quote || !shouldInlineQuotedSelection(quote, options)) return ''
+      return serializeQuotedSelectionDisplayMention(quote) ?? ''
+    })
     .replace(QUOTED_CONTEXT_REGEX, () => {
       const quote = contextQuotes[contextQuoteIndex++]
-      if (!options.inlineAgentHistoryQuotes || !quote) return ''
-      return serializeAgentHistoryQuoteDisplayMention(quote) ?? ''
+      if (!quote || !shouldInlineQuotedSelection(quote, options)) return ''
+      return serializeQuotedSelectionDisplayMention(quote) ?? ''
     })
     .trim()
 

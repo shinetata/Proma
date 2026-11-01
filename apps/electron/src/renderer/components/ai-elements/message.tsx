@@ -40,7 +40,7 @@ import { LoadingIndicator } from '@/components/ui/loading-indicator'
 import { CodeBlock, MermaidBlock } from '@proma/ui'
 import { detectLanguage } from '@proma/core'
 import { FilePathChip, ResolvableFilePathChip, isAbsoluteFilePath, isImageFilePath, isLocalFileReference, isRelativeFilePath } from './file-path-chip'
-import { buildAgentHistoryQuoteLabel, parseAgentHistoryQuoteMention } from '@/lib/quoted-selection'
+import { buildAgentHistoryQuoteLabel, buildQuotedSelectionLabel, parseQuotedSelectionMention } from '@/lib/quoted-selection'
 import { createMentionPattern } from '@/lib/mention-patterns'
 import { resolveSkillMentionName } from '@/lib/skill-mention-name'
 import { useSkillMentionNames } from '@/components/agent/SkillMentionNamesProvider'
@@ -361,17 +361,21 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
   const onAgentHistoryQuoteClick = React.useContext(AgentHistoryQuoteClickContext)
 
   if (type === 'quote') {
-    const quote = parseAgentHistoryQuoteMention(`&quote:${value}`)
+    // 历史引用（v1）与文件/Vault 选区引用（v2）共用同一个内联 chip 位置。
+    const quote = parseQuotedSelectionMention(`&quote:${value}`)
     if (!quote) {
       return <span>{`&quote:${value}`}</span>
     }
+    const isAgentHistory = quote.sourceType === 'agent-history'
     const canNavigate = Boolean(
-      onAgentHistoryQuoteClick
-        && quote.messageId
-        && quote.selectionStart != null
-        && quote.selectionEnd != null
-        && quote.selectionEnd > quote.selectionStart,
+      isAgentHistory
+      && onAgentHistoryQuoteClick
+      && quote.messageId
+      && quote.selectionStart != null
+      && quote.selectionEnd != null
+      && quote.selectionEnd > quote.selectionStart,
     )
+    const label = isAgentHistory ? buildAgentHistoryQuoteLabel(quote) : buildQuotedSelectionLabel(quote)
     return (
       <button
         type="button"
@@ -382,10 +386,10 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
           style.className,
           canNavigate ? 'cursor-pointer hover:bg-primary/[0.16]' : 'cursor-default',
         )}
-        title={canNavigate ? '点击跳转到原消息并高亮引用内容' : buildAgentHistoryQuoteLabel(quote)}
+        title={canNavigate ? '点击跳转到原消息并高亮引用内容' : (quote.sourceLabel ?? label)}
       >
         <Icon className="size-3 inline shrink-0" />
-        {buildAgentHistoryQuoteLabel(quote)}
+        {label}
       </button>
     )
   }
