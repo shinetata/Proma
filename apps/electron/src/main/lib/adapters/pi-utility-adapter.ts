@@ -332,6 +332,13 @@ function serializeQueryInput(input: PiAgentQueryOptions): Record<string, unknown
     onXaiOAuthCredentialsRefreshed: _onXaiOAuthCredentialsRefreshed,
     ...serializable
   } = input
+  // query 选项要经 MessagePort 结构化克隆到 runtime 进程；函数会抛
+  // "An object could not be cloned."，这里提前给出可定位的错误。
+  for (const [key, value] of Object.entries(serializable)) {
+    if (typeof value === 'function') {
+      throw new Error(`Pi query 选项包含不可序列化的函数: ${key}；请改为传纯数据并在 runtime 进程内解析`)
+    }
+  }
   const serializedCustomTools = (customTools ?? []).map((tool) => {
     const { execute: _execute, ...descriptor } = tool as unknown as Record<string, unknown>
     return descriptor

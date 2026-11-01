@@ -1616,16 +1616,11 @@ export class AgentOrchestrator {
         canUseTool,
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
         ...(instructionFiles.length > 0 && { projectInstructionFiles: instructionFiles }),
+        // 只传字符串路径：query 选项会被结构化克隆到 runtime 进程，函数无法序列化。
         ...(memoryContext && {
           memoryContext,
           memoryMaintenanceSince,
-          resolveProjectInstructionFiles: () => {
-            if (!workspaceSlug) return []
-            const root = projectKnowledgeRoot ?? getProjectFilesPath(workspaceSlug)
-            return resolveProjectInstructions({ projectRoot: root })
-              .sources.filter((source) => source.content)
-              .map((source) => ({ path: source.path, content: source.content }))
-          },
+          ...(workspaceSlug ? { projectInstructionRoot: projectKnowledgeRoot ?? getProjectFilesPath(workspaceSlug) } : {}),
         }),
         ...(projectInstructions && {
           projectInstructionScope: {
