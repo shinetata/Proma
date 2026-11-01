@@ -343,12 +343,12 @@ import {
   deleteSkillEntry,
   renameSkillEntry,
   getWorkspaceMemorySummary,
+  getAgentMemoryContext,
   readWorkspaceAgentsMd,
   writeWorkspaceAgentsMd,
   listWorkspaceAutoMemoryFiles,
   readWorkspaceAutoMemoryFile,
   writeWorkspaceAutoMemoryFile,
-  approveWorkspaceProjectKnowledgeMaintenance,
   getWorkspaceAttachedDirectories,
   getWorkspaceAttachedFiles,
   attachWorkspaceDirectory,
@@ -360,6 +360,7 @@ import {
   removeWorktreeRepo,
   cleanupStaleWorkspaceAttachedPaths,
 } from './lib/agent-workspace-manager'
+import { readGlobalProfile, writeGlobalProfile } from './lib/global-profile-memory'
 import { movePathSafely } from './lib/file-move-service'
 import { subscribeWorkspaceMemoryChanges } from './lib/workspace-memory-change-watcher'
 import { confirmWorkspaceMemoryWindowClose, markWorkspaceMemoryWindowReady } from './lib/workspace-memory-window'
@@ -3523,11 +3524,14 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 发送 Agent 消息（触发 Agent SDK 流式响应）
+  ipcMain.handle(AGENT_IPC_CHANNELS.READ_GLOBAL_PROFILE, async (_, workspaceSlug: string) => {
+    return readGlobalProfile(getAgentMemoryContext(workspaceSlug))
+  })
+
   ipcMain.handle(
-    AGENT_IPC_CHANNELS.APPROVE_WORKSPACE_PROJECT_KNOWLEDGE_MAINTENANCE,
-    async (_, workspaceSlug: string): Promise<void> => {
-      approveWorkspaceProjectKnowledgeMaintenance(workspaceSlug)
+    AGENT_IPC_CHANNELS.WRITE_GLOBAL_PROFILE,
+    async (_, workspaceSlug: string, revision: string, content: string) => {
+      return writeGlobalProfile(getAgentMemoryContext(workspaceSlug), revision, content)
     },
   )
 

@@ -545,6 +545,14 @@ function defaultSkillCopyFilter(src: string): boolean {
   return !DEFAULT_SKILL_COPY_BLOCKLIST.has(basename(src))
 }
 
+/** 随 App 分发的默认 Skills 目录（打包后位于 resources/default-skills）。 */
+export function getBundledDefaultSkillsDir(): string {
+  const { app } = require('electron')
+  return app.isPackaged
+    ? join(process.resourcesPath, 'default-skills')
+    : join(__dirname, '../default-skills')
+}
+
 /**
  * 从 app bundle 同步默认 Skills 到 ~/.proma/default-skills/
  *

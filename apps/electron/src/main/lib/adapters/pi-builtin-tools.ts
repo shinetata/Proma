@@ -36,7 +36,13 @@ import {
 import { getAgentSessionMeta, updateAgentSessionMeta } from '../agent-session-manager'
 import { getMainWindow } from '../main-window-store'
 import { getMainRepoRoot, listWorktrees } from '../git-diff-service'
-import { getWorktreeRepos, getAgentWorkspace, listAgentWorkspaces, listAgentWorkspacesWithProjectRootStatus } from '../agent-workspace-manager'
+import { getAgentMemoryContext, getProjectFilesPath, getWorktreeRepos, getAgentWorkspace, listAgentWorkspaces, listAgentWorkspacesWithProjectRootStatus } from '../agent-workspace-manager'
+import { getAgentWorkspacePath } from '../config-paths'
+import { buildMemoryTools } from './pi-memory-tools'
+import { buildInstructionMigrationTools } from './pi-instruction-migration-tools'
+import { buildProjectMapTools } from './pi-project-map-tools'
+import { wrapSynchronousKnowledgeTools } from './pi-knowledge-change-tools'
+import type { KnowledgeFileChange } from '../knowledge-change-tracker'
 import { resolveAutomationWorkspace, summarizeAutomationWorkspace } from './automation-workspace'
 import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
@@ -114,6 +120,10 @@ export interface PiBuiltinToolsContext {
   lastWindowsTerminalProfile?: TerminalProfile
   /** 用户关闭的生产力能力不能注入给 Agent。 */
   productivityTools?: ProductivityToolsSettings
+  /** worktree 会话的项目根；记忆与项目规则都跟随当前 checkout。 */
+  projectKnowledgeRoot?: string
+  /** 记忆/规则文件被工具改动时推送到界面。 */
+  onKnowledgeChanges?: (changes: KnowledgeFileChange[]) => void
 }
 
 function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
@@ -1566,6 +1576,27 @@ export async function buildPiBuiltinTools(
   })
 
   const tools: ToolDefinition[] = []
+
+  // 记忆、项目规则与项目地图：文件格式与工具语义必须与商业版一致。
+  if (ctx.workspaceSlug) {
+    const memoryContext = getAgentMemoryContext(ctx.workspaceSlug, ctx.projectKnowledgeRoot)
+    if (ctx.permissionMode === 'plan') memoryContext.allowInstructionMaintenance = false
+    if (ctx.triggeredBy === 'automation' || ctx.triggeredBy === 'delegation') {
+      memoryContext.allowProfileMigration = false
+      memoryContext.workspaces = []
+    }
+    tools.push(...wrapSynchronousKnowledgeTools(
+      [...buildMemoryTools(sdk, memoryContext), ...buildInstructionMigrationTools(sdk, memoryContext)],
+      memoryContext,
+      ctx.onKnowledgeChanges,
+    ))
+    tools.push(...buildProjectMapTools(
+      sdk,
+      getAgentWorkspacePath(ctx.workspaceSlug),
+      ctx.projectKnowledgeRoot ?? getProjectFilesPath(ctx.workspaceSlug),
+      memoryContext,
+    ))
+  }
 
   // MCP 管理通过受控工具写入并验证；不要求 Agent 直接编辑 mcp.json。
   try {

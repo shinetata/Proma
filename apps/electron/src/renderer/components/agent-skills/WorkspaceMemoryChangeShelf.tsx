@@ -51,16 +51,16 @@ function MemoryChangeDiff({
   )
 }
 
-/** 项目记忆变更的只读 Diff 列表；完整记忆仅由用户主动从工作区 Tab 打开。 */
+/** 知识变更（项目记忆 / 项目规则 / 全局画像）的只读 Diff 列表。 */
 export function WorkspaceMemoryChangeShelf({ changes, onOpenFile, onDismissChanges, className }: WorkspaceMemoryChangeShelfProps): React.ReactElement | null {
   if (changes.length === 0) return null
 
   return (
-    <section className={className ?? 'h-full min-h-0 overflow-y-auto bg-content-area p-4'} aria-label="项目记忆更新">
+    <section className={className ?? 'h-full min-h-0 overflow-y-auto bg-content-area p-4'} aria-label="知识已更新">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-foreground">项目记忆已更新</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{changes.length} 个文件变更</p>
+          <h2 className="text-sm font-semibold text-foreground">知识已更新</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{changes.length} 个文件变更 · 项目记忆、规则与全局画像</p>
         </div>
         {onDismissChanges && <Button size="sm" variant="ghost" className="h-8 shrink-0 px-2 text-xs" onClick={onDismissChanges}>完成</Button>}
       </div>

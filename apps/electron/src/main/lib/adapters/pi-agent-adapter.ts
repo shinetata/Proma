@@ -60,6 +60,8 @@ import {
   type PromaProjectInstructionFile,
 } from './pi-resource-loader-overrides'
 import { ProjectInstructionScopeController } from './pi-project-instruction-scope'
+import { refreshMemorySystemMessages } from './pi-memory-context'
+import type { AgentMemoryContext } from '../agent-memory'
 import type { ProjectInstructionSource } from '../project-instruction-resolver'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
@@ -128,6 +130,10 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   systemPrompt: string
   /** Proma 已验证的项目根 instruction files；不触发 Pi 的磁盘自动发现。 */
   projectInstructionFiles?: PromaProjectInstructionFile[]
+  /** 记忆子系统上下文；每个 provider 请求前都会重读记忆并重写系统提示段。 */
+  memoryContext?: AgentMemoryContext
+  /** 本轮开始时间，用于判断是否在本轮告知“顺手完善了项目协作能力”。 */
+  memoryMaintenanceSince?: number
   /** 用于 typed 文件工具的会话级子目录指令激活；不会解析 Bash。 */
   projectInstructionScope?: {
     projectRoot: string
@@ -1547,9 +1553,16 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // Pi session artifact 可以来自旧版本，不能假设其历史 tool_result 已通过当前校验。
       // transformContext 在每个 provider 请求前执行，能隔离 resume 的坏图片而不篡改原 artifact。
       const previousTransformContext = session.agent.transformContext
-      session.agent.transformContext = async (messages, signal) => sanitizePiMessageImageContent(
-        await previousTransformContext?.(messages, signal) ?? messages,
-      )
+      session.agent.transformContext = async (messages, signal) => {
+        const previous = await previousTransformContext?.(messages, signal) ?? messages
+        const sanitized = sanitizePiMessageImageContent(previous)
+        return input.memoryContext
+          ? refreshMemorySystemMessages(sanitized, {
+              ctx: input.memoryContext,
+              maintenanceSince: input.memoryMaintenanceSince,
+            })
+          : sanitized
+      }
       // Pi 0.86 的 transcript-aware before_agent_start extension 会在下一轮注入动态项目指令。
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走

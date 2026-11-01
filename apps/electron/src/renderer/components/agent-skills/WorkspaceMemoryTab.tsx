@@ -1,25 +1,18 @@
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { AlertTriangle, Brain, ChevronDown, ChevronRight, FileText, FolderOpen, RefreshCw, Sparkles } from 'lucide-react'
+import { AlertTriangle, Brain, ChevronDown, ChevronRight, FileText, FolderOpen, RefreshCw } from 'lucide-react'
 import type { SkillFileNode, WorkspaceMemorySummary } from '@proma/shared'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsCard } from '@/components/settings/primitives'
 import { AgentActionHint } from '@/components/agent/AgentActionHint'
 import { WorkspaceMemoryChangeShelf } from './WorkspaceMemoryChangeShelf'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { agentPendingPromptAtom } from '@/atoms/agent-atoms'
 import { memoryFileNavigationAtom, workspaceMemoryChangesAtom } from '@/atoms/memory-change-atoms'
-import { useCreateSession } from '@/hooks/useCreateSession'
 import { cn } from '@/lib/utils'
 import { LiveMarkdownEditor } from '@/components/markdown/LiveMarkdownEditor'
-import {
-  buildWorkspaceKnowledgeBootstrapPrompt,
-  buildWorkspaceSessionEvidencePrompt,
-  MEMORY_HISTORY_RANGE_OPTIONS,
-  type MemoryHistoryRange,
-} from './workspaceMemoryInitPrompt'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { GlobalProfilePanel } from './GlobalProfilePanel'
 
 type SelectedMemoryFile =
   | { kind: 'agents'; relativePath: 'AGENTS.md'; title: string; absolutePath: string }
@@ -70,9 +63,7 @@ function filterNodes(nodes: SkillFileNode[], query: string, contentMatchPaths = 
   return result
 }
 
-export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded = false, onCloseChangeView }: WorkspaceMemoryTabProps): React.ReactElement {
-  const { createAgent } = useCreateSession()
-  const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
+function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false, onCloseChangeView }: WorkspaceMemoryTabProps): React.ReactElement {
   const [memoryNavigationRequest, setMemoryNavigationRequest] = useAtom(memoryFileNavigationAtom)
   const workspaceMemoryChanges = useAtomValue(workspaceMemoryChangesAtom)
   const memoryChanges = workspaceMemoryChanges.get(workspaceSlug) ?? []
@@ -91,9 +82,6 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
   const [loadingFile, setLoadingFile] = React.useState(false)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [isDirty, setIsDirty] = React.useState(false)
-  const [bootstrapping, setBootstrapping] = React.useState(false)
-  const [scanningHistory, setScanningHistory] = React.useState(false)
-  const [historyRange, setHistoryRange] = React.useState<MemoryHistoryRange>('1m')
   const [contentMatches, setContentMatches] = React.useState<Map<string, string>>(new Map())
   // 右侧项目记忆 Tab 不提供搜索；全屏能力中心仍复用其顶部搜索框。
   const effectiveSearch = embedded ? '' : (search ?? '')
@@ -112,10 +100,6 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
   }, [selected, editText, editBaseText, isDirty, saveConflict])
   const autoSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const persistInFlightRef = React.useRef<Promise<void> | null>(null)
-  const historyRangeLabel = React.useMemo(
-    () => MEMORY_HISTORY_RANGE_OPTIONS.find((option) => option.value === historyRange)?.label ?? '近 1 个月',
-    [historyRange],
-  )
 
   const refreshSummaryAndTree = React.useCallback(async (): Promise<WorkspaceMemorySummary> => {
     const [nextSummary, files] = await Promise.all([
@@ -344,40 +328,6 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
   }, [flushPendingSave])
 
 
-  const startGuidedSession = async (message: string, kind: 'bootstrap' | 'history'): Promise<void> => {
-    const setLoadingState = kind === 'bootstrap' ? setBootstrapping : setScanningHistory
-    setLoadingState(true)
-    try {
-      const sessionId = await createAgent()
-      if (!sessionId) {
-        toast.error('创建 Agent 会话失败')
-        return
-      }
-      setPendingPrompt({ sessionId, message })
-      toast.success(kind === 'bootstrap' ? '已创建项目地图与协作画像引导会话' : '已创建会话补证据任务')
-    } catch (err) {
-      console.error('[工作区记忆] 创建引导会话失败:', err)
-      toast.error(err instanceof Error ? err.message : '创建引导会话失败')
-    } finally {
-      setLoadingState(false)
-    }
-  }
-
-  const handleBootstrapKnowledge = async (): Promise<void> => {
-    if (bootstrapping) return
-    try {
-      await window.electronAPI.approveWorkspaceProjectKnowledgeMaintenance(workspaceSlug)
-      await startGuidedSession(buildWorkspaceKnowledgeBootstrapPrompt(), 'bootstrap')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '记录项目知识维护授权失败')
-    }
-  }
-
-  const handleScanSessionEvidence = async (): Promise<void> => {
-    if (scanningHistory || !hasProfile) return
-    await startGuidedSession(buildWorkspaceSessionEvidencePrompt(historyRange), 'history')
-  }
-
   // 文件名之外也可按正文内容检索。只在用户主动搜索时读取文本文件，做 180ms 防抖、
   // 忽略大文件并限制候选数，避免右侧面板的每次输入触发大量 IPC 或重渲染。
   React.useEffect(() => {
@@ -416,7 +366,6 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
     () => filterNodes(autoFiles, effectiveSearch, new Set(contentMatches.keys())),
     [autoFiles, contentMatches, effectiveSearch],
   )
-  const hasProfile = autoFiles.some((node) => node.relativePath === 'user-profile.md')
   const migrationIssues = [
     summary?.legacyAutoMemory ? '长期记忆迁移' : null,
     summary?.instructionConflict ? '工作区规则迁移' : null,
@@ -432,7 +381,16 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
         changes={memoryChanges}
         onOpenFile={(change) => {
           setActiveChangeId(null)
-          void openAutoFile(change.relativePath)
+          const label = change.relativePath
+          if (label.startsWith('项目记忆/')) {
+            void openAutoFile(label.slice('项目记忆/'.length))
+            return
+          }
+          if (label.startsWith('项目规则/')) {
+            void openAgents()
+            return
+          }
+          if (change.absolutePath) window.electronAPI.showItemInFolder(change.absolutePath)
         }}
         onDismissChanges={embedded ? onCloseChangeView : undefined}
         className="h-full min-h-0 overflow-auto bg-content-area p-3"
@@ -456,47 +414,24 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
         </div>
       )}
       {embedded && <AgentActionHint action="查找、补充或整理项目记忆" />}
-      {!embedded && <SettingsCard divided={false}>
-        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-foreground">建立项目地图与协作画像</div>
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              点击即授权 Agent 基于可验证证据维护项目根与 Proma 工作区的 AGENTS.md；随后在真实协作中逐步校准你的偏好。不会扫描历史会话。
+      {!embedded && summary.instructionMigration && (
+        <SettingsCard divided={false}>
+          <div className="flex items-start gap-3 p-4">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground">
+                {summary.instructionMigration.status === 'blocked' ? '项目能力维护受阻' : '项目协作能力待完善'}
+              </div>
+              <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {summary.instructionMigration.message}
+              </div>
+              <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground/80">
+                {summary.instructionMigration.targetPath}
+              </div>
             </div>
           </div>
-          <Button onClick={handleBootstrapKnowledge} disabled={bootstrapping}>
-            <Sparkles size={14} className="mr-1.5" />
-            {bootstrapping ? '创建中...' : '同意并开始建立'}
-          </Button>
-        </div>
-      </SettingsCard>}
-
-      {!embedded && <SettingsCard divided={false}>
-        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-foreground">授权会话补证据</div>
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {hasProfile
-                ? `仅在你授权的范围内，分批选择少量高信号工作会话补充证据；不会全量扫描，协作记忆仍须确认后写入。`
-                : '先在真实协作中建立初步协作画像，再决定是否用历史会话补充证据。'}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Select value={historyRange} onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)} disabled={scanningHistory || !hasProfile}>
-              <SelectTrigger className="h-9 w-[116px] text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {MEMORY_HISTORY_RANGE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button onClick={handleScanSessionEvidence} disabled={scanningHistory || !hasProfile} title={hasProfile ? undefined : '请先建立协作画像'}>
-              <Sparkles size={14} className="mr-1.5" />
-              {scanningHistory ? '创建中...' : '授权整理'}
-            </Button>
-          </div>
-        </div>
-      </SettingsCard>}
+        </SettingsCard>
+      )}
 
       <div className={cn('grid min-h-[520px] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]', embedded && 'min-h-0 flex-1 grid-cols-[180px_minmax(0,1fr)] gap-3')}>
         <SettingsCard divided={false} className="min-h-0 overflow-hidden">
@@ -526,8 +461,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
               <FileButton
                 active={selected?.kind === 'agents'}
                 icon={<FileText size={14} />}
-                label="AGENTS.md"
-                meta="Proma 工作区项目指令"
+                label="项目 AGENTS.md"
+                meta="项目根规则与记忆维护方案"
                 onClick={() => void openAgents(summary)}
                 onReveal={() => window.electronAPI.showItemInFolder(summary.agentsMd.path)}
               />
@@ -605,6 +540,36 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
         </SettingsCard>
       </div>
     </div>
+  )
+}
+
+/**
+ * 记忆页：关于你（全局画像）/ 当前项目（项目规则与项目记忆）。
+ *
+ * 嵌入右侧工作区时只显示当前项目，避免在会话里误改跨项目画像。
+ */
+export function WorkspaceMemoryTab(props: WorkspaceMemoryTabProps): React.ReactElement {
+  const [tab, setTab] = React.useState<'global' | 'project'>('global')
+
+  if (props.embedded) return <ProjectMemoryPanel {...props} />
+
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value as 'global' | 'project')}
+      className="flex h-full min-h-0 flex-col gap-4"
+    >
+      <TabsList className="h-10 shrink-0 self-start rounded-xl p-1">
+        <TabsTrigger value="global" className="h-8 min-w-28 rounded-lg px-5">关于你</TabsTrigger>
+        <TabsTrigger value="project" className="h-8 min-w-28 rounded-lg px-5">当前项目</TabsTrigger>
+      </TabsList>
+      <TabsContent value="global" forceMount className="m-0 min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
+        <GlobalProfilePanel workspaceSlug={props.workspaceSlug} />
+      </TabsContent>
+      <TabsContent value="project" className="m-0 min-h-0 flex-1 overflow-hidden">
+        <ProjectMemoryPanel {...props} />
+      </TabsContent>
+    </Tabs>
   )
 }
 

@@ -6,7 +6,8 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS,
+} from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -63,6 +64,7 @@ import type {
   OtherWorkspaceSkillsGroup,
   WorkspaceCapabilities,
   WorkspaceMemorySummary,
+  GlobalProfileSnapshot,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -824,7 +826,8 @@ export interface ElectronAPI {
   ) => () => void
 
   /** 记录用户对 Agent 主动维护两份 AGENTS.md 的明确授权。 */
-  approveWorkspaceProjectKnowledgeMaintenance: (workspaceSlug: string) => Promise<void>
+  readGlobalProfile: (workspaceSlug: string) => Promise<GlobalProfileSnapshot>
+  writeGlobalProfile: (workspaceSlug: string, revision: string, content: string) => Promise<GlobalProfileSnapshot>
 
 
   /** renderer 报告当前可见的 Agent 会话，用于提升其流式更新频率。 */
@@ -2253,8 +2256,11 @@ const electronAPI: ElectronAPI = {
   },
 
 
-  approveWorkspaceProjectKnowledgeMaintenance: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.APPROVE_WORKSPACE_PROJECT_KNOWLEDGE_MAINTENANCE, workspaceSlug)
+  readGlobalProfile: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_GLOBAL_PROFILE, workspaceSlug)
+  },
+  writeGlobalProfile: (workspaceSlug: string, revision: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_GLOBAL_PROFILE, workspaceSlug, revision, content)
   },
 
   setVisibleAgentStreamSession: (sessionId: string | null) => {

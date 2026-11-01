@@ -51,7 +51,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, resolveSessionWorkbenchContextDir, isAgentSessionDeleting } from './agent-session-manager'
-import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
+import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getMcpApiKeyEnvironment, getMcpOAuthHeaders } from './mcp-oauth-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
@@ -59,7 +59,8 @@ import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { resolveProjectInstructions } from './project-instruction-resolver'
-import { combinePromaInstructionFiles } from './adapters/pi-resource-loader-overrides'
+import { broadcastKnowledgeChanges } from './knowledge-change-events'
+import { getAgentMemoryContext } from './agent-workspace-manager'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
 import { buildReferencedPlanningPrompt } from './planning-reference-context'
 import { permissionService } from './agent-permission-service'
@@ -79,7 +80,6 @@ import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
-import { claimWorkspaceMemoryRefreshOpportunity } from './agent-memory-refresh-service'
 import { browserController } from './browser-controller'
 import { resolveRuntimeAdditionalDirectories } from './agent-orchestrator-vault-access'
 
@@ -1063,6 +1063,22 @@ export class AgentOrchestrator {
       }
 
       // 10. 构建工作区 MCP 配置与 Pi 基础运行时工具
+      // worktree 会话的项目根跟随当前 checkout，记忆、项目规则与项目地图保持一致。
+      const projectKnowledgeRoot = getActiveWorktreePath(sessionMeta) ?? (workspaceSlug ? getProjectFilesPath(workspaceSlug) : undefined)
+      const memoryMaintenanceSince = Date.now()
+      const memoryContext = workspaceSlug
+        ? (() => {
+            const context = getAgentMemoryContext(workspaceSlug, projectKnowledgeRoot)
+            if ((permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE) === 'plan') {
+              context.allowInstructionMaintenance = false
+            }
+            if (input.triggeredBy === 'automation' || input.triggeredBy === 'delegation') {
+              context.allowProfileMigration = false
+              context.workspaces = []
+            }
+            return context
+          })()
+        : undefined
       const mcpServers = await this.buildMcpServers(workspaceSlug, proxyUrl)
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
@@ -1080,6 +1096,10 @@ export class AgentOrchestrator {
         windowsShellAvailable: process.platform !== 'win32' || runtimeEnv.shellKind != null,
         lastWindowsTerminalProfile: appSettings.lastWindowsTerminalProfile,
         productivityTools,
+        projectKnowledgeRoot,
+        onKnowledgeChanges: (changes) => {
+          if (workspaceSlug) broadcastKnowledgeChanges(workspaceSlug, changes)
+        },
       })
       piBuiltinTools = builtinMcpResult.tools
       const collaborationAvailable = builtinMcpResult.collaborationAvailable
@@ -1506,35 +1526,8 @@ export class AgentOrchestrator {
             }
           })()
         : undefined
-      const managedWorkspaceInstructionFile = workspaceSlug
-        ? (() => {
-            try {
-              const file = readWorkspaceAgentsMd(workspaceSlug)
-              return file.isText && file.content
-                ? { path: getWorkspaceAgentsMdPath(workspaceSlug), content: file.content }
-                : undefined
-            } catch (error) {
-              console.warn('[工作区指令] 读取 AGENTS.md 失败，已跳过本轮注入:', error)
-              return undefined
-            }
-          })()
-        : undefined
-      const instructionFiles = combinePromaInstructionFiles(
-        managedWorkspaceInstructionFile,
-        projectInstructions?.sources.map(({ path, content }) => ({ path, content })) ?? [],
-      )
-      // 每次前台对话都基于受管 memory/ 的真实缺口给出渐进引导；自动化、桥接与委派绝不主动追问。
-      const projectKnowledgeMaintenanceApproved = workspaceSlug
-        ? isWorkspaceProjectKnowledgeMaintenanceApproved(workspaceSlug)
-        : false
-      const memoryGuidance = workspaceSlug && !automationContext && !input.triggeredBy
-        ? getWorkspaceMemoryGuidance(workspaceSlug)
-        : undefined
-      // Historical sessions are supplementary evidence only. Do not invite a scan
-      // before a collaboration profile has been established through real dialogue.
-      const memoryRefreshOpportunity = workspaceSlug && !automationContext && !input.triggeredBy && !memoryGuidance?.needsCollaborationProfile
-        ? claimWorkspaceMemoryRefreshOpportunity(workspaceSlug)
-        : undefined
+      // 与商业版一致：工作区级 AGENTS.md 不再作为项目地图注入，只作为待迁移的外层规则。
+      const instructionFiles = projectInstructions?.sources.map(({ path, content }) => ({ path, content })) ?? []
       const systemPromptAppend = buildSystemPrompt({
         workspaceName: workspace?.name,
         workspaceSlug,
@@ -1544,11 +1537,8 @@ export class AgentOrchestrator {
         permissionMode: initialPermissionMode,
         collaborationAvailable,
         currentModelId: selectedModelId,
-        projectInstructions,
-        projectKnowledgeMaintenanceApproved,
+        projectKnowledgeRoot,
         productivityTools,
-        memoryGuidance,
-        memoryRefreshOpportunity,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return
@@ -1626,6 +1616,7 @@ export class AgentOrchestrator {
         canUseTool,
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
         ...(instructionFiles.length > 0 && { projectInstructionFiles: instructionFiles }),
+        ...(memoryContext && { memoryContext, memoryMaintenanceSince }),
         ...(projectInstructions && {
           projectInstructionScope: {
             projectRoot: projectInstructions.projectRoot,

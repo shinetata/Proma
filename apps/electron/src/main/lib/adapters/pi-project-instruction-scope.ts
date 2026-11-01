@@ -6,7 +6,7 @@ import {
   canonicalizeProjectPath,
   type ProjectInstructionSource,
 } from '../project-instruction-resolver'
-import { buildLegacyProjectMigrationPrompt } from '../project-instruction-migration'
+import { buildLegacyProjectMigrationPrompt } from '../project-instruction-legacy-prompt'
 
 interface ProjectInstructionScopeOptions {
   projectRoot: string

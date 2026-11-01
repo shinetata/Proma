@@ -10,12 +10,14 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync
 import { cp as cpAsync, readFile as readFileAsync, realpath as realpathAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { writeExistingSkillFile } from './skill-file-write'
+import { writeMemoryFileAtomic } from './memory-file-path'
 import { rmSyncWithRetry, renameIfDestinationAbsentWithRetry, renameWithRetry } from './fs-retry'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { writeJsonFileAtomic, readJsonFileSafe, writeTextFileAtomic } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path'
 import {
+  getConfigDir,
   getAgentWorkspacesIndexPath,
   getAgentWorkspacesDir,
   getAgentWorkspacePath,
@@ -32,6 +34,9 @@ import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { listBuiltinMcpServers } from './builtin-mcp/catalog'
 import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
 import { inferMcpTransportType, normalizeMcpTransportType } from '@proma/shared'
+import type { AgentMemoryContext } from './agent-memory'
+import { inspectInstructionMigration, projectInstructionsPath } from './project-instruction-migration'
+import { readInstructionReadyRecord } from './project-instruction-state'
 import type { AgentWorkspace, CreateAgentWorkspaceInput, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, BulkImportSkillItemResult, BulkImportSkillsResult, BulkImportWorkspaceSelection } from '@proma/shared'
 
 interface AgentWorkspacesIndex {
@@ -1399,8 +1404,9 @@ function fileSummary(absPath: string): WorkspaceMemorySummary['agentsMd'] {
   }
 }
 
-export function getWorkspaceAgentsMdPath(workspaceSlug: string): string {
-  return join(getAgentWorkspacePath(workspaceSlug), WORKSPACE_AGENTS_MD)
+/** 项目规则唯一主入口：项目根 AGENTS.md；worktree 会话跟随当前 checkout。 */
+export function getWorkspaceAgentsMdPath(workspaceSlug: string, projectRoot?: string): string {
+  return projectInstructionsPath(projectRoot ?? getProjectFilesPath(workspaceSlug))
 }
 
 function getWorkspaceAutoMemoryPath(workspaceSlug: string): string {
@@ -1556,14 +1562,65 @@ function getWorkspaceInstructionConflict(workspaceSlug: string): WorkspaceMemory
   }
 }
 
-export function getWorkspaceMemorySummary(workspaceSlug: string): WorkspaceMemorySummary {
+/** 供界面展示的能力维护状态；不写文件。 */
+function collectInstructionMigrationStatus(
+  workspaceSlug: string,
+  projectRoot?: string,
+): WorkspaceMemorySummary['instructionMigration'] {
+  try {
+    const context = getAgentMemoryContext(workspaceSlug, projectRoot)
+    if (readInstructionReadyRecord(context)) return undefined
+    const state = inspectInstructionMigration(context)
+    if (state.issues.length) {
+      return {
+        status: 'blocked',
+        sourcePaths: state.issues.map((issue) => issue.path),
+        targetPath: state.target.path,
+        pendingIds: state.pendingIds,
+        message: `旧规则暂时无法安全读取，原文件已保留，不影响正常对话：${state.issues.map((issue) => issue.message).join('；')}`,
+      }
+    }
+    if (state.needed) {
+      return {
+        status: state.deferred ? 'deferred' : state.pendingIds.length ? 'interrupted' : 'pending',
+        sourcePaths: state.sources.map((source) => source.path),
+        targetPath: state.target.path,
+        pendingIds: state.pendingIds,
+        message: state.deferred
+          ? '旧规则待合并，请在原项目主目录的会话中处理。'
+          : state.pendingIds.length
+            ? '项目能力升级尚未完成，下次对话将自动继续；旧规则历史已保留。'
+            : '发现旧项目规则，下次对话将自动合并并完善协作能力；原文会保留备份。',
+      }
+    }
+    return {
+      status: 'initialize',
+      sourcePaths: [],
+      targetPath: state.target.path,
+      pendingIds: [],
+      message: '项目协作能力待完善，下次对话将自动建立或关联项目规则与记忆，无需手动初始化。',
+    }
+  } catch (error) {
+    return {
+      status: 'blocked',
+      sourcePaths: [],
+      targetPath: projectRoot ?? getProjectFilesPath(workspaceSlug),
+      pendingIds: [],
+      message: `无法安全检查旧规则：${String(error)}`,
+    }
+  }
+}
+
+export function getWorkspaceMemorySummary(workspaceSlug: string, projectRoot?: string): WorkspaceMemorySummary {
   const workspaceRoot = getAgentWorkspacePath(workspaceSlug)
   const memoryDir = getWorkspaceAutoMemoryPath(workspaceSlug)
   const legacyDir = join(workspaceRoot, LEGACY_AUTO_MEMORY_DIR)
   const legacyMigration = existsSync(legacyDir) ? migrateWorkspaceAutoMemoryDirectory(workspaceSlug) : undefined
   const instructionConflict = getWorkspaceInstructionConflict(workspaceSlug)
+  const instructionMigration = collectInstructionMigrationStatus(workspaceSlug, projectRoot)
   return {
-    agentsMd: fileSummary(getWorkspaceAgentsMdPath(workspaceSlug)),
+    agentsMd: fileSummary(getWorkspaceAgentsMdPath(workspaceSlug, projectRoot)),
+    ...(instructionMigration && { instructionMigration }),
     ...(instructionConflict && { instructionConflict }),
     ...(legacyMigration && {
       legacyAutoMemory: {
@@ -1606,8 +1663,9 @@ export function writeWorkspaceAgentsMd(workspaceSlug: string, content: string, e
   if (byteLen > SKILL_FILE_SIZE_LIMIT) {
     throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
   }
-  writeTextFileAtomic(path, content)
-  console.log(`[Agent 工作区] 已更新工作区 AGENTS.md: ${workspaceSlug}`)
+  // 与记忆工具共用同一符号链接安全写入，避免界面保存绕过路径校验。
+  writeMemoryFileAtomic(path, content)
+  console.log(`[Agent 工作区] 已更新项目 AGENTS.md: ${workspaceSlug}`)
 }
 
 export function listWorkspaceAutoMemoryFiles(workspaceSlug: string): SkillFileNode[] {
@@ -1653,7 +1711,7 @@ export function writeWorkspaceAutoMemoryFile(workspaceSlug: string, relativePath
   if (!existsSync(parent)) {
     mkdirSync(parent, { recursive: true })
   }
-  writeTextFileAtomic(abs, content)
+  writeMemoryFileAtomic(abs, content)
   console.log(`[Agent 工作区] 已更新长期记忆文件: ${workspaceSlug}/${relativePath}`)
 }
 
@@ -1866,12 +1924,6 @@ interface WorkspaceConfig {
   worktreeRepos?: import('@proma/shared').WorkspaceWorktreeRepo[]
   /** CLI integrations disabled only for Proma in this workspace; third-party CLI credentials stay untouched. */
   disabledCliIntegrationIds?: string[]
-  /** User consent for Agent-initiated maintenance of the two AGENTS.md files. */
-  projectKnowledgeMaintenanceApproved?: boolean
-  /** Internal scheduling metadata only; Markdown remains the long-term memory source. */
-  memoryReview?: {
-    lastPromptAt?: number
-  }
 }
 
 function getWorkspaceConfigPath(workspaceSlug: string): string {
@@ -1901,17 +1953,6 @@ function readWorkspaceConfig(workspaceSlug: string): WorkspaceConfig {
       disabledCliIntegrationIds: Array.isArray(data.disabledCliIntegrationIds)
         ? [...new Set(data.disabledCliIntegrationIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
         : undefined,
-      projectKnowledgeMaintenanceApproved: data.projectKnowledgeMaintenanceApproved === true ? true : undefined,
-      // Read the prior public setting only to preserve its cooldown timestamp; its
-      // interval is intentionally ignored after switching to the fixed internal cadence.
-      memoryReview: (() => {
-        const review = data.memoryReview && typeof data.memoryReview === 'object'
-          ? data.memoryReview as { lastPromptAt?: unknown }
-          : (data as { memoryRefresh?: unknown }).memoryRefresh && typeof (data as { memoryRefresh?: unknown }).memoryRefresh === 'object'
-            ? (data as { memoryRefresh: { lastPromptAt?: unknown } }).memoryRefresh
-            : undefined
-        return typeof review?.lastPromptAt === 'number' ? { lastPromptAt: review.lastPromptAt } : undefined
-      })(),
     }
   } catch {
     return {}
@@ -1946,41 +1987,23 @@ export function setCliIntegrationEnabled(workspaceSlug: string, id: string, enab
   })
 }
 
-/** Whether the user explicitly enabled Agent-initiated maintenance of both AGENTS.md files. */
-export function isWorkspaceProjectKnowledgeMaintenanceApproved(workspaceSlug: string): boolean {
-  return readWorkspaceConfig(workspaceSlug).projectKnowledgeMaintenanceApproved === true
-}
-
-/** Records the explicit consent obtained from the “同意并开始建立” guided action. */
-export function approveWorkspaceProjectKnowledgeMaintenance(workspaceSlug: string): void {
-  const config = readWorkspaceConfig(workspaceSlug)
-  writeWorkspaceConfig(workspaceSlug, { ...config, projectKnowledgeMaintenanceApproved: true })
-}
-
-/** Internal-only cooldown state for the fixed workspace memory-review cadence. */
-export function getWorkspaceMemoryReviewLastPromptAt(workspaceSlug: string): number | undefined {
-  return readWorkspaceConfig(workspaceSlug).memoryReview?.lastPromptAt
-}
-
-/** An invitation is recorded immediately so the 3-day cooldown survives restarts. */
-export function recordWorkspaceMemoryReviewInvitation(workspaceSlug: string, at: number): void {
-  const config = readWorkspaceConfig(workspaceSlug)
-  writeWorkspaceConfig(workspaceSlug, { ...config, memoryReview: { lastPromptAt: at } })
-}
-
 /**
- * Runtime-only knowledge gaps for conversational guidance. This intentionally reads
- * file presence rather than maintaining a second memory database.
+ * 构造记忆子系统上下文。
+ *
+ * 与商业版一致：全局画像在 `~/.proma/memory`，项目记忆在工作区 `memory/`，
+ * worktree 会话的项目根指向当前 checkout，别名根指向原项目主目录。
  */
-export interface WorkspaceMemoryGuidance {
-  /** Collaboration profile is a user-facing memory, deliberately separate from the project map. */
-  needsCollaborationProfile: boolean
-}
-
-export function getWorkspaceMemoryGuidance(workspaceSlug: string): WorkspaceMemoryGuidance {
-  const memoryDir = getWorkspaceAutoMemoryPath(workspaceSlug)
+export function getAgentMemoryContext(workspaceSlug: string, projectRoot?: string): AgentMemoryContext {
+  const configDir = getConfigDir()
   return {
-    needsCollaborationProfile: !isRegularFile(join(memoryDir, 'user-profile.md')),
+    globalDir: join(configDir, 'memory'),
+    workspaceRoot: join(configDir, 'agent-workspaces', workspaceSlug),
+    projectRoot: projectRoot ?? getProjectFilesPath(workspaceSlug),
+    canonicalProjectRoot: getProjectFilesPath(workspaceSlug),
+    workspaces: listAgentWorkspaces().map((workspace) => ({
+      slug: workspace.slug,
+      root: join(configDir, 'agent-workspaces', workspace.slug),
+    })),
   }
 }
 

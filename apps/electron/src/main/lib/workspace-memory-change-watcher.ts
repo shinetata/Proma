@@ -1,51 +1,24 @@
-import { createHash } from 'node:crypto'
-import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
+import { lstatSync, readdirSync, watch, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { WorkspaceMemoryFileChange } from '@proma/shared'
 import { getWorkspaceAutoMemoryDir } from './agent-workspace-manager'
+import { createFileChange, readSnapshot as readSharedSnapshot, type FileSnapshot } from './file-change-diff'
 
-const MAX_DIFF_FILE_BYTES = 96 * 1024
-const MAX_DIFF_LINES = 8
 const CHANGE_DEBOUNCE_MS = 180
 const MAX_WATCH_DEPTH = 6
 const MAX_WATCHED_DIRECTORIES = 128
 const MAX_TRACKED_FILES = 512
 
-interface FileSnapshot { signature: string; text?: string }
-
-function sha256(value: Buffer | string): string { return createHash('sha256').update(value).digest('hex') }
 function isSafeRelativePath(path: string): boolean { return path !== '' && path !== '.' && !path.startsWith('..') && !isAbsolute(path) }
 function isRegularDirectory(path: string): boolean {
   try { const stat = lstatSync(path); return stat.isDirectory() && !stat.isSymbolicLink() } catch { return false }
 }
+/** 目录监听容忍文件在扫描期间消失；工具侧追踪则要求错误显式暴露。 */
 function readSnapshot(path: string): FileSnapshot | undefined {
-  try {
-    const stat = lstatSync(path)
-    if (!stat.isFile() || stat.isSymbolicLink()) return undefined
-    if (stat.size > MAX_DIFF_FILE_BYTES) return { signature: `large:${stat.size}:${stat.mtimeMs}` }
-    const raw = readFileSync(path)
-    if (raw.includes(0)) return { signature: `binary:${sha256(raw)}` }
-    return { signature: sha256(raw), text: raw.toString('utf8') }
-  } catch { return undefined }
+  try { return readSharedSnapshot(path) } catch { return undefined }
 }
-function firstMeaningfulLine(lines: string[]): string | undefined { return lines.find((line) => line.trim())?.trim().slice(0, 180) }
 function createChange(relativePath: string, before: FileSnapshot | undefined, after: FileSnapshot | undefined, changedAt: number): WorkspaceMemoryFileChange | undefined {
-  if (before?.signature === after?.signature) return undefined
-  const kind = !before ? 'created' : !after ? 'deleted' : 'modified'
-  if ((before && before.text === undefined) || (after && after.text === undefined)) return { relativePath, kind, changedAt, diffAvailable: false }
-  const previous = (before?.text ?? '').split(/\r?\n/)
-  const next = (after?.text ?? '').split(/\r?\n/)
-  let prefix = 0
-  while (prefix < previous.length && prefix < next.length && previous[prefix] === next[prefix]) prefix += 1
-  let suffix = 0
-  while (suffix < previous.length - prefix && suffix < next.length - prefix && previous[previous.length - suffix - 1] === next[next.length - suffix - 1]) suffix += 1
-  const removed = previous.slice(prefix, previous.length - suffix)
-  const added = next.slice(prefix, next.length - suffix)
-  return {
-    relativePath, kind, changedAt, diffAvailable: true,
-    preview: firstMeaningfulLine(added) ?? firstMeaningfulLine(removed),
-    diff: { context: previous.slice(Math.max(0, prefix - 1), prefix), removed: removed.slice(0, MAX_DIFF_LINES), added: added.slice(0, MAX_DIFF_LINES), truncated: removed.length > MAX_DIFF_LINES || added.length > MAX_DIFF_LINES },
-  }
+  return createFileChange(relativePath, before, after, changedAt)
 }
 
 /** Bounded, symlink-safe watcher for one workspace's managed memory/ root. */

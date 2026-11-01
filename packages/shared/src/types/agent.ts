@@ -1192,7 +1192,10 @@ export interface SkillFileContent {
 
 /** 当前 Memory 页面订阅到的单个文件更新；仅携带受限的局部文本 diff。 */
 export interface WorkspaceMemoryFileChange {
+  /** 分类标签，例如 `项目记忆/MEMORY.md`、`全局画像/user_profile.md`。 */
   relativePath: string
+  /** Agent 工具写入时的绝对路径；外部目录监听不提供。 */
+  absolutePath?: string
   kind: 'created' | 'modified' | 'deleted'
   changedAt: number
   /** 超大或二进制文件仍会通知更新，但不传内容或 diff。 */
@@ -1218,10 +1221,33 @@ export interface WorkspaceMemoryFileSummary {
   updatedAt?: number
 }
 
+/** 项目能力（规则 + 必需记忆）维护状态 */
+export interface WorkspaceInstructionMigrationStatus {
+  status: 'initialize' | 'pending' | 'deferred' | 'interrupted' | 'blocked'
+  sourcePaths: string[]
+  targetPath: string
+  pendingIds: string[]
+  message: string
+}
+
+/** 全局画像快照（跨项目共享） */
+export interface GlobalProfileSnapshot {
+  path: string
+  content: string | null
+  revision: string
+  modifiedAt?: number
+  checkedAt?: number
+  legacyCount: number
+  pendingCount: number
+  migrationIssues: Array<{ path: string; message: string }>
+}
+
 /** 工作区记忆摘要 */
 export interface WorkspaceMemorySummary {
-  /** 工作区级 AGENTS.md */
+  /** 当前项目根的 AGENTS.md（项目地图） */
   agentsMd: WorkspaceMemoryFileSummary
+  /** 首次能力维护与旧外层规则迁移状态 */
+  instructionMigration?: WorkspaceInstructionMigrationStatus
   /** 迁移时发现内容不同的 legacy CLAUDE.md；必须由用户手动合并。 */
   instructionConflict?: {
     legacyPath: string
@@ -1982,7 +2008,8 @@ export const AGENT_IPC_CHANNELS = {
   STOP_WORKSPACE_MEMORY_WATCH: 'agent:stop-workspace-memory-watch',
   /** 当前 workspace memory/ 文件发生变化。 */
   WORKSPACE_MEMORY_FILE_CHANGED: 'agent:workspace-memory-file-changed',
-  APPROVE_WORKSPACE_PROJECT_KNOWLEDGE_MAINTENANCE: 'agent:approve-workspace-project-knowledge-maintenance',
+  READ_GLOBAL_PROFILE: 'agent:read-global-profile',
+  WRITE_GLOBAL_PROFILE: 'agent:write-global-profile',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */

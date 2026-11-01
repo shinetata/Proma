@@ -82,6 +82,22 @@ const DELEGATION_GOAL_CHAR_LIMIT = 1_000
 const MAX_RETAINED_FINISHED_DELEGATIONS = 200
 
 const delegations = new Map<string, DelegationRecord>()
+/** 后台画像整理任务；同时只允许一个，避免并发整理同一份全局画像。 */
+const profileMaintenanceDelegations = new Set<string>()
+
+/** 整理结束后释放占位，让下一次超限时能再次启动。 */
+async function waitForDelegationSettled(delegationId: string): Promise<void> {
+  const record = delegations.get(delegationId)
+  if (!record) {
+    profileMaintenanceDelegations.delete(delegationId)
+    return
+  }
+  try {
+    await record.completion
+  } finally {
+    profileMaintenanceDelegations.delete(delegationId)
+  }
+}
 // Pi 的 provider/retry 流可能重放同一个 tool call；委派会创建真实会话，必须幂等。
 const piDelegateAgentCalls = createToolCallIdempotencyCache<PiDelegationToolResult>()
 const piDelegateAgentsCalls = createToolCallIdempotencyCache<PiBatchDelegationResult>()
@@ -846,6 +862,53 @@ export function buildPiCollaborationTools(
       parameters: Type.Object({}),
       async execute() {
         return piJsonResult(getAvailableAgentModels(ctx))
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__collaboration__start_profile_maintenance',
+      label: '后台整理用户画像',
+      description: '在可写用户会话中启动独立后台子会话，整理超限的全局用户画像；不加入父会话收敛屏障。只用于画像超限整理，不适用于依赖子任务结果的交付。启动不等于完成。',
+      parameters: Type.Object({
+        pendingFacts: Type.Optional(Type.String({ maxLength: 8000, description: '本轮尚未保存、应一并处理的已确认事实及依据；不得包含凭据。' })),
+      }),
+      async execute(toolCallId: string, params: unknown) {
+        if (ctx.triggeredBy === 'automation' || ctx.triggeredBy === 'delegation') {
+          throw new Error('自动化和子会话不能自行启动画像后台整理')
+        }
+        const parent = assertCanCreateDelegation(ctx)
+        const effectivePermissionMode = ctx.permissionMode ?? parent?.permissionMode
+        if (effectivePermissionMode === 'plan') throw new Error('计划模式不能启动画像后台整理')
+
+        const args = params as { pendingFacts?: string }
+        if (profileMaintenanceDelegations.size > 0) {
+          return piJsonResult({
+            status: 'already_running',
+            note: '已有画像整理正在运行；本次待记录事实没有交给该任务，也尚未保存。需保留事实并在整理结束后重新读取画像、更新和核验。',
+          })
+        }
+
+        const created = piDelegateAgentCalls.getOrCreate(ctx.sessionId, toolCallId, () => {
+          const task = `整理超限的全局用户画像。先阅读 Coach 的 knowledge-maintenance，再用 MemoryInspect 完整读取 global-profile 与版本；保留本次待记录事实。主动语义去重、精简，目标约 4000–4500 UTF-16 字符。只保留跨项目核心事实和必要来源；项目事实先核对归属，只在授权范围内写入相应项目记忆。MemoryUpdate 带 revision 写入并回读核验；版本冲突则重新读取合并重试。历史由记忆工具保留；不要臆造、丢弃无法安全归类的事实或覆盖并发修改。遇到确实无法安全处理的冲突，保留原文并明确说明阻塞。不得迁移其他项目或启动子会话。
+
+本次待记录事实及依据：${args.pendingFacts?.trim() || '无'}`
+          const started = startDelegation(ctx, parent, { title: '后台整理用户画像', role: 'custom', task })
+          return {
+            delegationId: started.record.delegationId,
+            effectivePermissionMode: started.effectivePermissionMode,
+            effectiveModelId: started.effectiveModelId,
+            configuredThinkingLevel: started.configuredThinkingLevel,
+          }
+        })
+        profileMaintenanceDelegations.add(created.delegationId)
+        void waitForDelegationSettled(created.delegationId)
+        return piJsonResult({
+          status: 'started',
+          delegation: getDelegationResult(ctx.sessionId, created.delegationId),
+          effectivePermissionMode: created.effectivePermissionMode,
+          effectiveModelId: created.effectiveModelId,
+          configuredThinkingLevel: created.configuredThinkingLevel,
+          note: '子会话已启动但尚未完成，不影响主会话收敛；不得声称已保存。需要结果时可按 delegationId 查询或等待。',
+        })
       },
     }),
     sdk.defineTool({
