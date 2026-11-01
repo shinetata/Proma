@@ -1036,7 +1036,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   }, [currentAgentSessionId, mode, openWorkspaceComponent, setActiveView])
 
   const handleOpenCapabilityComponent = React.useCallback((component: 'skills' | 'mcp' | 'memory'): void => {
-    if (mode !== 'agent' || !currentAgentSessionId) {
+    // 记忆页是「关于你 / 当前项目」的完整页面；会话内右侧面板只用于查看变更 Diff。
+    if (component === 'memory' || mode !== 'agent' || !currentAgentSessionId) {
       setAgentSkillsTab(component)
       setActiveView('agent-skills')
       return
