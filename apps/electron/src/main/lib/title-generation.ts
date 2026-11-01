@@ -1,3 +1,5 @@
+import { extractMentionLabels, stripMentionMarkers } from './mention-text'
+
 /** 标题生成 Prompt */
 export const TITLE_PROMPT = '根据用户的第一条消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。如果消息内容过短或无明确主题，直接使用原始消息作为标题。\n\n用户消息：'
 
@@ -37,10 +39,15 @@ function extractTitleText(title: unknown): string {
   return ''
 }
 
-/** 清理模型返回的标题。兼容字符串与内容块数组，非文本内容返回 null。 */
+/**
+ * 清理模型返回的标题。兼容字符串与内容块数组，非文本内容返回 null。
+ *
+ * 部分渠道会把原始消息原样当成标题返回，而消息可能以 `&session:`、`/skill:` 这类
+ * 引用标记开头；这里统一剥离标记，避免标题停在标记前缀上。
+ */
 export function sanitizeGeneratedTitle(title: string | unknown): string | null {
-  const text = extractTitleText(title)
-  const cleaned = text.trim().replace(TITLE_PUNCTUATION, '').trim()
+  const text = stripMentionMarkers(extractTitleText(title))
+  const cleaned = text.replace(TITLE_PUNCTUATION, '').trim()
   return cleaned.slice(0, MAX_TITLE_LENGTH) || null
 }
 
@@ -52,16 +59,24 @@ export function sanitizeGeneratedTitle(title: string | unknown): string | null {
  * 避免会话长期停留在“新 Agent 会话”。
  */
 export function createFallbackTitle(userMessage: string): string | null {
-  const firstLine = userMessage
+  // 先剥离引用标记：标题只取首行前 20 个字符，若把 `&session:<id>::<标签>` 这类
+  // 标记算进去，兜底标题就会变成标记前缀而不是用户意图。
+  const readable = stripMentionMarkers(userMessage)
+  const firstLine = readable
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean)
-    ?? userMessage.trim()
+    ?? ''
 
   const cleaned = firstLine
     .replace(MARKDOWN_PREFIX, '')
     .replace(WHITESPACE, ' ')
     .trim()
 
-  return cleaned.slice(0, MAX_TITLE_LENGTH) || null
+  const title = cleaned.slice(0, MAX_TITLE_LENGTH)
+  if (title) return title
+
+  // 整条消息只有引用（例如只拖入一个会话）时，用第一个引用的可读标签命名；
+  // 连标签都没有则返回 null，由调用方保留默认标题。
+  return extractMentionLabels(userMessage)[0]?.slice(0, MAX_TITLE_LENGTH) ?? null
 }
