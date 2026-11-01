@@ -82,8 +82,10 @@ export function detectThinkingCapability(
   }
 
   // DeepSeek v4 系列（按模型 ID 识别，不依赖 providerType）：
-  // effort-based-max 模式会在思考关闭时显式发 `{type:'disabled'}`，这是 DeepSeek v4 的硬要求
-  if (startsWith(modelId, 'deepseek-v4')) {
+  // effort-based-max 模式会在思考关闭时显式发 `{type:'disabled'}`，这是 DeepSeek v4 的硬要求。
+  // v4.1 起模型 ID 带点号小版本（如 deepseek-v4.1-flash-1017），startsWith 的连字符前缀
+  // 约定匹配不到点号，需单独允许点号段，否则 Chat 会退化成无效的 budget_tokens 协议。
+  if (/^deepseek-v4(?:\.\d+)?(?:-|$)/.test(modelId.toLowerCase())) {
     return { mode: 'effort-based-max', disableStrategy: 'explicit-disabled' }
   }
 

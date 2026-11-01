@@ -50,7 +50,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-sol-luna'
+  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'deepseek-v4.1-flash' | 'deepseek-v4.1-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-sol-luna'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -112,6 +112,29 @@ const DEEPSEEK_V4_FLASH_EFFORT_MAP: ReasoningEffortMap = {
   max: 'max',
 }
 const DEEPSEEK_V4_PRO_EFFORT_MAP: ReasoningEffortMap = {
+  minimal: null,
+  low: 'high',
+  medium: null,
+  high: 'high',
+  xhigh: 'max',
+  max: 'max',
+}
+
+// DeepSeek v4.1 起模型 ID 带点号小版本（如 deepseek-v4.1-flash-1017）。OpenAI 兼容端点
+// 已实测接受顶层 reasoning_effort（none/minimal/low/medium/high/max 均被解析，bogus 报
+// 400），裸 'xhigh' 行为不稳定故映射到 high；off 必须显式映射为 'none'，否则 Pi 会省略
+// 该字段，而网关/官方端点默认开启思考，导致思考关不掉。
+const DEEPSEEK_V41_FLASH_OPENAI_EFFORT_MAP: ReasoningEffortMap = {
+  off: 'none',
+  minimal: null,
+  low: 'low',
+  medium: null,
+  high: 'high',
+  xhigh: 'high',
+  max: 'max',
+}
+const DEEPSEEK_V41_PRO_OPENAI_EFFORT_MAP: ReasoningEffortMap = {
+  off: 'none',
   minimal: null,
   low: 'high',
   medium: null,
@@ -260,6 +283,31 @@ const DEEPSEEK_V4_PRO_PROFILE: ReasoningProfile = {
   },
 }
 
+// v4.1 点号小版本 ID 单独建 profile（旧 ID 链路完全不动）：在 V4 家族 Anthropic 编码
+// 之外补 OpenAI 兼容编码。给旧 ID（deepseek-flash / deepseek-v4-flash / deepseek-v4-pro）
+// 加 openai-completions 编码会影响官方 OpenAI 端点存量用户，故不采用。
+const DEEPSEEK_V41_FLASH_PROFILE: ReasoningProfile = {
+  id: 'deepseek-v4.1-flash',
+  levels: DEEPSEEK_V4_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeDeepSeekV4Level,
+  encodings: {
+    'anthropic-messages': { kind: 'deepseek-output-effort', effortMap: DEEPSEEK_V4_FLASH_EFFORT_MAP },
+    'openai-completions': { kind: 'openai-reasoning-effort', effortMap: DEEPSEEK_V41_FLASH_OPENAI_EFFORT_MAP },
+  },
+}
+
+const DEEPSEEK_V41_PRO_PROFILE: ReasoningProfile = {
+  id: 'deepseek-v4.1-pro',
+  levels: DEEPSEEK_V4_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeDeepSeekV4Level,
+  encodings: {
+    'anthropic-messages': { kind: 'deepseek-output-effort', effortMap: DEEPSEEK_V4_PRO_EFFORT_MAP },
+    'openai-completions': { kind: 'openai-reasoning-effort', effortMap: DEEPSEEK_V41_PRO_OPENAI_EFFORT_MAP },
+  },
+}
+
 const K3_PROFILE: ReasoningProfile = {
   id: 'kimi-k3',
   levels: K3_LEVELS,
@@ -365,7 +413,12 @@ export function resolveReasoningProfile(input: ResolveReasoningProfileInput): Re
   if (isGpt6SolFamily(modelId) || isGpt6LunaFamily(modelId)) {
     return OPENAI_SOL_LUNA_PROFILE.encodings[input.transport] ? OPENAI_SOL_LUNA_PROFILE : undefined
   }
-  const profile = /^deepseek-flash(?:-|$)/.test(modelId)
+  // v4.1 点号小版本 ID 在最前分流，双协议编码；后续旧 ID 分支保持原样。
+  const profile = /^deepseek-v4\.\d+-flash(?:-|$)/.test(modelId)
+    ? DEEPSEEK_V41_FLASH_PROFILE
+    : /^deepseek-v4\.\d+-pro(?:-|$)/.test(modelId)
+      ? DEEPSEEK_V41_PRO_PROFILE
+      : /^deepseek-flash(?:-|$)/.test(modelId)
     ? DEEPSEEK_FLASH_PROFILE
     : /^deepseek-v4-flash(?:-|$)/.test(modelId)
       ? DEEPSEEK_V4_FLASH_PROFILE
