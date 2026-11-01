@@ -134,6 +134,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   memoryContext?: AgentMemoryContext
   /** 本轮开始时间，用于判断是否在本轮告知“顺手完善了项目协作能力”。 */
   memoryMaintenanceSince?: number
+  /** 每个请求重新解析项目指令，使同轮内对 AGENTS.md 的修改立即生效。 */
+  resolveProjectInstructionFiles?: () => Array<{ path: string; content: string }>
   /** 用于 typed 文件工具的会话级子目录指令激活；不会解析 Bash。 */
   projectInstructionScope?: {
     projectRoot: string
@@ -1556,12 +1558,18 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       session.agent.transformContext = async (messages, signal) => {
         const previous = await previousTransformContext?.(messages, signal) ?? messages
         const sanitized = sanitizePiMessageImageContent(previous)
-        return input.memoryContext
-          ? refreshMemorySystemMessages(sanitized, {
-              ctx: input.memoryContext,
-              maintenanceSince: input.memoryMaintenanceSince,
-            })
-          : sanitized
+        if (!input.memoryContext) return sanitized
+        let projectFiles: Array<{ path: string; content: string }> | undefined
+        try {
+          projectFiles = input.resolveProjectInstructionFiles?.()
+        } catch (error) {
+          console.warn('[Pi SDK] 项目指令重新解析失败，沿用已有内容:', error)
+        }
+        return refreshMemorySystemMessages(sanitized, {
+          ctx: input.memoryContext,
+          maintenanceSince: input.memoryMaintenanceSince,
+          projectFiles,
+        })
       }
       // Pi 0.86 的 transcript-aware before_agent_start extension 会在下一轮注入动态项目指令。
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {

@@ -32,6 +32,11 @@ export interface MemoryPromptInput {
   ctx: AgentMemoryContext
   /** 本轮开始时间；用于判断“本轮已完成项目能力优化”的告知。 */
   maintenanceSince?: number
+  /**
+   * 每个请求重新解析的项目指令。传入时会同时刷新 `project_context` 段，
+   * 让同轮内对 AGENTS.md 的修改立刻对后续请求生效（与商业版一致）。
+   */
+  projectFiles?: Array<{ path: string; content: string }>
 }
 
 export function buildLiveMemoryContext({ ctx, maintenanceSince }: MemoryPromptInput): string {
@@ -145,12 +150,23 @@ export function refreshMemorySystemMessages<T extends AgentMessage>(
   input: MemoryPromptInput,
 ): T[] {
   const memory = buildLiveMemoryContext(input)
+  const project = input.projectFiles
+    ? input.projectFiles.length > 0
+      ? `Project-specific instructions and guidelines:\n\n${input.projectFiles
+          .map((file) => `<project_instructions path="${escapeText(file.path)}">\n${escapeText(file.content)}\n</project_instructions>`)
+          .join('\n\n')}`
+      : null
+    : undefined
   let injected = false
 
   const result = messages.map((message) => {
     if (message.role !== 'system') return message
     const system = message as unknown as SystemMessageLike
     const sections: Record<string, string | null> = { ...(system.sections ?? {}) }
+    if (project !== undefined) {
+      delete sections.project_context
+      if (project !== null) sections.project_context = project
+    }
     delete sections[MEMORY_SECTION_KEY]
     if (!injected) {
       sections[MEMORY_SECTION_KEY] = memory
@@ -163,7 +179,10 @@ export function refreshMemorySystemMessages<T extends AgentMessage>(
     result.unshift({
       role: 'system',
       content: '',
-      sections: { [MEMORY_SECTION_KEY]: memory },
+      sections: {
+        ...(project !== undefined && project !== null ? { project_context: project } : {}),
+        [MEMORY_SECTION_KEY]: memory,
+      },
       timestamp: Date.now(),
     } as unknown as T)
   }

@@ -1616,7 +1616,17 @@ export class AgentOrchestrator {
         canUseTool,
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
         ...(instructionFiles.length > 0 && { projectInstructionFiles: instructionFiles }),
-        ...(memoryContext && { memoryContext, memoryMaintenanceSince }),
+        ...(memoryContext && {
+          memoryContext,
+          memoryMaintenanceSince,
+          resolveProjectInstructionFiles: () => {
+            if (!workspaceSlug) return []
+            const root = projectKnowledgeRoot ?? getProjectFilesPath(workspaceSlug)
+            return resolveProjectInstructions({ projectRoot: root })
+              .sources.filter((source) => source.content)
+              .map((source) => ({ path: source.path, content: source.content }))
+          },
+        }),
         ...(projectInstructions && {
           projectInstructionScope: {
             projectRoot: projectInstructions.projectRoot,

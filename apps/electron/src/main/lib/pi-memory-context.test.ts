@@ -82,6 +82,27 @@ describe('每轮记忆注入', () => {
     expect(Object.keys(sections.sections ?? {}).filter((key) => key === 'proma_memory')).toHaveLength(1)
   })
 
+  test('传入项目指令时同轮刷新 project_context，并移除旧段', () => {
+    const ctx = createContext()
+    ensureMemoryFiles(ctx)
+    const messages = [{ role: 'system', content: 'base' }] as unknown as AgentMessage[]
+
+    const first = refreshMemorySystemMessages(messages, {
+      ctx,
+      projectFiles: [{ path: join(ctx.projectRoot, 'AGENTS.md'), content: '# 项目约定\n\n- 使用 bun' }],
+    })
+    const sections = (first[0] as unknown as { sections?: Record<string, string | null> }).sections ?? {}
+    expect(sections.project_context).toContain('使用 bun')
+
+    const second = refreshMemorySystemMessages(first, {
+      ctx,
+      projectFiles: [{ path: join(ctx.projectRoot, 'AGENTS.md'), content: '# 项目约定\n\n- 使用 pnpm' }],
+    })
+    const next = (second[0] as unknown as { sections?: Record<string, string | null> }).sections ?? {}
+    expect(next.project_context).toContain('使用 pnpm')
+    expect(next.project_context).not.toContain('使用 bun')
+  })
+
   test('计划模式不注入写入型维护要求', () => {
     const ctx = createContext()
     ctx.allowInstructionMaintenance = false
