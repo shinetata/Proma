@@ -10,6 +10,11 @@ if (!app.isPackaged) {
   const instance = process.env.PROMA_DEV_INSTANCE?.replace(/[^a-zA-Z0-9_-]/g, '')
   if (instance) app.setName(`Proma-${instance}`)
   app.setPath('userData', join(app.getPath('appData'), instance ? `@proma/electron-dev-${instance}` : '@proma/electron-dev'))
+} else if (/Proma[ -]Dev/i.test(app.getPath('exe'))) {
+  // 打包后的 Proma Dev：两版 app.asar 内 package.json 的 name 同为 @proma/electron 且没有
+  // productName，默认 userData 会落在同一个 @proma/electron 目录，共用同一把 SingletonLock，
+  // 后启动的一版只会唤醒前一版然后退出，无法与商业版同时运行。
+  app.setPath('userData', join(app.getPath('appData'), 'Proma Dev'))
 }
 
 // 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
