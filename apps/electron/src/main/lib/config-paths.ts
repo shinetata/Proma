@@ -42,6 +42,67 @@ export function getConfigDirName(): string {
   return _configDirName
 }
 
+/** 打包后的 Proma Dev 在应用名、可执行文件名上带有的标记。 */
+const DEV_BUILD_MARKER = /Proma[ -]Dev/i
+
+let _isDevBuildSharingConfigDir: boolean | undefined
+
+/**
+ * 是否是「与商业版共用 ~/.proma 的 Proma Dev 构建」。
+ *
+ * 商业版只允许官方渠道，读取 channels.json 时会删除自定义渠道；它还会在设置页
+ * 把指向已删渠道的 agentChannelId / agentModelId 清空。这类 Dev 构建因此需要把
+ * 渠道与设置拆成独立文件，其余数据（会话、工作区、记忆、Skills 等）继续共享。
+ *
+ * 未打包的 dev 运行使用 ~/.proma-dev，不需要分离。
+ */
+export function isDevBuildSharingConfigDir(): boolean {
+  if (_isDevBuildSharingConfigDir === undefined) {
+    if (getConfigDirName() === '.proma-dev') {
+      _isDevBuildSharingConfigDir = false
+    } else {
+      try {
+        const { app } = require('electron')
+        const markers = [app.getName(), app.getPath('exe')]
+        _isDevBuildSharingConfigDir = markers.some((marker) => DEV_BUILD_MARKER.test(marker))
+      } catch {
+        _isDevBuildSharingConfigDir = false
+      }
+    }
+    if (_isDevBuildSharingConfigDir) {
+      console.log('[配置] 检测到 Proma Dev 构建：渠道与设置使用 .dev 独立文件，其余数据与商业版共享')
+    }
+  }
+  return _isDevBuildSharingConfigDir
+}
+
+/** 目标文件不存在时，从共享配置复制一份作为初始内容。 */
+function seedConfigFileIfMissing(target: string, source: string): void {
+  if (existsSync(target) || !existsSync(source)) return
+  try {
+    copyFileSync(source, target)
+    console.log(`[配置] 已从 ${basename(source)} 初始化 ${basename(target)}`)
+  } catch (error) {
+    console.warn(`[配置] 初始化 ${basename(target)} 失败:`, error)
+  }
+}
+
+/**
+ * 解析与商业版共享目录时可分离的配置文件路径。
+ *
+ * 商业版只用原名文件，Dev 构建用 `name.dev.json`；首次访问时从商业版那份
+ * 播种，避免重置引导流程、主题和已有配置。
+ */
+function resolveDevAwareConfigPath(fileName: string): string {
+  const sharedPath = join(getConfigDir(), fileName)
+  if (!isDevBuildSharingConfigDir()) return sharedPath
+
+  const devFileName = fileName.replace(/\.json$/, '.dev.json')
+  const devPath = join(getConfigDir(), devFileName)
+  seedConfigFileIfMissing(devPath, sharedPath)
+  return devPath
+}
+
 /**
  * 获取配置目录路径
  *
@@ -62,10 +123,13 @@ export function getConfigDir(): string {
 /**
  * 获取渠道配置文件路径
  *
- * @returns ~/.proma/channels.json
+ * Proma Dev 与商业版共用目录时返回 channels.dev.json，避免商业版清理自定义渠道
+ * 后失去 Dev 的配置。
+ *
+ * @returns ~/.proma/channels.json 或 ~/.proma/channels.dev.json
  */
 export function getChannelsPath(): string {
-  return join(getConfigDir(), 'channels.json')
+  return resolveDevAwareConfigPath('channels.json')
 }
 
 /**
@@ -154,10 +218,13 @@ export function resolveAttachmentPath(localPath: string): string {
 /**
  * 获取应用设置文件路径
  *
- * @returns ~/.proma/settings.json
+ * Proma Dev 与商业版共用目录时返回 settings.dev.json：商业版会清空指向已删渠道
+ * 的默认模型选择，两版各用一份设置可以避免互相覆盖。
+ *
+ * @returns ~/.proma/settings.json 或 ~/.proma/settings.dev.json
  */
 export function getSettingsPath(): string {
-  return join(getConfigDir(), 'settings.json')
+  return resolveDevAwareConfigPath('settings.json')
 }
 
 /**
