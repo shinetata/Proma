@@ -269,6 +269,7 @@ export interface ElectronAPI {
   selectAgentBrowserTab: (input: import('@proma/shared').BrowserTabInput) => Promise<import('@proma/shared').BrowserViewState>
   closeAgentBrowserTab: (input: import('@proma/shared').BrowserTabInput) => Promise<import('@proma/shared').BrowserViewState | null>
   getAgentBrowserState: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState | null>
+  getAgentBrowserPreview: (input: import('@proma/shared').BrowserPreviewInput) => Promise<import('@proma/shared').BrowserPreviewFrame | null>
   setAgentBrowserLayout: (layout: import('@proma/shared').BrowserViewLayout) => Promise<void>
   minimizeAgentBrowser: (sessionId: string) => Promise<void>
   navigateAgentBrowser: (input: import('@proma/shared').BrowserNavigateInput) => Promise<import('@proma/shared').BrowserViewState>
@@ -278,6 +279,7 @@ export interface ElectronAPI {
   closeAgentBrowser: (sessionId: string) => Promise<void>
   onAgentBrowserStateChanged: (callback: (state: import('@proma/shared').BrowserStateChange) => void) => () => void
   onAgentBrowserTabFocused: (callback: (change: import('@proma/shared').BrowserTabFocusChange) => void) => () => void
+  onAgentBrowserPresentRequested: (callback: (request: import('@proma/shared').BrowserPresentRequest) => void) => () => void
 
   // ===== 通用工具 =====
 
@@ -1467,6 +1469,9 @@ const electronAPI: ElectronAPI = {
   getAgentBrowserState: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_STATE, sessionId)
   },
+  getAgentBrowserPreview: (input: import('@proma/shared').BrowserPreviewInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_PREVIEW, input) as Promise<import('@proma/shared').BrowserPreviewFrame | null>
+  },
   setAgentBrowserLayout: (layout: import('@proma/shared').BrowserViewLayout) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
   },
@@ -1487,6 +1492,11 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, change: import('@proma/shared').BrowserTabFocusChange) => callback(change)
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_TAB_FOCUSED, listener)
     return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_TAB_FOCUSED, listener)
+  },
+  onAgentBrowserPresentRequested: (callback: (request: import('@proma/shared').BrowserPresentRequest) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: import('@proma/shared').BrowserPresentRequest) => callback(request)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_PRESENT_REQUESTED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_PRESENT_REQUESTED, listener)
   },
 
   // 通用工具

@@ -1906,6 +1906,8 @@ export const AGENT_IPC_CHANNELS = {
   SELECT_BROWSER_TAB: 'agent:select-browser-tab',
   CLOSE_BROWSER_TAB: 'agent:close-browser-tab',
   GET_BROWSER_STATE: 'agent:get-browser-state',
+  /** 按标签读取缩略图预览帧；400 时表示页面尚未就绪。 */
+  GET_BROWSER_PREVIEW: 'agent:get-browser-preview',
   SET_BROWSER_LAYOUT: 'agent:set-browser-layout',
   MINIMIZE_BROWSER: 'agent:minimize-browser',
   NAVIGATE_BROWSER: 'agent:navigate-browser',
@@ -1915,6 +1917,8 @@ export const AGENT_IPC_CHANNELS = {
   CLOSE_BROWSER: 'agent:close-browser',
   BROWSER_STATE_CHANGED: 'agent:browser-state-changed',
   BROWSER_TAB_FOCUSED: 'agent:browser-tab-focused',
+  /** Agent 判断页面本身是给用户当下看的，renderer 需要打开并激活对应网页标签。 */
+  BROWSER_PRESENT_REQUESTED: 'agent:browser-present-requested',
 
   // 工作区能力（MCP + Skill）
   /** 获取工作区能力摘要 */

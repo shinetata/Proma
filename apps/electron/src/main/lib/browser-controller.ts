@@ -1,7 +1,7 @@
-import { app, BrowserWindow, WebContentsView, session as electronSession, type DownloadItem, type Session, type WebContents } from 'electron'
+import { app, BrowserWindow, nativeImage, WebContentsView, session as electronSession, type DownloadItem, type Session, type WebContents } from 'electron'
 import path from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
-import type { BrowserExecutionSource, BrowserOperationStatus, BrowserSessionClosed, BrowserTabFocusChange, BrowserTraceAction, BrowserTraceItem, BrowserViewLayout, BrowserViewState, BrowserTabState } from '@proma/shared'
+import type { BrowserExecutionSource, BrowserOperationStatus, BrowserSessionClosed, BrowserTabFocusChange, BrowserTraceAction, BrowserTraceItem, BrowserViewLayout, BrowserViewState, BrowserTabState, BrowserPreviewFrame, BrowserPresentRequest } from '@proma/shared'
 import { AGENT_IPC_CHANNELS } from '@proma/shared'
 import { assertSafeBrowserDestination, assertSafeBrowserDestinationWithFallback, assertSafeBrowserDownloadUrl, assertSafeBrowserUrl, isSupportedBrowserPopupUrl, isTransientBrowserPopupUrl, USER_NEW_TAB_URL } from './browser-policy'
 import { createAuthorizedPreviewUrl, isAuthorizedPreviewProtocol } from './browser-preview-service'
@@ -28,6 +28,9 @@ import {
   type BrowserSelectOptionInput,
 } from './browser-script-policy'
 import { getSettings } from './settings-service'
+import { getProxySettings } from './proxy-settings-service'
+import { BrowserPreviewCapture } from './browser-preview-capture'
+import { findReusablePreviewTab, selectDraftTabsToReclaim, selectExcessTabsToReclaim } from './browser-tab-lifecycle'
 import { isValidImageBytes } from './image-content-validation'
 
 const MAX_TRACE_ITEMS = 30
@@ -40,6 +43,8 @@ const ACTION_HIGHLIGHT_DURATION_MS = 900
 const MAX_BROWSER_SCRIPT_RESULT_CHARS = 64_000
 /** 国内网络下默认 Google 新标签页/搜索等待此时长后转向 Bing。 */
 const GOOGLE_DEFAULT_LOAD_TIMEOUT_MS = 3_000
+/** 后台标签的默认视口；不设置时隐藏 WebContents 的布局尺寸可能为 0，截图与坐标都会异常。 */
+const BACKGROUND_VIEWPORT = { width: 1280, height: 800 }
 
 /** 下载文件名脱敏：去掉控制字符与路径穿越，替换 Windows 非法字符，兜底默认名，避免写入 Downloads 之外的路径。 */
 function sanitizeDownloadFilename(raw: string): string {
@@ -70,8 +75,16 @@ type BrowserTabRecord = {
   /** about:blank/blob/data 仅允许作为 popup 首次导航，不可被后续导航复用。 */
   popupInitialUrl: string | null
   popupInitialNavigationPending: boolean
-  /** 用于在超限时优先回收最久未使用的 Agent 标签。 */
+  /** 用于在超限时优先回收最久未使用的草稿标签。 */
   lastActivityAt: number
+  /** 保留标签：用户看过、用户创建或 Agent 主动展示，不参与任何自动回收。 */
+  retained: boolean
+  /** 本地预览文件路径；非预览标签为 null，用于复用同一文件的预览标签。 */
+  localPreviewPath: string | null
+  /** 后台标签使用 1280×800 默认视口，挂载到 BrowserSlot 时清除覆盖。 */
+  usesDefaultViewport: boolean
+  /** 标签缩略图捕获；每次导航失效重取。 */
+  preview: BrowserPreviewCapture
   /** 页面声明的 HTTP(S) favicon；仅用于 renderer 标签图标。 */
   favicon: string | null
   highlightTimer?: ReturnType<typeof setTimeout>
@@ -298,6 +311,7 @@ export class BrowserController {
         loading: tab.state.loading,
         openedByAgent: tab.openedByAgent,
         openedByPopup: tab.openedByPopup,
+        retained: tab.retained,
       })),
       url: active.state.url,
       title: active.state.title,
@@ -407,6 +421,8 @@ export class BrowserController {
   private invalidateTabDocument(tab: BrowserTabRecord): void {
     tab.refs.clear()
     tab.generation++
+    // 缩略图绑定 generation，文档一变就作废，避免 renderer 停留在上一页画面。
+    tab.preview.invalidate()
   }
 
   /** 将同一 tab 的 UI/Agent 指令顺序化；一个失败不会卡死后续命令。 */
@@ -484,7 +500,8 @@ export class BrowserController {
     browserSession.webRequest.onBeforeRequest((details, callback) => {
       let protocol = ''
       try { protocol = new URL(details.url).protocol } catch { callback({ cancel: true }); return }
-      if (protocol !== 'http:' && protocol !== 'https:') {
+      // WebSocket 也经同样的地址校验；其余协议（devtools、chrome 等）不在此拦截。
+      if (!['http:', 'https:', 'ws:', 'wss:'].includes(protocol)) {
         callback({ cancel: false })
         return
       }
@@ -587,6 +604,8 @@ export class BrowserController {
     }
     this.installSessionGuards(browserSession)
     this.installPreviewProtocol(browserSession)
+    // 受管网页也要跟随 Proma 的代理配置，否则手动代理下模型能联网但浏览器打不开页面。
+    this.applyBrowserProxy(browserSession)
     this.sessions.set(sessionId, record)
     this.installDownloadGuard(browserSession)
     return record
@@ -605,6 +624,8 @@ export class BrowserController {
       },
     })
     const popupInitialUrl = popupOptions?.popupInitialUrl ?? null
+    // 弹窗继承来源标签的保留状态：Agent 草稿页弹出的窗口仍是草稿；找不到来源时按保留处理，宁可多留不可误关。
+    const openerTab = popupOptions?.openerTabId ? browserSession.tabs.get(popupOptions.openerTabId) : undefined
     const tab: BrowserTabRecord = {
       tabId,
       view,
@@ -619,9 +640,20 @@ export class BrowserController {
       popupInitialUrl,
       popupInitialNavigationPending: popupInitialUrl !== null && isTransientBrowserPopupUrl(popupInitialUrl),
       lastActivityAt: Date.now(),
+      retained: popupOptions?.openerTabId ? openerTab?.retained ?? true : !claimAsAgent,
+      localPreviewPath: null,
+      usesDefaultViewport: true,
+      preview: new BrowserPreviewCapture({
+        debugger: view.webContents.debugger,
+        getTarget: () => (this.isManagedTabCurrent(browserSession, tab) && !view.webContents.isDestroyed()
+          ? { tabId, url: tab.state.url, generation: tab.generation }
+          : null),
+      }),
       favicon: null,
       attachedOwner: null,
     }
+    // 先给一个有限视口；真正展示时由 BrowserSlot 的 bounds 覆盖，展示结束再改回默认视口。
+    view.setBounds({ x: 0, y: 0, width: BACKGROUND_VIEWPORT.width, height: BACKGROUND_VIEWPORT.height })
     view.setVisible(false)
     view.webContents.setWindowOpenHandler(({ url }) => {
       if (!isSupportedBrowserPopupUrl(url)) {
@@ -694,6 +726,7 @@ export class BrowserController {
       this.emit(browserSession)
     })
     view.webContents.on('did-stop-loading', () => this.updateNavigationState(browserSession, tab))
+    view.webContents.on('dom-ready', () => this.initializeBackgroundViewport(tab))
     view.webContents.on('page-title-updated', () => this.updateNavigationState(browserSession, tab))
     view.webContents.on('did-navigate', () => {
       // 只在主框架真正完成跨文档导航时清理旧站点图标；新页面随后会通过 page-favicon-updated 重新发布。
@@ -704,6 +737,7 @@ export class BrowserController {
     })
     view.webContents.on('did-navigate-in-page', () => { tab.popupInitialNavigationPending = false; this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
     view.webContents.on('destroyed', () => {
+      tab.preview.invalidate()
       if (!browserSession.tabs.has(tab.tabId)) return
       browserSession.tabs.delete(tab.tabId)
       browserSession.lastLayoutRevisionByTab.delete(tab.tabId)
@@ -764,10 +798,33 @@ export class BrowserController {
     try {
       if (debuggerClient.isAttached()) debuggerClient.detach()
       debuggerClient.attach('1.3')
+      // 重连会丢掉 Emulation 覆盖，后台标签需要重新建立固定视口。
+      this.initializeBackgroundViewport(tab)
       console.warn(`[受管浏览器] CDP ${timedOutMethod} 超时，已重连调试通道。`)
     } catch (error) {
       console.warn(`[受管浏览器] CDP ${timedOutMethod} 超时后无法重连调试通道:`, error)
     }
+  }
+
+  /**
+   * 后台标签不在任何 BrowserSlot 中，隐藏的 WebContents 布局尺寸可能为 0。
+   * 显式下发固定视口，使缩略图、坐标换算和 AX 观察都基于一个确定的渲染尺寸。
+   */
+  private initializeBackgroundViewport(tab: BrowserTabRecord): void {
+    if (!tab.usesDefaultViewport || tab.view.webContents.isDestroyed() || !tab.view.webContents.debugger.isAttached()) return
+    void tab.view.webContents.debugger
+      .sendCommand('Emulation.setDeviceMetricsOverride', {
+        width: BACKGROUND_VIEWPORT.width,
+        height: BACKGROUND_VIEWPORT.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      })
+      .catch((error: unknown) => console.warn('[受管浏览器] 后台视口初始化失败:', error))
+  }
+
+  /** 用户地址栏导航时清除页面级缩放，避免上一个站点留下的缩放影响新页面。 */
+  private resetTabZoom(tab: BrowserTabRecord): void {
+    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.setZoomLevel(0)
   }
 
   /** 通过 CDP Overlay 渲染临时高亮，不向第三方页面注入脚本或修改 DOM。 */
@@ -899,6 +956,14 @@ export class BrowserController {
     try {
       if (tab.lastBounds) tab.view.setBounds(tab.lastBounds)
       tab.view.setVisible(true)
+      // 一旦真正展示给用户，这个标签就不再是草稿；并清除为后台截图设置的视口覆盖。
+      tab.retained = true
+      if (tab.usesDefaultViewport) {
+        tab.usesDefaultViewport = false
+        void tab.view.webContents.debugger
+          .sendCommand('Emulation.clearDeviceMetricsOverride')
+          .catch((error: unknown) => console.warn('[受管浏览器] 恢复页面视口失败:', error))
+      }
       return true
     } catch {
       this.detachTabView(tab)
@@ -1049,6 +1114,7 @@ export class BrowserController {
 
   private disposeTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
     if (!browserSession.tabs.has(tab.tabId)) return
+    tab.preview.invalidate()
     browserSession.tabs.delete(tab.tabId)
     browserSession.lastLayoutRevisionByTab.delete(tab.tabId)
     this.removePresentation(browserSession.sessionId, tab.tabId)
@@ -1059,21 +1125,72 @@ export class BrowserController {
   }
 
   /**
-   * 达到上限时回收最久未使用的 Agent 标签。用户创建的标签、当前前台标签和 Agent 当前工作标签
+   * 达到上限时回收最久未使用的草稿标签。保留标签、当前前台标签和 Agent 当前工作标签
    * 一律保留；若没有安全候选，宁可暂时超过限制也不擅自关闭用户内容。
    */
   private reclaimExcessAgentTabs(browserSession: BrowserSessionRecord): number {
-    const candidates = [...browserSession.tabs.values()]
-      .filter((tab) => tab.openedByAgent && tab.tabId !== browserSession.activeTabId && tab.tabId !== browserSession.agentTabId)
-      .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
+    const tabIds = selectExcessTabsToReclaim([...browserSession.tabs.values()], {
+      activeTabId: browserSession.activeTabId,
+      agentTabId: browserSession.agentTabId,
+      maxTabs: MAX_BROWSER_TABS,
+    })
     let reclaimed = 0
-    while (browserSession.tabs.size > MAX_BROWSER_TABS && candidates.length > 0) {
-      const tab = candidates.shift()
-      if (!tab || !browserSession.tabs.has(tab.tabId)) continue
+    for (const tabId of tabIds) {
+      const tab = browserSession.tabs.get(tabId)
+      if (!tab) continue
       this.disposeTab(browserSession, tab)
       reclaimed += 1
     }
     return reclaimed
+  }
+
+  /**
+   * Agent 轮次真正结束时调用：关闭本会话全部草稿标签，只保留 Agent 工作标签和保留标签。
+   * 仍有 Agent 操作在进行时跳过，交由下一次轮末处理。返回关闭数量。
+   */
+  reclaimDraftTabs(sessionId: string): number {
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession || browserSession.activeAgentOperationCount > 0) return 0
+    const tabIds = selectDraftTabsToReclaim([...browserSession.tabs.values()], browserSession.agentTabId)
+    if (tabIds.length === 0) return 0
+    for (const tabId of tabIds) {
+      const tab = browserSession.tabs.get(tabId)
+      if (tab) this.disposeTab(browserSession, tab)
+    }
+    if (browserSession.tabs.size === 0) {
+      this.sessions.delete(sessionId)
+      this.clearPresentationsForSession(sessionId)
+      if (this.foregroundPresentationSessionId === sessionId) this.foregroundPresentationSessionId = null
+      this.emitClosed(sessionId)
+      return tabIds.length
+    }
+    this.repairTabSelectionAfterReclaim(browserSession)
+    this.emit(browserSession)
+    return tabIds.length
+  }
+
+  /** 回收后若前台标签已不存在，优先回到 Agent 工作标签，其次任一保留标签。 */
+  private repairTabSelectionAfterReclaim(browserSession: BrowserSessionRecord): void {
+    if (browserSession.tabs.has(browserSession.activeTabId)) return
+    const fallback = (browserSession.agentTabId ? browserSession.tabs.get(browserSession.agentTabId) : undefined)
+      ?? [...browserSession.tabs.values()].find((tab) => tab.retained)
+      ?? browserSession.tabs.values().next().value
+    if (fallback) browserSession.activeTabId = fallback.tabId
+  }
+
+  /**
+   * Agent 判断页面本身需要用户当下查看时调用：把标签设为保留并请求 renderer 打开对应网页标签。
+   * 不改变 Agent 的默认工作标签，也不导航或重载页面。
+   */
+  present(sessionId: string, tabId: string): BrowserViewState {
+    const browserSession = this.getSession(sessionId)
+    this.assertRiskDisclaimerAcknowledged()
+    const tab = this.getAgentTab(browserSession, tabId)
+    tab.retained = true
+    this.activateDisplayTab(browserSession, tab)
+    const request: BrowserPresentRequest = { sessionId, tabId: tab.tabId }
+    if (this.owner && !this.owner.isDestroyed()) this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_PRESENT_REQUESTED, request)
+    return structuredClone(this.buildState(browserSession))
   }
 
   /** Agent 新建工作 tab，并立即切到该标签让用户能看到接下来的操作。 */
@@ -1114,6 +1231,7 @@ export class BrowserController {
     this.assertRiskDisclaimerAcknowledged()
     this.markUserBrowserContext(browserSession)
     const tab = this.getDisplayTab(browserSession, tabId)
+    tab.retained = true
     this.activateDisplayTab(browserSession, tab)
     return structuredClone(this.buildState(browserSession))
   }
@@ -1152,13 +1270,16 @@ export class BrowserController {
       this.assertRiskDisclaimerAcknowledged()
       // 先校验路径，避免无效路径遗留一个空白的 Agent 预览标签。
       const preview = createAuthorizedPreviewUrl(inputPath, browserSession.allowedRoots, baseDir)
-      const tab = tabId ? this.getAgentTab(browserSession, tabId) : this.createTab(browserSession, true, true)
+      // 同一本地文件反复预览时复用已有标签，避免每次修改后都堆一个新标签。
+      const reusableTabId = tabId ?? findReusablePreviewTab([...browserSession.tabs.values()], preview.filePath, browserSession.agentTabId)
+      const tab = reusableTabId ? this.getAgentTab(browserSession, reusableTabId) : this.createTab(browserSession, true, true)
       browserSession.agentTabId = tab.tabId
       this.activateDisplayTab(browserSession, tab)
       const reclaimed = this.reclaimExcessAgentTabs(browserSession)
-      if (reclaimed > 0) this.trace(browserSession, tab, 'tab', `已回收 ${reclaimed} 个最久未使用的 Agent 标签以保持最多 ${MAX_BROWSER_TABS} 个标签`)
+      if (reclaimed > 0) this.trace(browserSession, tab, 'tab', `已回收 ${reclaimed} 个最久未使用的草稿标签以保持最多 ${MAX_BROWSER_TABS} 个标签`)
       return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
         tab.isLocalPreview = true
+        tab.localPreviewPath = preview.filePath
         try {
           await this.loadUrl(tab, preview.url, operationSignal)
           this.trace(browserSession, tab, 'navigate', `预览本地文件 ${preview.filePath.split(/[\\/]/).pop() ?? preview.filePath}`, 'verified')
@@ -1235,6 +1356,7 @@ export class BrowserController {
       const host = new URL(destination.url).host
       return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
         tab.isLocalPreview = false
+        tab.localPreviewPath = null
         this.trace(browserSession, tab, 'navigate', `正在打开 ${host}`, 'dispatched')
         try {
           const result = await this.loadUrlWithFallback(tab, destination.url, destination.fallbackUrl, operationSignal)
@@ -1254,18 +1376,21 @@ export class BrowserController {
   }
 
   /** 用户地址栏导航当前显示 tab，不会改变 Agent 的工作 tab。 */
-  async navigateDisplay(sessionId: string, url: string, tabId?: string): Promise<BrowserViewState> {
+  async navigateDisplay(sessionId: string, url: string, tabId?: string, resetZoom = false): Promise<BrowserViewState> {
     const browserSession = this.getOrCreateSession(sessionId, [])
     this.assertRiskDisclaimerAcknowledged()
     this.markUserBrowserContext(browserSession)
     const tab = this.getDisplayTab(browserSession, tabId)
+    tab.retained = true
     const destination = await assertSafeBrowserDestinationWithFallback(url)
     const host = new URL(destination.url).host
     return this.runTabOperation(browserSession, tab, undefined, async () => {
       tab.isLocalPreview = false
+      tab.localPreviewPath = null
       this.trace(browserSession, tab, 'navigate', `正在打开 ${host}`, 'dispatched')
       try {
         const result = await this.loadUrlWithFallback(tab, destination.url, destination.fallbackUrl)
+        if (resetZoom) this.resetTabZoom(tab)
         const loadedHost = new URL(result.loadedUrl).host
         this.trace(browserSession, tab, 'navigate', result.usedFallback ? `Google 在 3 秒内未响应，已改用 ${loadedHost}` : `已打开 ${loadedHost}`, 'verified')
         this.updateNavigationState(browserSession, tab)
@@ -1761,7 +1886,9 @@ export class BrowserController {
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       throwIfBrowserOperationAborted(operationSignal)
-      const image = await withBrowserCdpTimeout(() => tab.view.webContents.capturePage(), 'Page.captureScreenshot', BROWSER_OBSERVE_TIMEOUT_MS + 3_000, operationSignal)
+      // 隐藏视图的 capturePage() 可能返回空图或错误尺寸；改走 CDP 只截视口范围。
+      const screenshot = await this.cdp(tab, 'Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, BROWSER_OBSERVE_TIMEOUT_MS + 3_000, operationSignal)
+      const image = nativeImage.createFromBuffer(typeof screenshot.data === 'string' ? Buffer.from(screenshot.data, 'base64') : Buffer.alloc(0))
       throwIfBrowserOperationAborted(operationSignal)
       if (image.isEmpty()) {
         this.trace(browserSession, tab, 'screenshot', '截图为空，已拒绝返回无效图片', 'failed')
@@ -1783,6 +1910,11 @@ export class BrowserController {
     })
   }
 
+  /** 按请求标签返回缩略图帧：用户当前选中的标签不能限制 Agent 工作标签的预览。 */
+  async getPreviewFrame(sessionId: string, tabId: string): Promise<BrowserPreviewFrame | null> {
+    return this.sessions.get(sessionId)?.tabs.get(tabId)?.preview.get() ?? null
+  }
+
   async close(sessionId: string): Promise<void> {
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) {
@@ -1793,6 +1925,7 @@ export class BrowserController {
     this.clearPresentationsForSession(sessionId)
     if (this.foregroundPresentationSessionId === sessionId) this.foregroundPresentationSessionId = null
     for (const tab of browserSession.tabs.values()) {
+      tab.preview.invalidate()
       this.clearAgentTargetHighlight(tab)
       try { if (tab.view.webContents.debugger.isAttached()) tab.view.webContents.debugger.detach() } catch { /* 已销毁 */ }
       this.detachTabView(tab)
@@ -1800,6 +1933,33 @@ export class BrowserController {
     }
     browserSession.tabs.clear()
     this.emitClosed(sessionId)
+  }
+
+  /**
+   * 把当前代理配置应用到浏览器分区。
+   * 未启用或系统模式都交给 Chromium 解析系统代理；手动模式直接使用配置的代理地址。
+   */
+  private applyBrowserProxy(browserSession: Session): void {
+    void getProxySettings()
+      .then((config) => {
+        if (config.enabled && config.mode === 'manual' && config.manualUrl.trim()) {
+          return browserSession.setProxy({ mode: 'fixed_servers', proxyRules: config.manualUrl.trim() })
+        }
+        return browserSession.setProxy({ mode: 'system' })
+      })
+      .catch((error: unknown) => console.warn('[受管浏览器] 应用代理配置失败:', error))
+  }
+
+  /** 代理设置变更后重新下发，并让 Chromium 重新解析系统代理。 */
+  async refreshProxy(): Promise<void> {
+    for (const browserSession of this.sessions.values()) {
+      this.applyBrowserProxy(browserSession.browserSession)
+      try {
+        await browserSession.browserSession.forceReloadProxyConfig()
+      } catch (error) {
+        console.warn('[受管浏览器] 重新加载代理配置失败:', error)
+      }
+    }
   }
 
   dispose(): void {

@@ -18,6 +18,7 @@ import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
 import { cn } from '@/lib/utils'
 import { browserPendingNavigationMapAtom } from '@/atoms/browser-atoms'
 import { BrowserSlot } from './BrowserSlot'
+import { BrowserTabPreviews } from './BrowserTabPreviews'
 import { shouldReuseInitialBrowserTab } from './agent-browser-link-utils'
 import { resolveExternalBrowserUrl } from './browser-external-url'
 
@@ -76,6 +77,12 @@ export function BrowserPanel({ sessionId, tabId, state, isAddTabMenuOpen = false
     } catch (error) {
       console.error('[受管浏览器] 关闭失败:', error)
     }
+  }, [sessionId])
+
+  const selectBrowserTab = React.useCallback((nextTabId: string) => {
+    void window.electronAPI.selectAgentBrowserTab({ sessionId, tabId: nextTabId }).catch((error) => {
+      console.error('[受管浏览器] 切换标签失败:', error)
+    })
   }, [sessionId])
 
   const acceptRiskDisclaimer = React.useCallback(async () => {
@@ -162,6 +169,12 @@ export function BrowserPanel({ sessionId, tabId, state, isAddTabMenuOpen = false
           className="flex flex-1 min-h-0 flex-col"
           style={isAddTabMenuOpen ? { paddingTop: ADD_TAB_MENU_CLEARANCE_PX } : undefined}
         >
+          <BrowserTabPreviews
+            sessionId={sessionId}
+            tabs={state?.tabs ?? []}
+            activeTabId={tabId}
+            onSelect={selectBrowserTab}
+          />
           <BrowserSlot key={tabId} sessionId={sessionId} tabId={tabId} />
         </div>
       ) : (

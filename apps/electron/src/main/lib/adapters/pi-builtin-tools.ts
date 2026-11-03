@@ -13,6 +13,7 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { AGENT_IPC_CHANNELS, getTerminalProfilesForPlatform, normalizePathForCompare, parseTerminalProfile } from '@proma/shared'
 import type {
   AgentWorkspace,
+  BrowserViewState,
   CreateAutomationInput,
   PromaPermissionMode,
   TerminalProfile,
@@ -955,6 +956,27 @@ function buildVisionRelayTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefi
 
 // ===== Proma Cloud 工具 =====
 
+/** Agent 判断页面本身是给用户当下看的时候才展示；其余搜索阅读留在缩略图里。 */
+const BROWSER_PRESENT_DESCRIPTION = 'Set true only when the page itself is meant for the user to look at now: a finished deliverable (e.g. the HTML/report/demo you built), a page the user explicitly asked to open or see, or something they must act on. Proma then opens a persistent full browser tab in the right workspace that stays after this turn. Omit for your own searching, reading, scraping, or verification; those stay in the quiet thumbnail preview. Present at most once per page, after it is ready.'
+
+/** 按工具参数把标签常驻展示给用户；失败不影响工具本身的结果。 */
+function presentBrowserTabIfRequested(
+  ctx: PiBuiltinToolsContext,
+  present: boolean | undefined,
+  state: BrowserViewState,
+  tabId?: string,
+): BrowserViewState {
+  if (present !== true) return state
+  const target = tabId ?? state.agentTabId
+  if (!target) return state
+  try {
+    return browserController.present(ctx.sessionId, target)
+  } catch (error) {
+    console.warn('[受管浏览器] 展示标签失败:', error)
+    return state
+  }
+}
+
 function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
   return [
     sdk.defineTool({
@@ -976,10 +998,12 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
       name: 'BrowserNavigate',
       label: '在受管浏览器中打开网页',
       description: 'Navigate the Agent working in-app browser tab to a URL or search query. Explicit URLs, bare domains, localhost, and IP addresses are opened directly; other text is searched with Google. The managed browser accepts any URL Chromium can load; downloads and popups stay inside the managed browser, while browser permissions remain blocked.',
-      parameters: Type.Object({ url: Type.String({ description: 'A URL, bare domain, or search query. Explicit URLs and recognizable hostnames open directly; other text is searched with Google. about:blank is supported for an empty page.' }), tabId: Type.Optional(Type.String({ description: 'Optional tab id. Defaults to the Agent working tab, independent of the tab visible to the user.' })) }),
+      parameters: Type.Object({ url: Type.String({ description: 'A URL, bare domain, or search query. Explicit URLs and recognizable hostnames open directly; other text is searched with Google. about:blank is supported for an empty page.' }), tabId: Type.Optional(Type.String({ description: 'Optional tab id. Defaults to the Agent working tab, independent of the tab visible to the user.' })), present: Type.Optional(Type.Boolean({ description: BROWSER_PRESENT_DESCRIPTION })) }),
       async execute(_id, params, signal?: AbortSignal) {
         const args = params as Record<string, unknown>
-        return jsonToolResult(await browserController.navigate(ctx.sessionId, typeof args.url === 'string' ? args.url : '', typeof args.tabId === 'string' ? args.tabId : undefined, signal))
+        const tabId = typeof args.tabId === 'string' ? args.tabId : undefined
+        const state = await browserController.navigate(ctx.sessionId, typeof args.url === 'string' ? args.url : '', tabId, signal)
+        return jsonToolResult(presentBrowserTabIfRequested(ctx, args.present === true, state, tabId))
       },
     }),
     sdk.defineTool({
@@ -1238,17 +1262,19 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
       name: 'BrowserPreviewOpen',
       label: '打开本地网页预览',
       description: 'Open an HTML file or a directory containing index.html from the current project or an authorized attached directory in a dedicated, visible in-app browser tab. This is read-only preview access; do not use it to read arbitrary local files.',
-      parameters: Type.Object({ path: Type.String({ description: 'Absolute or current-workspace-relative path to an HTML file or directory with index.html.' }), tabId: Type.Optional(Type.String({ description: 'Optional tab id. Defaults to a new preview tab.' })) }),
+      parameters: Type.Object({ path: Type.String({ description: 'Absolute or current-workspace-relative path to an HTML file or directory with index.html.' }), tabId: Type.Optional(Type.String({ description: 'Optional tab id. Defaults to a new preview tab.' })), present: Type.Optional(Type.Boolean({ description: BROWSER_PRESENT_DESCRIPTION })) }),
       async execute(_id, params, signal?: AbortSignal) {
         const args = params as Record<string, unknown>
-        return jsonToolResult(await browserController.previewOpen(
+        const tabId = typeof args.tabId === 'string' ? args.tabId : undefined
+        const state = await browserController.previewOpen(
           ctx.sessionId,
           typeof args.path === 'string' ? args.path : '',
-          typeof args.tabId === 'string' ? args.tabId : undefined,
+          tabId,
           ctx.allowedRoots ?? [],
           ctx.agentCwd,
           signal,
-        ))
+        )
+        return jsonToolResult(presentBrowserTabIfRequested(ctx, args.present === true, state, tabId))
       },
     }),
     sdk.defineTool({
@@ -1262,21 +1288,24 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
       name: 'BrowserNewTab',
       label: '新建浏览器标签',
       description: 'Create a new Agent working tab and activate it in the visible in-app browser. Optionally navigate it to any URL Chromium can load.',
-      parameters: Type.Object({ url: Type.Optional(Type.String({ description: 'Optional URL to navigate to.' })) }),
+      parameters: Type.Object({ url: Type.Optional(Type.String({ description: 'Optional URL to navigate to.' })), present: Type.Optional(Type.Boolean({ description: BROWSER_PRESENT_DESCRIPTION })) }),
       async execute(_id, params) {
-        const url = typeof (params as Record<string, unknown>).url === 'string' ? (params as Record<string, string>).url : undefined
-        return jsonToolResult(await browserController.createNewTab(ctx.sessionId, url))
+        const args = params as Record<string, unknown>
+        const url = typeof args.url === 'string' ? args.url : undefined
+        const state = await browserController.createNewTab(ctx.sessionId, url)
+        return jsonToolResult(presentBrowserTabIfRequested(ctx, args.present === true, state))
       },
     }),
     sdk.defineTool({
       name: 'BrowserSelectTab',
       label: '切换浏览器标签',
       description: 'Switch the Agent working tab by tab id and activate that tab in the visible browser panel.',
-      parameters: Type.Object({ tabId: Type.String({ description: 'Tab id from BrowserListTabs or BrowserNewTab.' }) }),
+      parameters: Type.Object({ tabId: Type.String({ description: 'Tab id from BrowserListTabs or BrowserNewTab.' }), present: Type.Optional(Type.Boolean({ description: BROWSER_PRESENT_DESCRIPTION })) }),
       async execute(_id, params) {
-        const value = (params as Record<string, unknown>).tabId
-        const tabId = typeof value === 'string' ? value : ''
-        return jsonToolResult(browserController.selectAgentTab(ctx.sessionId, tabId))
+        const args = params as Record<string, unknown>
+        const tabId = typeof args.tabId === 'string' ? args.tabId : ''
+        const state = browserController.selectAgentTab(ctx.sessionId, tabId)
+        return jsonToolResult(presentBrowserTabIfRequested(ctx, args.present === true, state, tabId))
       },
     }),
     sdk.defineTool({

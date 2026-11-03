@@ -154,6 +154,8 @@ import type {
   BrowserNavigateInput,
   BrowserTabInput,
   BrowserCreateTabInput,
+  BrowserPreviewFrame,
+  BrowserPreviewInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
@@ -2490,6 +2492,8 @@ export function registerIpcHandlers(): void {
     PROXY_IPC_CHANNELS.UPDATE_SETTINGS,
     async (_, config: ProxyConfig): Promise<void> => {
       await saveProxySettings(config)
+      // 代理设置保存后让受管浏览器重新解析代理，避免模型能联网而浏览器仍走旧配置。
+      await browserController.refreshProxy()
     }
   )
 
@@ -2577,6 +2581,14 @@ export function registerIpcHandlers(): void {
     async (event, sessionId: string): Promise<BrowserViewState | null> => {
       await assertBrowserSessionAccess(event.sender.id, sessionId)
       return browserController.getState(sessionId)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_BROWSER_PREVIEW,
+    async (event, input: BrowserPreviewInput): Promise<BrowserPreviewFrame | null> => {
+      if (!input || typeof input.sessionId !== 'string' || typeof input.tabId !== 'string') throw new Error('无效的浏览器预览请求。')
+      await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+      return browserController.getPreviewFrame(input.sessionId, input.tabId)
     },
   )
   ipcMain.handle(

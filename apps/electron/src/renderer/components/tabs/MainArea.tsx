@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import type { BrowserStateChange, BrowserTabFocusChange } from '@proma/shared'
+import type { BrowserPresentRequest, BrowserStateChange, BrowserTabFocusChange } from '@proma/shared'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   tabsAtom,
@@ -32,6 +32,7 @@ import {
   getBrowserSidePanelTab,
 } from '@/atoms/agent-atoms'
 import {
+  browserFocusRequestMapAtom,
   browserPanelMinimizedMapAtom,
   browserPanelOpenMapAtom,
   browserPendingNavigationMapAtom,
@@ -67,6 +68,7 @@ export function MainArea(): React.ReactElement {
   const setBrowserOpenMap = useSetAtom(browserPanelOpenMapAtom)
   const setBrowserMinimizedMap = useSetAtom(browserPanelMinimizedMapAtom)
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
+  const setBrowserFocusRequestMap = useSetAtom(browserFocusRequestMapAtom)
   const setPendingNavigationMap = useSetAtom(browserPendingNavigationMapAtom)
   const setAgentSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
   const browserSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
@@ -129,6 +131,31 @@ export function MainArea(): React.ReactElement {
     if (typeof subscribe !== 'function') return
     return subscribe(focusNativeBrowserTab)
   }, [focusNativeBrowserTab])
+
+  // Agent 主动展示页面：只在用户当前查看的会话内切换到那个网页标签，
+  // 不把其他会话的前台强行抢过来。
+  const presentBrowserTab = React.useCallback((request: BrowserPresentRequest) => {
+    if (activeTab?.type !== 'agent' || activeTab.sessionId !== request.sessionId) return
+    setBrowserMinimizedMap((previous) => {
+      if (!previous.has(request.sessionId)) return previous
+      const next = new Map(previous)
+      next.delete(request.sessionId)
+      return next
+    })
+    store.set(agentSidePanelOpenAtomFamily(request.sessionId), true)
+    setBrowserFocusRequestMap((previous) => {
+      if (previous.get(request.sessionId) === request.tabId) return previous
+      const next = new Map(previous)
+      next.set(request.sessionId, request.tabId)
+      return next
+    })
+  }, [activeTab, setBrowserFocusRequestMap, setBrowserMinimizedMap, store])
+
+  React.useEffect(() => {
+    const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentBrowserPresentRequested
+    if (typeof subscribe !== 'function') return
+    return subscribe(presentBrowserTab)
+  }, [presentBrowserTab])
 
   React.useEffect(() => {
     if (!browserSessionId) return

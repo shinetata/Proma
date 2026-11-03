@@ -48,6 +48,7 @@ import { getAgentSessionMeta, markAgentSessionDeleting, updateAgentSessionMeta }
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
+import { browserController } from './browser-controller'
 import { AgentStreamForwarder } from './agent-stream-forwarder'
 import { AgentStreamRouteRegistry } from './agent-stream-route-registry'
 import { AgentQueueCoordinator } from './agent-queue-coordinator'
@@ -262,6 +263,19 @@ export interface AgentRunExtensions {
 }
 
 /**
+ * 轮次收尾清理 Agent 在受管浏览器里留下的草稿标签。
+ * 用户看过、用户创建和 Agent 主动展示的标签都是保留标签，不受影响；回收失败只记录日志。
+ */
+function reclaimRunScratchResources(sessionId: string): void {
+  try {
+    const closedTabs = browserController.reclaimDraftTabs(sessionId)
+    if (closedTabs > 0) console.log(`[Agent 编排] 轮次结束，已回收 ${closedTabs} 个浏览器草稿标签: ${sessionId}`)
+  } catch (error) {
+    console.warn('[Agent 编排] 回收浏览器草稿标签失败:', error)
+  }
+}
+
+/**
  * 运行 Agent 并流式推送事件到渲染进程
  *
  * 注册 webContents 到 EventBus 映射，委托给 Orchestrator。
@@ -337,6 +351,7 @@ export async function runAgent(
           opts?.backgroundTasksPending === true,
           opts?.stoppedByUser === true,
         )
+        reclaimRunScratchResources(input.sessionId)
       },
       onRunStarted: ({ startedAt, runGeneration }) => {
         eventBus.emit(input.sessionId, {
@@ -376,6 +391,7 @@ export async function runAgent(
       })
     }
     agentQueueCoordinator.onRunComplete(input.sessionId, queueMessageId, false, false)
+    reclaimRunScratchResources(input.sessionId)
   } finally {
     if (streamRoutes.removeIfOwner(input.sessionId, route.ownerId)) {
       streamForwarder.clear(input.sessionId)
@@ -470,6 +486,7 @@ export async function runAgentHeadless(
           opts?.backgroundTasksPending === true,
           opts?.stoppedByUser === true,
         )
+        reclaimRunScratchResources(runInput.sessionId)
       },
       onTitleUpdated: (title) => {
         callbacks.onTitleUpdated(title)
@@ -512,6 +529,7 @@ export async function runAgentHeadless(
     const errorMessage = err instanceof Error ? err.message : '未知错误'
     callbacks.onError(errorMessage)
     callbacks.onComplete()
+    reclaimRunScratchResources(runInput.sessionId)
     eventBus.emit(runInput.sessionId, {
       kind: 'proma_event',
       event: { type: 'run_completed', source: callbacks.source ?? 'bridge', stoppedByUser: false, startedAt },

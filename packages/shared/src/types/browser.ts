@@ -59,6 +59,8 @@ export interface BrowserTabSummary {
   openedByAgent: boolean
   /** 此标签由页面 window.open / target=_blank 创建。 */
   openedByPopup: boolean
+  /** 保留标签不会被轮末回收；用户看过或 Agent 主动展示的标签为 true。 */
+  retained: boolean
 }
 
 export interface BrowserViewState {
@@ -111,4 +113,22 @@ export interface BrowserTabInput {
 export interface BrowserCreateTabInput {
   sessionId: string
   url?: string
+}
+
+/** Agent 请求把某个标签常驻展示给用户；renderer 据此打开并激活对应网页标签。 */
+export interface BrowserPresentRequest {
+  sessionId: string
+  tabId: string
+}
+
+/** 标签缩略图帧；仅主进程渲染并返回 JPEG data URL，不含页面原文。 */
+export interface BrowserPreviewFrame {
+  tabId: string
+  url: string
+  imageDataUrl: string
+}
+
+export interface BrowserPreviewInput {
+  sessionId: string
+  tabId: string
 }
