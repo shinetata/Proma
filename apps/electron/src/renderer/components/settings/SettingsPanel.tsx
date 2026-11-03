@@ -13,7 +13,6 @@ import { getWindowTitlebarDragInsetStyle } from "@/lib/window-titlebar-layout";
 import {
   Settings,
   Radio,
-  Eye,
   Palette,
   Info,
   Globe,
@@ -52,7 +51,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ChannelSettings } from "./ChannelSettings";
-import { VisionRelaySettings } from "./VisionRelaySettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { ProxySettings } from "./ProxySettings";
 import { AppearanceSettings } from "./AppearanceSettings";
@@ -77,7 +75,6 @@ interface TabItem {
 const BASE_TABS: TabItem[] = [
   { id: "general", label: "通用设置", icon: <Settings size={16} /> },
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
-  { id: "vision-relay", label: "视觉助手", icon: <Eye size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
 ];
@@ -118,8 +115,6 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <GeneralSettings />;
     case "channels":
       return <ChannelSettings />;
-    case "vision-relay":
-      return <VisionRelaySettings />;
     case "prompts":
       return <PromptSettings />;
     case "proxy":

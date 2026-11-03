@@ -1037,7 +1037,7 @@ export class AgentOrchestrator {
       // 9.4.1 Fork session JSONL 迁移已在 forkAgentSession 中完成；fork 的 cwd 语义
       // 从源会话继承并持久化，避免历史相对路径在恢复时切换到另一文件根。
 
-      // 必须与 runtime 接收的附加目录保持一致；视觉助手据此限制允许外发的图片路径。
+      // 必须与 runtime 接收的附加目录保持一致；读取本机图片与文件的工具据此限制可访问路径。
       const productivityTools = appSettings.productivityTools
       const vaultUserContext = productivityTools.obsidianEnabled ? getVaultUserContext(sessionId) : null
       const attachedDirectories = collectAttachedDirectories({
@@ -1390,15 +1390,6 @@ export class AgentOrchestrator {
               this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
             },
           )
-        }
-
-        // 视觉助手由用户在全局设置中显式启用并选择外发渠道；在正常会话中直接放行，
-        // 仍由工具服务限制为当前会话/附加目录内的图片。计划模式不执行任何外发操作。
-        if (toolName === 'VisionRelay') {
-          if (currentMode === 'plan') {
-            return { behavior: 'deny' as const, message: '计划模式下不能将本地图片发送给视觉模型，请在计划获批后执行。' }
-          }
-          return { behavior: 'allow' as const }
         }
 
         // 选择 file input 后，站点可能自动把本地文件上传到第三方；即使路径已在会话授权目录内，

@@ -40,7 +40,6 @@ export function getSettings(): AppSettings {
       longTextPasteAsAttachmentEnabled: false,
       richTextRenderingEnabled: false,
       feishuSessionMirror: { mode: 'off' },
-      visionRelay: { enabled: false },
       windowsShellPreference: 'auto',
       agentThinking: { type: 'adaptive' },
       gitAttributionEnabled: true,
@@ -58,6 +57,8 @@ export function getSettings(): AppSettings {
       interfaceVariant?: unknown
       /** PR #1895 早期构建写入的无平台 profile 字段；仅在 Windows 上迁移。 */
       lastTerminalProfile?: unknown
+      /** 已移除的视觉助手配置；读取时消费以阻止旧字段复活。 */
+      visionRelay?: unknown
     }
     // Pi-only：读取时丢弃旧 runtime selector、界面风格与 Claude 白名单，避免下次写回复活。
     const {
@@ -67,6 +68,8 @@ export function getSettings(): AppSettings {
       builtinMcpDisabledIds: _legacyBuiltinMcpDisabledIds,
       interfaceVariant: _legacyInterfaceVariant,
       lastTerminalProfile: legacyLastTerminalProfile,
+      // 视觉助手已随 Chat 模式移除；读取时消费旧字段，避免后续写设置把配置复活。
+      visionRelay: _legacyVisionRelay,
       ...settings
     } = data
     return {
@@ -78,7 +81,6 @@ export function getSettings(): AppSettings {
       longTextPasteAsAttachmentEnabled: data.longTextPasteAsAttachmentEnabled ?? false,
       richTextRenderingEnabled: data.richTextRenderingEnabled ?? false,
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
-      visionRelay: data.visionRelay ?? { enabled: false },
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
       lastWindowsTerminalProfile: process.platform === 'win32'
         ? sanitizeWindowsTerminalProfile(settings.lastWindowsTerminalProfile ?? legacyLastTerminalProfile)
@@ -101,7 +103,6 @@ export function getSettings(): AppSettings {
       longTextPasteAsAttachmentEnabled: false,
       richTextRenderingEnabled: false,
       feishuSessionMirror: { mode: 'off' },
-      visionRelay: { enabled: false },
       windowsShellPreference: 'auto',
       agentThinking: { type: 'adaptive' },
       gitAttributionEnabled: true,

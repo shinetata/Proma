@@ -257,16 +257,6 @@ export interface AgentIslandSettings {
   enabled?: boolean
 }
 
-/**
- * 给无视觉输入能力的 Agent 使用的独立视觉模型路由。
- * 仅保存用户已有渠道和模型的 ID，凭据继续由渠道加密存储管理。
- */
-export interface VisionRelaySettings {
-  enabled: boolean
-  channelId?: string
-  modelId?: string
-}
-
 /** 可在通用设置中关闭的本地生产力工具；缺省保持开启以兼容已有用户。 */
 export interface ProductivityToolsSettings {
   todosEnabled: boolean
@@ -357,8 +347,6 @@ export interface AppSettings {
   voiceDictation?: VoiceDictationPersistedSettings
   /** 飞书 Session 镜像设置：每个 Proma Session 可创建一个仅包含用户与指定 Bot 的飞书群 */
   feishuSessionMirror?: FeishuSessionMirrorSettings
-  /** 无视觉输入能力 Agent 的视觉助手路由 */
-  visionRelay?: VisionRelaySettings
   /** 已确认的受管浏览器风险告知版本；低于当前版本时首次使用会再次要求确认。 */
   browserRiskDisclaimerVersion?: number
   /** Todo、日程与 Obsidian 的可见性和 Agent 工具注入开关，默认全部开启。 */
