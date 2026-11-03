@@ -369,74 +369,41 @@ export interface RecentMessagesResult {
 /**
  * Chat 相关 IPC 通道常量
  */
-export const CHAT_IPC_CHANNELS = {
-  // 对话管理
-  /** 获取对话列表 */
-  LIST_CONVERSATIONS: 'chat:list-conversations',
-  /** 创建对话 */
-  CREATE_CONVERSATION: 'chat:create-conversation',
-  /** 获取对话消息（全部） */
-  GET_MESSAGES: 'chat:get-messages',
-  /** 获取对话最近 N 条消息（分页加载） */
-  GET_RECENT_MESSAGES: 'chat:get-recent-messages',
-  /** 获取指定消息附近的小窗口，供搜索定位避免回传完整历史 */
-  GET_MESSAGES_AROUND: 'chat:get-messages-around',
-  /** 更新对话标题 */
-  UPDATE_TITLE: 'chat:update-title',
-  /** 删除对话 */
-  DELETE_CONVERSATION: 'chat:delete-conversation',
-  /** 更新对话使用的模型/渠道 */
-  UPDATE_MODEL: 'chat:update-conversation-model',
+/** 历史 Chat 存量摘要（Chat 模式已移除，仅保留本机遗留数据的只读视图）。 */
+export interface LegacyChatSummary {
+  /** 对话数量 */
+  conversationCount: number
+  /** 已归档对话数量 */
+  archivedCount: number
+  /** 最近一次对话更新时间；没有记录时为 0 */
+  lastUpdatedAt: number
+  /** 消息文件所在目录 */
+  conversationsDir: string
+}
 
-  // 消息发送
-  /** 发送消息（触发 AI 流式响应） */
-  SEND_MESSAGE: 'chat:send-message',
-  /** 中止生成 */
-  STOP_GENERATION: 'chat:stop-generation',
-  /** 删除消息 */
-  DELETE_MESSAGE: 'chat:delete-message',
-  /** 从指定消息开始截断后续消息（包含该消息） */
-  TRUNCATE_MESSAGES_FROM: 'chat:truncate-messages-from',
-  /** 更新上下文分隔线 */
-  UPDATE_CONTEXT_DIVIDERS: 'chat:update-context-dividers',
-  /** 生成对话标题 */
-  GENERATE_TITLE: 'chat:generate-title',
+/**
+ * 历史 Chat IPC 通道（只读）
+ *
+ * Chat 模式已移除，本机遗留对话仅保留读取能力：设置页展示存量，
+ * 以及交给 Agent 检索旧对话。
+ */
+export const LEGACY_CHAT_IPC_CHANNELS = {
+  /** 获取历史对话列表 */
+  LIST: 'legacy-chat:list-conversations',
+  /** 获取指定对话的全部消息 */
+  GET_MESSAGES: 'legacy-chat:get-messages',
+  /** 获取历史 Chat 存量摘要 */
+  SUMMARY: 'legacy-chat:summary',
+} as const
 
-  // 附件管理
-  /** 保存附件到本地 */
-  SAVE_ATTACHMENT: 'chat:save-attachment',
-  /** 读取附件（返回 base64） */
-  READ_ATTACHMENT: 'chat:read-attachment',
+/** 与 Chat 无关的通用文件资源通道（另存图片/内置资源、打开文件对话框）。 */
+export const FILE_RESOURCE_IPC_CHANNELS = {
   /** 另存图片到用户选择的位置（原生 Save As 对话框） */
-  SAVE_IMAGE_AS: 'chat:save-image-as',
+  SAVE_IMAGE_AS: 'file:save-image-as',
   /** 保存应用内置资源文件到用户选择的位置（原生 Save As 对话框） */
-  SAVE_RESOURCE_FILE_AS: 'chat:save-resource-file-as',
-  /** 删除附件 */
-  DELETE_ATTACHMENT: 'chat:delete-attachment',
+  SAVE_RESOURCE_FILE_AS: 'file:save-resource-file-as',
   /** 打开文件选择对话框 */
-  OPEN_FILE_DIALOG: 'chat:open-file-dialog',
-  /** 提取附件文档的文本内容 */
-  EXTRACT_ATTACHMENT_TEXT: 'chat:extract-attachment-text',
-
-  // 置顶管理
-  /** 切换对话置顶状态 */
-  TOGGLE_PIN: 'chat:toggle-pin',
-  /** 切换对话归档状态 */
-  TOGGLE_ARCHIVE: 'chat:toggle-archive',
-  /** 搜索所有对话消息内容 */
-  SEARCH_MESSAGES: 'chat:search-messages',
-  /** 搜索当前对话的完整消息历史（仅返回命中元数据） */
-  SEARCH_SESSION_MESSAGES: 'chat:search-session-messages',
-
-  // 流式事件（主进程 → 渲染进程推送）
-  /** 内容片段 */
-  STREAM_CHUNK: 'chat:stream:chunk',
-  /** 推理片段 */
-  STREAM_REASONING: 'chat:stream:reasoning',
-  /** 流式完成 */
-  STREAM_COMPLETE: 'chat:stream:complete',
-  /** 流式错误 */
-  STREAM_ERROR: 'chat:stream:error',
-  /** 工具活动事件（记忆工具调用/结果指示） */
-  STREAM_TOOL_ACTIVITY: 'chat:stream:tool-activity',
+  OPEN_FILE_DIALOG: 'file:open-dialog',
+  /** 读取本地文件为 base64（图片预览/复制） */
+  READ_FILE_AS_BASE64: 'file:read-as-base64',
 } as const

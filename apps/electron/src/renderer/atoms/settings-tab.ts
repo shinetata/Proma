@@ -4,7 +4,7 @@
  * 管理设置面板中当前激活的标签页：
  * - general: 通用设置
  * - channels: 渠道配置
- * - proxy: 代理配置
+ * - legacy-chat: 历史 Chat（只读）
  * - appearance: 外观设置
  * - about: 关于
  */
@@ -12,7 +12,7 @@
 import { atom } from 'jotai'
 import type { TabType } from './tab-atoms'
 
-export type SettingsTab = 'general' | 'channels' | 'appearance' | 'about' | 'onboarding' | 'prompts' | 'bots' | 'shortcuts' | 'voice-input' | 'migration' | 'storage'
+export type SettingsTab = 'general' | 'channels' | 'appearance' | 'about' | 'onboarding' | 'legacy-chat' | 'bots' | 'shortcuts' | 'voice-input' | 'migration' | 'storage'
 
 /** 当前设置标签页（不持久化，每次打开设置默认显示渠道） */
 export const settingsTabAtom = atom<SettingsTab>('channels')

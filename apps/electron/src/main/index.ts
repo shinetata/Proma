@@ -90,10 +90,8 @@ import { stopAllTerminals } from './lib/terminal-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { browserController } from './lib/browser-controller'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
-import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
-import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import { getMainWindow as getStoredMainWindow, setMainWindow as setStoredMainWindow } from './lib/main-window-store'
 import {
@@ -814,7 +812,6 @@ async function bootstrap(): Promise<void> {
   }
 
   // 启动 Chat 工具配置文件监听（Agent 创建工具后自动通知渲染进程）
-  safeRun('startChatToolsWatcher', startChatToolsWatcher)
 
   // 自动更新仅在生产环境启用，并由主进程统一检测 Agent 是否空闲。
   if (app.isPackaged && mainWindow) {
@@ -951,13 +948,11 @@ app.on('before-quit', () => {
   stopAllAgents()
   void stopAllTerminals()
   browserController.dispose()
-  stopAllGenerations()
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听
   stopWorkspaceWatcher()
   // 停止 Chat 工具配置文件监听
-  stopChatToolsWatcher()
   // 停止所有 Bridge
   stopBridgeSelfHealing()
   stopAllBridges()

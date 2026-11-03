@@ -45,7 +45,7 @@ import type {
   SessionWorkbenchLayout,
 } from '@proma/shared'
 import { migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
-import { getConversationMessages } from './conversation-manager'
+import { getConversationMessages } from './legacy-chat-store'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @proma/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@proma/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
