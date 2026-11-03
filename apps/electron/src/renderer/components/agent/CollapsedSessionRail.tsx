@@ -103,7 +103,7 @@ function RailRecentButton({
         ? <Clock size={14} className="text-foreground/40" />
         : item.isDelegation
           ? <GitBranch size={14} className="text-foreground/40" />
-          : <span className="text-[13px] font-semibold leading-none">{item.initial}</span>
+          : <span className="text-[16px] font-semibold leading-none">{item.initial}</span>
       }
     </button>
   )
@@ -191,7 +191,7 @@ export function CollapsedSessionRail({
 
   return (
     <div className="mt-2 flex-1 min-h-0 w-full overflow-y-auto scrollbar-thin">
-      <div className="flex flex-col items-center gap-0.5 pb-2">
+      <div className="sidebar-rail-group pb-2">
         {visibleItems.map((item) => (
           <RailRecentButton
             key={`${item.type}-${item.id}`}

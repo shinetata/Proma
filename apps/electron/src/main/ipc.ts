@@ -133,6 +133,8 @@ import type {
   CreatePlanningGroupInput,
   UpdatePlanningGroupInput,
   SnoozePlanningReminderInput,
+  CreatePlanningReminderRequest,
+  UpdatePlanningReminderRequest,
   PlanningNativeSyncEntity,
   PlanningNativeSyncStatus,
   PlanningNativeSyncPermissionResult,
@@ -246,6 +248,9 @@ import {
   listActivePlanningReminders,
   acknowledgePlanningReminder,
   snoozePlanningReminder,
+  createPlanningReminder,
+  updatePlanningReminder,
+  deletePlanningReminder,
   listPlanningSyncProfiles,
   listPlanningNativeConnections,
   connectPlanningNativeConnection,
@@ -2573,7 +2578,9 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions()
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
-      return updateAgentSessionMeta(id, { starred: !current.starred })
+      const starred = !current.starred
+      // 收藏面板按收藏时间排序；取消收藏时保留旧时间戳无意义，一并清除。
+      return updateAgentSessionMeta(id, { starred, starredAt: starred ? Date.now() : undefined })
     }
   )
 
@@ -5589,6 +5596,18 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, async (_, input: SnoozePlanningReminderInput): Promise<PlanningReminder | undefined> => {
     if (!input || typeof input.id !== 'string' || !Number.isInteger(input.minutes) || input.minutes < 1 || input.minutes > 10080) throw new Error('推迟分钟数非法')
     const reminder = snoozePlanningReminder(input.id, input.minutes); if (reminder) broadcastPlanningChanged(['todos', 'calendar_events', 'reminders']); return reminder
+  })
+  ipcMain.handle(PLANNING_IPC_CHANNELS.CREATE_REMINDER, async (_, input: CreatePlanningReminderRequest): Promise<PlanningReminder> => {
+    if (!input || (input.targetType !== 'todo' && input.targetType !== 'calendar_event') || typeof input.targetId !== 'string' || !input.targetId) throw new Error('提醒目标非法')
+    const reminder = createPlanningReminder({ targetType: input.targetType, targetId: input.targetId, triggerAt: input.triggerAt }); broadcastPlanningChanged(['todos', 'calendar_events', 'reminders']); return reminder
+  })
+  ipcMain.handle(PLANNING_IPC_CHANNELS.UPDATE_REMINDER, async (_, input: UpdatePlanningReminderRequest): Promise<PlanningReminder | undefined> => {
+    if (!input || typeof input.id !== 'string' || !input.id) throw new Error('提醒 id 必填')
+    const reminder = updatePlanningReminder(input.id, input.triggerAt); if (reminder) broadcastPlanningChanged(['todos', 'calendar_events', 'reminders']); return reminder
+  })
+  ipcMain.handle(PLANNING_IPC_CHANNELS.DELETE_REMINDER, async (_, id: string): Promise<boolean> => {
+    if (!id || typeof id !== 'string') throw new Error('提醒 id 必填')
+    const deleted = deletePlanningReminder(id); if (deleted) broadcastPlanningChanged(['todos', 'calendar_events', 'reminders']); return deleted
   })
 
   // ===== macOS Calendar / Reminders 同步（授权、受管目标与单向发布） =====

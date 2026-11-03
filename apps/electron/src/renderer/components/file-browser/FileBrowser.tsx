@@ -851,7 +851,7 @@ function FileTreeItem({
         ref={rowRef}
         data-sticky-row={isSticky ? 'true' : undefined}
         className={cn(
-          'file-tree-row relative flex h-8 items-center gap-1 pr-2 text-sm cursor-pointer group',
+          'file-tree-row relative flex h-[var(--workspace-list-row-height,32px)] items-center gap-1 pr-2 text-sm cursor-pointer group',
           isSticky && STICKY_ROW_BASE_CLASS,
         )}
         style={{
@@ -898,6 +898,7 @@ function FileTreeItem({
 
         {/* 文件/文件夹图标 */}
         <FileTypeIcon
+          size={18}
           name={entry.name}
           isDirectory={entry.isDirectory}
           isOpen={expanded}
@@ -915,7 +916,7 @@ function FileTreeItem({
               onBlur={handleBlur}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'w-full bg-transparent text-xs border-b outline-none py-0.5',
+                'w-full bg-transparent text-[15px] border-b outline-none py-0.5',
                 renameError ? 'border-destructive' : 'border-primary/50',
               )}
               maxLength={255}
@@ -928,9 +929,9 @@ function FileTreeItem({
           </div>
         ) : (
           <>
-            <span className="relative z-10 truncate text-xs flex-1">{entry.name}</span>
+            <span className="relative z-10 truncate text-[15px] flex-1">{entry.name}</span>
             {showSessionBadge && entry.scope === 'session' && (
-              <span className="relative z-10 flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+              <span className="relative z-10 flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[12px] leading-none text-muted-foreground">
                 会话文件
               </span>
             )}

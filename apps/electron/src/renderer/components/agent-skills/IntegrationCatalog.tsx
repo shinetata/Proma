@@ -216,9 +216,7 @@ function IntegrationCard({ name, description, capabilities, iconSlug, status, st
   const imageIconSizeClass = iconSlug === 'asset:feishu' ? 'size-[34px]' : 'size-7'
 
   return (
-    <article className={cn(
-      'group relative flex min-h-[144px] flex-col gap-2 rounded-lg bg-card p-3 text-left shadow-md',
-    )}>
+    <article className="group relative flex min-h-[144px] flex-col gap-2 rounded-xl border border-border/60 bg-content-area p-3 text-left transition-[border-color,box-shadow] hover:border-border hover:shadow-sm">
       <div className="flex items-start gap-2">
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           {localIcon

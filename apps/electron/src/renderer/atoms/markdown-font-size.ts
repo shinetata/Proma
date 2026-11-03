@@ -12,9 +12,10 @@ import type { MarkdownFontSize } from '../../types'
 
 /** 各档位对应的根字号（px） */
 const FONT_SIZE_PX: Record<MarkdownFontSize, number> = {
-  small: 13,
-  medium: 15,
-  large: 17,
+  // 与商业版 0.21.88（B0e）一致：14 / 16 / 18
+  small: 14,
+  medium: 16,
+  large: 18,
 }
 
 /** Markdown 字号档位 */
@@ -29,6 +30,8 @@ export const markdownFontSizeAtom = atom<MarkdownFontSize>(DEFAULT_MARKDOWN_FONT
 export function applyMarkdownFontSizeToDOM(size: MarkdownFontSize): void {
   const px = FONT_SIZE_PX[size]
   document.documentElement.style.setProperty('--md-preview-font-size', `${px}px`)
+  // 商业版「文字大小」同时驱动会话列表等阅读文字：以标准档为基准写入偏移量
+  document.documentElement.style.setProperty('--reading-font-size-offset', `${px - FONT_SIZE_PX.medium}px`)
 }
 
 /**

@@ -707,10 +707,10 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       attributes: {
         class: cn(
           'prose dark:prose-invert max-w-none focus:outline-none',
-          'min-h-[101px] w-full text-[15px] leading-[1.6]',
+          'min-h-[101px] w-full text-[length:var(--chat-body-font-size,16px)] leading-[1.6]',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_pre]:rounded-md [&_pre]:p-3',
-          '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-sm [&_code]:text-foreground',
+          '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[length:calc(14px+var(--reading-font-size-offset,0px))] [&_code]:text-foreground',
           '[&_pre_code]:bg-transparent [&_pre_code]:p-0'
         ),
       },

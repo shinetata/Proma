@@ -148,6 +148,8 @@ import type {
   CreatePlanningGroupInput,
   UpdatePlanningGroupInput,
   SnoozePlanningReminderInput,
+  CreatePlanningReminderRequest,
+  UpdatePlanningReminderRequest,
   PlanningNativeSyncEntity,
   PlanningNativeSyncStatus,
   PlanningNativeSyncPermissionResult,
@@ -1220,6 +1222,9 @@ export interface ElectronAPI {
   listActivePlanningReminders: () => Promise<ActivePlanningReminder[]>
   acknowledgePlanningReminder: (id: string) => Promise<PlanningReminder | undefined>
   snoozePlanningReminder: (input: SnoozePlanningReminderInput) => Promise<PlanningReminder | undefined>
+  createPlanningReminder: (input: CreatePlanningReminderRequest) => Promise<PlanningReminder>
+  updatePlanningReminder: (input: UpdatePlanningReminderRequest) => Promise<PlanningReminder | undefined>
+  deletePlanningReminder: (id: string) => Promise<boolean>
   onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => () => void
   onPlanningChanged: (callback: (change: PlanningChange) => void) => () => void
   onPlanningAgentOperation: (callback: (operation: PlanningAgentOperation) => void) => () => void
@@ -2787,6 +2792,9 @@ const electronAPI: ElectronAPI = {
   listActivePlanningReminders: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS),
   acknowledgePlanningReminder: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, id),
   snoozePlanningReminder: (input: SnoozePlanningReminderInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, input),
+  createPlanningReminder: (input: CreatePlanningReminderRequest) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_REMINDER, input),
+  updatePlanningReminder: (input: UpdatePlanningReminderRequest) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_REMINDER, input),
+  deletePlanningReminder: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_REMINDER, id),
   onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => {
     const listener = (_: Electron.IpcRendererEvent, reminders: ActivePlanningReminder[]): void => callback(reminders)
     ipcRenderer.on(PLANNING_IPC_CHANNELS.REMINDER_DUE, listener)

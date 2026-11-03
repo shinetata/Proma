@@ -1,7 +1,15 @@
+/**
+ * 项目记忆（对齐商业版 0.21.88 jtn / Ptn / U9e）。
+ *
+ * - 记忆整页「当前项目」：fullScreen，标题 + 刷新 + 两栏卡片（记忆文件 / 编辑器）。
+ * - Agent 右侧工作区：embedded，只看当前项目，不提供搜索，可展示本次运行的记忆 Diff。
+ * - WorkspaceMemoryTab 保留给能力中心的旧调用（关于你 / 当前项目两段 Tab）。
+ */
+
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { AlertTriangle, Brain, ChevronDown, ChevronRight, FileText, FolderOpen, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileText, FolderOpen, LibraryBig, RefreshCw, TriangleAlert } from 'lucide-react'
 import type { SkillFileNode, WorkspaceMemorySummary } from '@proma/shared'
 import { Button } from '@/components/ui/button'
 import { SettingsCard } from '@/components/settings/primitives'
@@ -18,16 +26,24 @@ type SelectedMemoryFile =
   | { kind: 'agents'; relativePath: 'AGENTS.md'; title: string; absolutePath: string }
   | { kind: 'auto'; relativePath: string; title: string; absolutePath: string }
 
-interface WorkspaceMemoryTabProps {
+export interface ProjectMemoryPanelProps {
   workspaceSlug: string
+  /** 记忆整页显示的项目名。 */
+  projectName?: string
   /** 仅嵌入 Agent 右侧工作区时传入，用于展示当前会话的记忆变更 Diff。 */
   sessionId?: string
   /** 记忆 Diff 查看结束或失效时关闭当前会话的项目记忆 Tab，避免回退到完整记忆。 */
   onCloseChangeView?: () => void
-  /** 能力中心传入的统一搜索词；嵌入组件未传时提供自己的内容搜索。 */
+  /** 能力中心传入的统一搜索词；嵌入组件不提供搜索。 */
   search?: string
   embedded?: boolean
+  /** 记忆整页「当前项目」：放大标题、卡片与编辑器排版。 */
+  fullScreen?: boolean
 }
+
+type WorkspaceMemoryTabProps = Omit<ProjectMemoryPanelProps, 'fullScreen' | 'projectName'>
+
+const AGENTS_TITLE = '项目 AGENTS.md'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -44,7 +60,6 @@ function autoMemoryPath(summary: WorkspaceMemorySummary, relativePath: string): 
   const trimmedDir = directory.replace(/[\\/]+$/, '')
   return `${trimmedDir}${sep}${normalizedRelative}`
 }
-
 
 function filterNodes(nodes: SkillFileNode[], query: string, contentMatchPaths = new Set<string>()): SkillFileNode[] {
   const q = query.trim().toLowerCase()
@@ -63,7 +78,15 @@ function filterNodes(nodes: SkillFileNode[], query: string, contentMatchPaths = 
   return result
 }
 
-function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false, onCloseChangeView }: WorkspaceMemoryTabProps): React.ReactElement {
+export function ProjectMemoryPanel({
+  workspaceSlug,
+  projectName,
+  sessionId,
+  search,
+  embedded = false,
+  fullScreen = false,
+  onCloseChangeView,
+}: ProjectMemoryPanelProps): React.ReactElement {
   const [memoryNavigationRequest, setMemoryNavigationRequest] = useAtom(memoryFileNavigationAtom)
   const workspaceMemoryChanges = useAtomValue(workspaceMemoryChangesAtom)
   const memoryChanges = workspaceMemoryChanges.get(workspaceSlug) ?? []
@@ -83,11 +106,10 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [isDirty, setIsDirty] = React.useState(false)
   const [contentMatches, setContentMatches] = React.useState<Map<string, string>>(new Map())
-  // 右侧项目记忆 Tab 不提供搜索；全屏能力中心仍复用其顶部搜索框。
+  // 右侧项目记忆 Tab 不提供搜索；能力中心仍复用其顶部搜索框。
   const effectiveSearch = embedded ? '' : (search ?? '')
 
-  // 自动保存：用 ref 持有最新的编辑状态，供防抖定时器与"切换文件前 flush"复用，
-  // 避免把 selected/editText 塞进一堆回调的依赖数组里。
+  // 自动保存：用 ref 持有最新的编辑状态，供防抖定时器与"切换文件前 flush"复用。
   const saveStateRef = React.useRef<{ selected: SelectedMemoryFile | null; editText: string; editBaseText: string; isDirty: boolean; saveConflict: boolean }>({
     selected: null,
     editText: '',
@@ -130,10 +152,7 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
     setSaveConflict(false)
   }, [workspaceSlug, refreshSummaryAndTree])
 
-  /**
-   * 把待保存的脏内容立即刷盘（静默，失败才提示）。
-   * 切换文件、刷新、卸载和 Cmd/Ctrl+S 都复用本入口，确保写入顺序一致。
-   */
+  /** 把待保存的脏内容立即刷盘（静默，失败才提示）。切换文件、刷新、卸载和 Cmd/Ctrl+S 复用本入口。 */
   const flushPendingSave = React.useCallback(async (): Promise<void> => {
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current)
@@ -170,12 +189,7 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
     try {
       const currentSummary = knownSummary ?? summary ?? await window.electronAPI.getWorkspaceMemorySummary(workspaceSlug)
       const file = await window.electronAPI.readWorkspaceAgentsMd(workspaceSlug)
-      setSelected({
-        kind: 'agents',
-        relativePath: 'AGENTS.md',
-        title: 'AGENTS.md',
-        absolutePath: currentSummary.agentsMd.path,
-      })
+      setSelected({ kind: 'agents', relativePath: 'AGENTS.md', title: AGENTS_TITLE, absolutePath: currentSummary.agentsMd.path })
       setEditText(file.content ?? '')
       setEditBaseText(file.content ?? '')
       setSaveConflict(false)
@@ -233,7 +247,6 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
   React.useEffect(() => {
     if (!embedded || !activeChangeId || activeMemoryChange) return
     // Diff 对应的临时变更已经被消费或被新变更替换时，不能落回完整记忆列表。
-    // 完整记忆只由用户主动打开项目记忆 Tab 查看。
     onCloseChangeView?.()
   }, [activeChangeId, activeMemoryChange, embedded, onCloseChangeView])
 
@@ -277,7 +290,7 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
     setLoading(true)
     void (async () => {
       try {
-        const [nextSummary, files, claudeFile] = await Promise.all([
+        const [nextSummary, files, agentsFile] = await Promise.all([
           window.electronAPI.getWorkspaceMemorySummary(workspaceSlug),
           window.electronAPI.listWorkspaceAutoMemoryFiles(workspaceSlug),
           window.electronAPI.readWorkspaceAgentsMd(workspaceSlug),
@@ -285,14 +298,9 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
         if (cancelled) return
         setSummary(nextSummary)
         setAutoFiles(files)
-        setSelected({
-          kind: 'agents',
-          relativePath: 'AGENTS.md',
-          title: 'AGENTS.md',
-          absolutePath: nextSummary.agentsMd.path,
-        })
-        setEditText(claudeFile.content ?? '')
-        setEditBaseText(claudeFile.content ?? '')
+        setSelected({ kind: 'agents', relativePath: 'AGENTS.md', title: AGENTS_TITLE, absolutePath: nextSummary.agentsMd.path })
+        setEditText(agentsFile.content ?? '')
+        setEditBaseText(agentsFile.content ?? '')
         setSaveConflict(false)
         setIsDirty(false)
       } catch (err) {
@@ -303,6 +311,51 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
       }
     })()
     return () => { cancelled = true }
+  }, [workspaceSlug])
+
+  // 窗口重新聚焦或 Agent 一轮结束时静默刷新文件树；AGENTS.md 未编辑时同步外部改动（商业版 jtn 同款）。
+  React.useEffect(() => {
+    let cancelled = false
+    let running = false
+    const silentRefresh = async (): Promise<void> => {
+      if (running) return
+      running = true
+      const before = saveStateRef.current
+      try {
+        const [nextSummary, files, agentsFile] = await Promise.all([
+          window.electronAPI.getWorkspaceMemorySummary(workspaceSlug),
+          window.electronAPI.listWorkspaceAutoMemoryFiles(workspaceSlug),
+          before.selected?.kind === 'agents' ? window.electronAPI.readWorkspaceAgentsMd(workspaceSlug) : Promise.resolve(null),
+        ])
+        if (cancelled) return
+        setSummary(nextSummary)
+        setAutoFiles(files)
+        const now = saveStateRef.current
+        if (
+          agentsFile &&
+          !before.isDirty &&
+          !now.isDirty &&
+          !now.saveConflict &&
+          now.selected === before.selected &&
+          now.editText === before.editText
+        ) {
+          setEditText(agentsFile.content ?? '')
+          setEditBaseText(agentsFile.content ?? '')
+        }
+      } catch (err) {
+        if (!cancelled) console.warn('[工作区记忆] 自动刷新失败:', err)
+      } finally {
+        running = false
+      }
+    }
+    const onRefresh = (): void => { void silentRefresh() }
+    window.addEventListener('focus', onRefresh)
+    const unsubscribe = window.electronAPI.onAgentStreamComplete(onRefresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', onRefresh)
+      unsubscribe()
+    }
   }, [workspaceSlug])
 
   // 防抖自动保存：编辑内容变脏后 800ms 内无新输入则自动保存。
@@ -327,9 +380,7 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
     }
   }, [flushPendingSave])
 
-
-  // 文件名之外也可按正文内容检索。只在用户主动搜索时读取文本文件，做 180ms 防抖、
-  // 忽略大文件并限制候选数，避免右侧面板的每次输入触发大量 IPC 或重渲染。
+  // 文件名之外也可按正文内容检索：180ms 防抖、忽略大文件并限制候选数。
   React.useEffect(() => {
     const query = effectiveSearch.trim().toLowerCase()
     if (!query) {
@@ -402,11 +453,27 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
     return <div className="py-20 text-center text-sm text-muted-foreground">加载协作知识中...</div>
   }
 
+  const instructionMigration = summary.instructionMigration
+
   return (
-    <div className={cn('flex flex-col gap-5', embedded && 'h-full min-h-0 gap-3')}>
+    <div className={cn('flex flex-col gap-5', (embedded || fullScreen) && 'h-full min-h-0', embedded && 'gap-3', fullScreen && 'memory-project-fullscreen gap-5')}>
+      {fullScreen && (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-2xl font-semibold tracking-tight">{projectName ?? '当前项目'}</h2>
+            <p className="mt-2 text-[15px] leading-6 text-muted-foreground">
+              项目规则、协作知识与专属偏好 · {summary.autoMemory.fileCount} 个记忆文件
+            </p>
+          </div>
+          <Button variant="outline" className="h-11 gap-2 rounded-lg px-5 text-[15px]" onClick={() => void refresh()}>
+            <RefreshCw className="size-4" />
+            刷新
+          </Button>
+        </div>
+      )}
       {embedded && (
         <div className="flex shrink-0 items-center gap-2 rounded-xl bg-muted/45 px-3 py-2">
-          <Brain className="size-4 shrink-0 text-foreground/65" />
+          <LibraryBig className="size-4 shrink-0 text-foreground/65" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-foreground">项目记忆</div>
             <div className="text-[11px] text-muted-foreground">{summary.autoMemory.fileCount} 个记忆文件</div>
@@ -414,35 +481,24 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
         </div>
       )}
       {embedded && <AgentActionHint action="查找、补充或整理项目记忆" />}
-      {!embedded && summary.instructionMigration && (
-        <SettingsCard divided={false}>
-          <div className="flex items-start gap-3 p-4">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-foreground">
-                {summary.instructionMigration.status === 'blocked' ? '项目能力维护受阻' : '项目协作能力待完善'}
-              </div>
-              <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {summary.instructionMigration.message}
-              </div>
-              <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground/80">
-                {summary.instructionMigration.targetPath}
-              </div>
-            </div>
-          </div>
-        </SettingsCard>
-      )}
 
-      <div className={cn('grid min-h-[520px] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]', embedded && 'min-h-0 flex-1 grid-cols-[180px_minmax(0,1fr)] gap-3')}>
-        <SettingsCard divided={false} className="min-h-0 overflow-hidden">
+      <div
+        className={cn(
+          'grid min-h-[520px] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]',
+          embedded && 'min-h-0 flex-1 grid-cols-[180px_minmax(0,1fr)] gap-3',
+          fullScreen && 'min-h-0 flex-1 grid-rows-[240px_minmax(320px,1fr)] overflow-y-auto md:grid-cols-[300px_minmax(0,1fr)] lg:grid-cols-[300px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]',
+        )}
+      >
+        <SettingsCard divided={false} className={cn('min-h-0 overflow-hidden', fullScreen && 'border border-border/60')}>
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
-              <div className="text-[13px] font-medium text-foreground/75">记忆文件</div>
+            <div className={cn('flex shrink-0 items-center justify-between border-b border-border/50 px-3 py-2', fullScreen && 'min-h-20 px-5 py-4')}>
+              <div className={cn('text-[13px] font-medium text-foreground/75', fullScreen && 'text-base font-semibold text-foreground')}>记忆文件</div>
               <button
                 type="button"
                 title="刷新"
+                aria-label="刷新记忆文件"
                 onClick={() => void refresh()}
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className={cn('rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground', fullScreen && 'hidden')}
               >
                 <RefreshCw size={14} />
               </button>
@@ -453,25 +509,46 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
                 title={migrationReminderTitle}
                 className="mx-2 mt-2 flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300"
               >
-                <AlertTriangle size={13} className="shrink-0" />
+                <TriangleAlert size={13} className="shrink-0" />
                 <span>待处理：{migrationIssues.join('、')}，请检查旧文件。</span>
               </div>
             )}
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              <FileButton
+            {instructionMigration && (
+              <div role="status" className="mx-2 mt-2 space-y-2 rounded-md bg-amber-500/10 px-2 py-2 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
+                <div className="flex gap-1.5">
+                  <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                  <span>{instructionMigration.message}</span>
+                </div>
+                {instructionMigration.sourcePaths.map((sourcePath, index) => (
+                  <button
+                    key={sourcePath}
+                    type="button"
+                    title={sourcePath}
+                    className="block text-left underline underline-offset-2 hover:text-foreground"
+                    onClick={() => void window.electronAPI.showItemInFolder(sourcePath)}
+                  >
+                    定位旧规则{instructionMigration.sourcePaths.length > 1 ? ` ${index + 1}` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className={cn('min-h-0 flex-1 overflow-y-auto p-2', fullScreen && 'p-3')}>
+              <MemoryFileButton
                 active={selected?.kind === 'agents'}
                 icon={<FileText size={14} />}
-                label="项目 AGENTS.md"
-                meta="项目根规则与记忆维护方案"
+                label={AGENTS_TITLE}
+                meta={summary.agentsMd.exists ? '项目规则 · 与 Agent 使用同一文件' : '待建立 · 项目根目录'}
                 onClick={() => void openAgents(summary)}
                 onReveal={() => window.electronAPI.showItemInFolder(summary.agentsMd.path)}
               />
-              <div className="mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              <div className={cn('mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70', fullScreen && 'mt-5 pb-2 text-sm text-muted-foreground')}>
                 长期记忆
               </div>
               <div className="space-y-0.5">
                 {visibleAutoFiles.length === 0 ? (
-                  <div className="px-2 py-6 text-center text-xs text-muted-foreground">没有匹配的记忆文件</div>
+                  <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+                    {effectiveSearch.trim() ? '没有匹配的记忆文件' : '暂无协作记忆，后续按任务证据逐步建立。'}
+                  </div>
                 ) : (
                   visibleAutoFiles.map((node) => (
                     <MemoryTreeNode
@@ -499,18 +576,22 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
           </div>
         </SettingsCard>
 
-        <SettingsCard divided={false} className="min-h-0 overflow-hidden">
+        <SettingsCard divided={false} className={cn('min-h-0 overflow-hidden', fullScreen && 'border border-border/60')}>
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/50 px-4 py-3">
+            <div className={cn('flex shrink-0 items-center justify-between gap-3 border-b border-border/50 px-4 py-3', fullScreen && 'min-h-20 px-6 py-4')}>
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">
+                <div className={cn('truncate text-sm font-medium text-foreground', fullScreen && 'text-lg font-semibold')}>
                   {selected?.title ?? '未选择文件'}
                 </div>
-                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                <div className={cn('mt-0.5 truncate font-mono text-[11px] text-muted-foreground', fullScreen && 'mt-1 text-[13px]')}>
                   {selected?.absolutePath ?? '从左侧选择一个记忆文件'}
                 </div>
               </div>
-
+              {fullScreen && (
+                <span role="status" className="shrink-0 text-sm text-muted-foreground">
+                  {saveConflict ? '需要合并修改' : isDirty ? '等待保存' : '自动保存'}
+                </span>
+              )}
             </div>
             {saveConflict && (
               <div className="mx-4 mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
@@ -530,7 +611,7 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
                   }}
                   onSave={() => { void flushPendingSave() }}
                   readOnly={saveConflict}
-                  className="live-markdown-external-scroll"
+                  className={cn('live-markdown-external-scroll', fullScreen && 'memory-page-editor')}
                 />
               </div>
             ) : (
@@ -544,8 +625,7 @@ function ProjectMemoryPanel({ workspaceSlug, sessionId, search, embedded = false
 }
 
 /**
- * 记忆页：关于你（全局画像）/ 当前项目（项目规则与项目记忆）。
- *
+ * 能力中心沿用的记忆 Tab：关于你（全局画像）/ 当前项目（项目规则与项目记忆）。
  * 嵌入右侧工作区时只显示当前项目，避免在会话里误改跨项目画像。
  */
 export function WorkspaceMemoryTab(props: WorkspaceMemoryTabProps): React.ReactElement {
@@ -557,13 +637,13 @@ export function WorkspaceMemoryTab(props: WorkspaceMemoryTabProps): React.ReactE
     <Tabs
       value={tab}
       onValueChange={(value) => setTab(value as 'global' | 'project')}
-      className="flex h-full min-h-0 flex-col gap-4"
+      className="flex h-full min-h-0 w-full flex-col gap-5"
     >
-      <TabsList className="h-10 shrink-0 self-start rounded-xl p-1">
-        <TabsTrigger value="global" className="h-8 min-w-28 rounded-lg px-5">关于你</TabsTrigger>
-        <TabsTrigger value="project" className="h-8 min-w-28 rounded-lg px-5">当前项目</TabsTrigger>
+      <TabsList className="h-12 shrink-0 self-start rounded-xl p-1">
+        <TabsTrigger value="global" className="h-10 min-w-32 rounded-lg px-7 text-base">关于你</TabsTrigger>
+        <TabsTrigger value="project" className="h-10 min-w-32 rounded-lg px-7 text-base">当前项目</TabsTrigger>
       </TabsList>
-      <TabsContent value="global" forceMount className="m-0 min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
+      <TabsContent value="global" forceMount className="m-0 min-h-0 flex-1 data-[state=inactive]:hidden">
         <GlobalProfilePanel workspaceSlug={props.workspaceSlug} />
       </TabsContent>
       <TabsContent value="project" className="m-0 min-h-0 flex-1 overflow-hidden">
@@ -573,7 +653,8 @@ export function WorkspaceMemoryTab(props: WorkspaceMemoryTabProps): React.ReactE
   )
 }
 
-function FileButton({
+/** 商业版 Ptn：AGENTS.md 行，名称与说明上下排列。 */
+function MemoryFileButton({
   active,
   icon,
   label,
@@ -594,20 +675,22 @@ function FileButton({
         type="button"
         onClick={onClick}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+          'memory-file-row flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
           active ? 'bg-accent text-accent-foreground' : 'text-foreground/80 hover:bg-accent/60',
         )}
       >
         <span className="shrink-0 text-muted-foreground">{icon}</span>
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        {meta && <span className="truncate text-[11px] text-muted-foreground">{meta}</span>}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{label}</span>
+          {meta && <span className="memory-file-meta block text-[11px] text-muted-foreground">{meta}</span>}
+        </span>
       </button>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={onReveal}
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="memory-file-reveal flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             aria-label={`打开 ${label} 所在位置`}
           >
             <FolderOpen size={13} />
@@ -619,6 +702,7 @@ function FileButton({
   )
 }
 
+/** 商业版 U9e：长期记忆文件树节点。 */
 function MemoryTreeNode({
   node,
   level,
@@ -650,8 +734,9 @@ function MemoryTreeNode({
         <button
           type="button"
           onClick={() => isDirectory ? onToggle(node.relativePath) : onOpen(node.relativePath)}
+          title={node.relativePath}
           className={cn(
-            'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] transition-colors',
+            'memory-file-row flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] transition-colors',
             isActive ? 'bg-accent text-accent-foreground' : 'text-foreground/80 hover:bg-accent/60',
           )}
           style={{ paddingLeft }}
@@ -666,7 +751,7 @@ function MemoryTreeNode({
             {contentExcerpt && <span className="block truncate text-[10px] text-muted-foreground" title={contentExcerpt}>{contentExcerpt}</span>}
           </span>
           {!isDirectory && node.size != null && (
-            <span className="shrink-0 text-[10px] text-muted-foreground/75">{formatBytes(node.size)}</span>
+            <span className="memory-file-meta shrink-0 text-[10px] text-muted-foreground/75">{formatBytes(node.size)}</span>
           )}
         </button>
         {!isDirectory && (
@@ -675,7 +760,7 @@ function MemoryTreeNode({
               <button
                 type="button"
                 onClick={() => onReveal(node.relativePath)}
-                className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="memory-file-reveal flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 aria-label={`打开 ${node.name} 所在位置`}
               >
                 <FolderOpen size={13} />

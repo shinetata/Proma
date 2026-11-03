@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -16,7 +16,7 @@ import {
   type TabType,
 } from '@/atoms/tab-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
-import { activeViewAtom } from '@/atoms/active-view'
+import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import {
   currentAgentSessionIdAtom,
@@ -32,6 +32,11 @@ import {
 
 interface OpenSessionOptions {
   bypassSettingsGuard?: boolean
+  /**
+   * 会话打开在哪个视图（商业版 xh 的 view，默认会话首页）。
+   * 收藏、定时任务视图各自持有 Tab 集合，需先切到目标视图再打开会话。
+   */
+  view?: ActiveView
   /** 仅在导航实际执行后调用；设置 Guard 取消时不会调用。 */
   onOpened?: () => void
 }
@@ -40,7 +45,7 @@ type OpenSessionFn = (type: TabType, sessionId: string, title: string, options?:
 
 export function useOpenSession(): OpenSessionFn {
   const store = useStore()
-  const [tabs, setTabs] = useAtom(tabsAtom)
+  const setTabs = useSetAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
@@ -69,11 +74,13 @@ export function useOpenSession(): OpenSessionFn {
             store.get(previewFileMapAtom),
           )
         : undefined
-      const result = openTab(tabs, { type, sessionId, title }, restore)
+      // 先切到目标视图（会换入该视图的 Tab 集合），再在其上打开会话（商业版 xh）。
+      const targetView = options?.view ?? 'conversations'
+      if (store.get(activeViewAtom) !== targetView) setActiveView(targetView)
+      const result = openTab(store.get(tabsAtom), { type, sessionId, title }, restore)
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
       setAutomationForm({ open: false, draft: null })
-      setActiveView('conversations')
 
       if (type === 'agent' || type === 'preview') {
         setCurrentAgentSessionId(sessionId)
@@ -101,6 +108,6 @@ export function useOpenSession(): OpenSessionFn {
 
       options?.onOpened?.()
     },
-    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],
+    [store, setTabs, setActiveTabId, setAutomationForm, setActiveView, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],
   )
 }

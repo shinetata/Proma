@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { Box, ChevronDown, ChevronRight, FolderSearch, Search, SquareTerminal, Undo2, X } from 'lucide-react'
+import { ChevronRight, FolderGit2, FolderSearch, Search, Terminal, Undo2, X } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -284,8 +284,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-      {/* Worktree 分支选择器仅作用于 Git 改动。 */}
+      {/* Worktree 分支选择器仅作用于 Git 改动，固定在列表上方。 */}
       {shouldShowWorktreeSelector && (
         <WorktreeSelector
           sessionId={sessionId}
@@ -296,23 +295,24 @@ export const DiffChangesList = React.memo(function DiffChangesList({
           onOpenTerminal={onOpenWorktreeTerminal}
         />
       )}
+      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
 
       {/* 搜索框 — 有改动文件时才显示 */}
       {shouldShowSearch && (
         <div className="flex-shrink-0 sticky top-0 z-10 bg-content-area px-2 pt-1.5 pb-1">
-          <div className="flex items-center gap-1.5 px-2 h-7 rounded-md bg-muted/50 border border-transparent focus-within:border-primary/40 focus-within:bg-muted/70 transition-colors">
-            <Search className="size-3 text-muted-foreground flex-shrink-0" />
+          <div className="flex items-center gap-1.5 px-2 h-8 rounded-md bg-muted/50 border border-transparent focus-within:border-primary/40 focus-within:bg-muted/70 transition-colors">
+            <Search className="size-4 text-muted-foreground flex-shrink-0" />
             <input
               type="text"
               aria-label="搜索改动文件"
-              className="flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground/40"
+              className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground/70"
               placeholder="搜索改动文件..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             {searchQuery && (
               <>
-                <span className="text-[10px] text-muted-foreground/50 flex-shrink-0 tabular-nums">
+                <span className="text-[12px] text-muted-foreground/50 flex-shrink-0 tabular-nums">
                   {matchedFilesCount}
                 </span>
                 <button
@@ -338,7 +338,8 @@ export const DiffChangesList = React.memo(function DiffChangesList({
         />
       )}
 
-      {!hasAnyVisibleChanges && (
+      {!hasFetched && <DiffChangesLoadingSkeleton />}
+      {!hasAnyVisibleChanges && hasFetched && (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
           <p className="text-[12px] text-center">
             {isGitRepo ? (hasFetched ? '没有文件改动' : '加载中…') : '当前目录不是 Git 仓库，或暂无文件改动'}
@@ -347,59 +348,76 @@ export const DiffChangesList = React.memo(function DiffChangesList({
       )}
       {hasGitChanges && isEmpty && (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
-          <p className="text-[12px] text-center">没有匹配的代码改动</p>
+          <p className="text-[12px] text-center">没有匹配的文件改动</p>
         </div>
       )}
       {hasGitChanges && !isEmpty && (
         <>
           {fileGroups.map((group) => {
             return (
-              <div key={group.gitRoot} className="py-1">
-                <div className="group flex items-center gap-1.5 px-3 py-1.5 text-[14px] font-medium text-muted-foreground">
-                  <span className="min-w-0 flex-1 truncate">{group.dirName}</span>
-                  {group.sources.map((source) => {
-                    const config = DIFF_CHANGE_SOURCE_CONFIG[source]
-                    return (
-                      <span key={source} className={cn('shrink-0 rounded px-1 py-0.5 text-[11px] leading-none', config.color)}>
-                        {config.label}
+              <div key={group.gitRoot} className="py-1" style={{ containerType: 'inline-size', containerName: 'diff-repo' }}>
+                <div className="diff-repo-header mx-2 flex h-[var(--workspace-list-row-height,32px)] min-w-0 items-center gap-1.5 px-2 text-[14px] text-foreground/80">
+                  <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="min-w-[48px] flex-1 truncate" title={group.gitRoot || group.dirName}>{group.dirName}</span>
+                  {group.sources.length > 0 && (
+                    <span
+                      className="flex min-w-0 max-w-[22%] items-center gap-1 text-[12px] font-normal leading-4"
+                      title={group.sources.map((source) => DIFF_CHANGE_SOURCE_CONFIG[source].label).join('、')}
+                    >
+                      {group.sources.length > 1 && (
+                        <span className="diff-repo-sources-compact truncate rounded bg-muted px-1 text-muted-foreground">多来源</span>
+                      )}
+                      <span className={cn('flex min-w-0 items-center gap-1', group.sources.length > 1 && 'diff-repo-sources-full')}>
+                        {group.sources.map((source) => {
+                          const config = DIFF_CHANGE_SOURCE_CONFIG[source]
+                          return (
+                            <span key={source} className={cn('min-w-0 truncate rounded px-1', config.color)}>
+                              {config.label.replace(/文件$/, '')}
+                            </span>
+                          )
+                        })}
                       </span>
-                    )
-                  })}
-                  <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] font-normal tabular-nums">
-                    <span className="text-muted-foreground/60">{group.fileCount} 个文件</span>
+                    </span>
+                  )}
+                  <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[12px] font-normal tabular-nums">
+                    <span className="text-muted-foreground" aria-label={`${group.fileCount} 个文件改动`}>
+                      {group.fileCount}<span className="diff-repo-count-label"> 个文件改动</span>
+                    </span>
                     {group.totalAdditions > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{group.totalAdditions}</span>}
                     {group.totalDeletions > 0 && <span className="text-red-600 dark:text-red-400">-{group.totalDeletions}</span>}
                   </span>
-                  {onOpenDirectoryTerminal && (
+                  <span className="flex shrink-0 items-center">
+                    {onOpenDirectoryTerminal && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={`在 ${group.dirName} 打开终端`}
+                            title={`在 ${group.dirName} 打开终端`}
+                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
+                            onClick={() => onOpenDirectoryTerminal(group.gitRoot, group.dirName)}
+                          >
+                            <Terminal className="size-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="left">在右侧标签中打开终端</TooltipContent>
+                      </Tooltip>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          aria-label={`在 ${group.dirName} 打开终端`}
-                          title={`在 ${group.dirName} 打开终端`}
-                          className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
-                          onClick={() => onOpenDirectoryTerminal(group.gitRoot, group.dirName)}
+                          aria-label={`在文件夹中显示 ${group.dirName}`}
+                          title={`在文件夹中显示 ${group.dirName}`}
+                          className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
+                          onClick={() => handleShowDirectoryInFolder(group.gitRoot)}
                         >
-                          <SquareTerminal className="size-3.5" />
+                          <FolderSearch className="size-3.5" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="left">在右侧标签中打开终端</TooltipContent>
+                      <TooltipContent side="left">在文件夹中显示</TooltipContent>
                     </Tooltip>
-                  )}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label={`在文件夹中显示 ${group.dirName}`}
-                        title={`在文件夹中显示 ${group.dirName}`}
-                        className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
-                        onClick={() => handleShowDirectoryInFolder(group.gitRoot)}
-                      >
-                        <FolderSearch className="size-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">在文件夹中显示</TooltipContent>
-                  </Tooltip>
+                  </span>
                 </div>
                 {group.tree.map((node) => (
                   <GitFileTreeNode
@@ -485,7 +503,7 @@ function GitFileTreeNode({
 
   return (
     <div className="relative">
-      <div className="group mx-2 flex h-8 items-center gap-1.5 rounded-md pr-2 text-[13px] font-medium text-foreground/75 transition-colors hover:bg-accent/50">
+      <div className="group mx-2 flex h-[var(--workspace-list-row-height,32px)] items-center gap-1.5 rounded-md pr-2 text-[14px] text-foreground/85 transition-colors hover:bg-accent/50">
       <button
         type="button"
         aria-expanded={!isCollapsed}
@@ -509,7 +527,7 @@ function GitFileTreeNode({
               className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
               onClick={() => onOpenDirectoryTerminal(directoryPath, node.name)}
             >
-              <SquareTerminal className="size-3.5" />
+              <Terminal className="size-3.5" />
             </button>
           </TooltipTrigger>
           <TooltipContent side="left">在右侧标签中打开终端</TooltipContent>
@@ -616,91 +634,75 @@ function NonGitChangesList({
       cancelled = true
     }
   }, [earlier, sessionId, setNonGitFileChanges])
-  const hasEarlierChanges = earlier.length > 0
-  const title = hasEarlierChanges
-    ? `本会话文件变更 · ${changes.length}`
-    : `本会话文件变更 · 本轮 · ${current.length}`
-  const [isExpanded, setIsExpanded] = React.useState(true)
+  const [expandedSections, setExpandedSections] = React.useState<Record<NonGitSection, boolean>>(DEFAULT_NON_GIT_SECTION_EXPANDED)
+  const toggleSection = React.useCallback((section: NonGitSection) => {
+    setExpandedSections((previous) => ({ ...previous, [section]: !previous[section] }))
+  }, [])
   const contentId = React.useId()
 
   return (
-    <div className="shrink-0 py-1">
-      <button
-        type="button"
-        aria-expanded={isExpanded}
-        aria-controls={contentId}
-        className="group flex min-h-9 w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-medium text-muted-foreground tabular-nums transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-        onClick={() => setIsExpanded((expanded) => !expanded)}
-      >
-        {isExpanded ? (
-          <ChevronDown className="size-3.5 shrink-0 transition-transform duration-150" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="size-3.5 shrink-0 transition-transform duration-150" aria-hidden="true" />
+    <section className="shrink-0 py-1" aria-label="文件变更">
+      <div className="mx-2 flex min-h-8 items-center gap-1">
+        <button
+          type="button"
+          aria-expanded={expandedSections.changes}
+          aria-controls={contentId}
+          onClick={() => toggleSection('changes')}
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-[14px] font-medium text-foreground/80 transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          <span className="min-w-0 flex-1 truncate" title="文件变更">文件变更</span>
+          <span className="shrink-0 text-[12px] font-normal tabular-nums text-muted-foreground" aria-label={`${changes.length} 个文件`}>{changes.length}</span>
+          <ChevronRight
+            className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-150', expandedSections.changes && 'rotate-90')}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+      <div id={contentId} hidden={!expandedSections.changes}>
+        {current.length > 0 && (
+          <NonGitRunGroup title="本轮" changes={current} sessionId={sessionId} expanded={expandedSections.current} onToggle={() => toggleSection('current')} onFileClick={onFileClick} />
         )}
-        <Box className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-        <span className="sr-only">{isExpanded ? '，点击折叠' : '，点击展开'}</span>
-      </button>
-      <div id={contentId} hidden={!isExpanded}>
-        {hasEarlierChanges ? (
-          <>
-            {current.length > 0 && <NonGitRunGroup title="本轮" changes={current} sessionId={sessionId} onFileClick={onFileClick} />}
-            <NonGitRunGroup title="更早" changes={earlier} sessionId={sessionId} onFileClick={onFileClick} collapsible defaultCollapsed />
-          </>
-        ) : (
-          <NonGitFileList changes={current} sessionId={sessionId} onFileClick={onFileClick} />
+        {earlier.length > 0 && (
+          <NonGitRunGroup title="更早" changes={earlier} sessionId={sessionId} expanded={expandedSections.earlier} onToggle={() => toggleSection('earlier')} onFileClick={onFileClick} />
         )}
       </div>
-    </div>
+    </section>
   )
 }
+
+type NonGitSection = 'changes' | 'current' | 'earlier'
+const DEFAULT_NON_GIT_SECTION_EXPANDED: Record<NonGitSection, boolean> = { changes: true, current: true, earlier: false }
 
 function NonGitRunGroup({
   title,
   changes,
   sessionId,
+  expanded,
+  onToggle,
   onFileClick,
-  collapsible = false,
-  defaultCollapsed = false,
 }: {
   title: string
   changes: SessionFileChange[]
   sessionId: string
+  expanded: boolean
+  onToggle: () => void
   onFileClick?: (filePath: string) => void
-  collapsible?: boolean
-  defaultCollapsed?: boolean
 }): React.ReactElement {
-  const [isExpanded, setIsExpanded] = React.useState(!defaultCollapsed)
   const contentId = React.useId()
-  const headerClassName = "flex w-full items-center gap-1.5 px-3 py-1 text-left text-[11px] font-medium text-muted-foreground tabular-nums"
-  const headerContent = (
-    <>
-      {collapsible && (isExpanded ? (
-        <ChevronDown className="size-3 shrink-0 transition-transform duration-150" aria-hidden="true" />
-      ) : (
-        <ChevronRight className="size-3 shrink-0 transition-transform duration-150" aria-hidden="true" />
-      ))}
-      <span>{title} · {changes.length}</span>
-      {collapsible && <span className="sr-only">{isExpanded ? '，点击折叠' : '，点击展开'}</span>}
-    </>
-  )
-
   return (
-    <section className="pb-2">
-      {collapsible ? (
-        <button
-          type="button"
-          aria-expanded={isExpanded}
-          aria-controls={contentId}
-          className={cn(headerClassName, 'hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring')}
-          onClick={() => setIsExpanded((expanded) => !expanded)}
-        >
-          {headerContent}
-        </button>
-      ) : (
-        <div className={headerClassName}>{headerContent}</div>
-      )}
-      <div id={contentId} hidden={collapsible && !isExpanded}>
+    <section className="pb-1" aria-label={`${title}文件变更`}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        className="mx-2 flex min-h-8 w-[calc(100%-1rem)] items-center gap-2 rounded-md px-2 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        onClick={onToggle}
+      >
+        <ChevronRight className={cn('size-3.5 shrink-0 transition-transform duration-150', expanded && 'rotate-90')} aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="shrink-0 tabular-nums" aria-label={`${changes.length} 个文件`}>{changes.length}</span>
+      </button>
+      <div id={contentId} hidden={!expanded}>
         <NonGitFileList changes={changes} sessionId={sessionId} onFileClick={onFileClick} />
       </div>
     </section>
@@ -723,17 +725,17 @@ function NonGitFileList({
         const name = parts.pop() || change.path
         const parent = getCompactFilePath(parts.filter(Boolean).join('/'))
         return (
-          <div key={change.path} className="group flex h-9 items-center hover:bg-primary/5 transition-colors">
+          <div key={change.path} className="group mx-2 flex h-[var(--workspace-list-row-height,32px)] items-center rounded-md pr-1 transition-colors hover:bg-primary/5">
             <Tooltip delayDuration={700}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   onClick={() => onFileClick?.(change.path)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left text-sm"
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-7 pr-2 text-left text-xs"
                 >
-                  <FileTypeIcon name={name} isDirectory={false} size={16} />
-                  <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
-                  {parent && <span className="max-w-[40%] truncate text-[11px] text-muted-foreground">{parent}</span>}
+                  <FileTypeIcon name={name} isDirectory={false} size={18} />
+                  <span className="min-w-0 flex-1 truncate text-[15px]">{name}</span>
+                  {parent && <span className="max-w-[35%] truncate text-[12px] text-muted-foreground/70">{parent}</span>}
                   {change.kind === 'created' && <GitStatusMarker status="untracked" className="ml-2" />}
                 </button>
               </TooltipTrigger>
@@ -760,6 +762,28 @@ function NonGitFileList({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/** 首次读取改动时的占位骨架（商业版 VRt）。 */
+function DiffChangesLoadingSkeleton(): React.ReactElement {
+  return (
+    <div className="mx-2 py-1" role="status" aria-label="正在读取文件改动" aria-busy="true">
+      <span className="sr-only">正在读取文件改动…</span>
+      <div className="motion-safe:animate-pulse" aria-hidden="true">
+        <div className="flex h-[var(--workspace-list-row-height,32px)] items-center justify-between gap-2 px-2">
+          <div className="h-2.5 w-24 rounded bg-muted-foreground/15" />
+          <div className="h-2.5 w-5 rounded bg-muted-foreground/10" />
+        </div>
+        {[0, 1, 2, 3].map((index) => (
+          <div key={index} className="flex h-[var(--workspace-list-row-height,32px)] items-center gap-2 px-2">
+            <div className="size-4 shrink-0 rounded bg-muted-foreground/10" />
+            <div className={cn('h-2.5 rounded bg-muted-foreground/15', index % 2 === 0 ? 'w-2/5' : 'w-3/5')} />
+            <div className="ml-auto h-2 w-10 rounded bg-muted-foreground/10" />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -795,7 +819,7 @@ function FileRow({
       role="button"
       tabIndex={0}
       className={cn(
-        'group/file relative mx-2 flex h-8 items-center rounded-md pr-2 text-[12px] transition-colors',
+        'group/file relative mx-2 flex h-[var(--workspace-list-row-height,32px)] items-center rounded-md pr-2 text-[15px] text-foreground/90 transition-colors',
         isSelected
           ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
           : 'hover:bg-primary/5',
@@ -809,8 +833,8 @@ function FileRow({
         onClick()
       }}
     >
-      <span className="relative flex size-4 shrink-0 items-center justify-center">
-        <FileTypeIcon name={fileName} isDirectory={false} size={16} />
+      <span className="relative flex size-[18px] shrink-0 items-center justify-center">
+        <FileTypeIcon name={fileName} isDirectory={false} size={18} />
         {isUnseen && (
           <span
             aria-hidden="true"
@@ -826,7 +850,7 @@ function FileRow({
       </Tooltip>
 
       {hasLineChanges && (
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums transition-opacity group-hover/file:opacity-0">
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[12px] tabular-nums transition-opacity group-hover/file:opacity-0">
           {file.additions > 0 && (
             <span style={{ color: 'rgb(34 197 94)' }}>+{file.additions}</span>
           )}
@@ -877,7 +901,7 @@ function GitStatusMarker({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className={cn('w-4 shrink-0 text-right text-[11px] font-medium tabular-nums', className, color)}>{label}</span>
+        <span className={cn('w-4 shrink-0 text-right text-[12px] font-medium tabular-nums', className, color)}>{label}</span>
       </TooltipTrigger>
       <TooltipContent side="bottom">{description}</TooltipContent>
     </Tooltip>

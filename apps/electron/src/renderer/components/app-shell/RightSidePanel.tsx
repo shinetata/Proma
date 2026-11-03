@@ -3,7 +3,7 @@
  *
  * 在 Agent 模式下显示文件面板，样式与 LeftSidebar 一致。
  * 从全局 atom 读取当前会话 ID 和路径。
- * 管理「文件 / 代码改动」视图；文件中包含会话文件与项目文件。
+ * 管理「文件 / 文件改动」视图；文件中包含会话文件与项目文件。对应商业版 0.21.88 的 `RZt`。
  */
 
 import * as React from 'react'
@@ -142,7 +142,8 @@ export function RightSidePanel({ width }: { width?: number }): React.ReactElemen
     ? browserState?.activeTabId ? getBrowserSidePanelTab(browserState.activeTabId) : 'files'
     : storedTab === 'preview'
       ? currentPreviewFile ? getPreviewSidePanelTab(getPreviewFileId(currentPreviewFile)) : 'files'
-      : storedTab
+      // 商业版 RG：问答页签已移除，旧状态回落到文件。
+      : storedTab === 'chat' ? 'files' : storedTab
 
   return (
     <SidePanel

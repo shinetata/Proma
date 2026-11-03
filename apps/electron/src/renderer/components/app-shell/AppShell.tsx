@@ -1,7 +1,7 @@
 /**
  * AppShell - 应用主布局容器
  *
- * 布局结构：[LeftSidebar 可折叠] | [MainArea: TabBar + TabContent] | [RightSidePanel 可折叠]
+ * 布局结构（复刻商业版 0.21.88 `_ln`）：[rail + 侧栏面板] | [MainArea] | [RightSidePanel 可折叠]
  *
  * MainArea 支持多标签页，Settings 视图为独立覆盖。
  */
@@ -16,7 +16,7 @@ import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { clampRightPanelWidth, getRightPanelMaxWidth } from './right-panel-layout'
 import { automationFormAtom } from '@/atoms/automation-atoms'
-import { activeViewAtom } from '@/atoms/active-view'
+import { activeViewAtom, isSidebarPanelView, isUtilityRailOnlyView } from '@/atoms/active-view'
 import { productivityToolsAtom } from '@/atoms/ui-preferences'
 import { useProjectActions } from '@/hooks/useProjectActions'
 import { WorkspaceMemoryChangeObserver } from '@/components/agent-skills/WorkspaceMemoryChangeObserver'
@@ -24,6 +24,7 @@ import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { detectIsWindows } from '@/lib/platform'
+import { SIDEBAR_RAIL_WIDTH } from './sidebar-rail'
 import { getWindowTitlebarContentInsetClass } from '@/lib/window-titlebar-layout'
 import { cn } from '@/lib/utils'
 import { Toaster } from '@/components/ui/sonner'
@@ -62,11 +63,27 @@ function getRightPanelMinWidth(isTodoTab: boolean, isExpandedWorkspace: boolean)
       : MIN_RIGHT_PANEL_WIDTH
 }
 
-const MIN_LEFT_SIDEBAR_WIDTH = 240
+// 商业版 M1e：持久化宽度限制在 300–420。
+const MIN_LEFT_SIDEBAR_WIDTH = 300
 const MAX_LEFT_SIDEBAR_WIDTH = 420
+/** 视口超过该宽度才显示左侧拖拽手柄（商业版 N > 1366）。 */
+const LEFT_SIDEBAR_RESIZE_MIN_VIEWPORT = 1366
 
 function clampLeftSidebarWidth(width: number): number {
   return Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, width))
+}
+
+/** 按视口限制左栏实际宽度：≤1100 → 240，≤1366 → 280，否则 420（商业版 Wtn）。 */
+function getViewportLeftSidebarWidth(width: number, viewportWidth: number): number {
+  const cap = viewportWidth <= 1100 ? 240 : viewportWidth <= 1366 ? 280 : MAX_LEFT_SIDEBAR_WIDTH
+  return Math.min(width, cap)
+}
+
+function detectIsLinux(): boolean {
+  const platform = typeof navigator !== 'undefined'
+    && (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform
+  if (typeof platform === 'string' && platform.toLowerCase().includes('linux')) return true
+  return typeof navigator !== 'undefined' && /linux/i.test(navigator.platform || '')
 }
 
 export function AppShell(): React.ReactElement {
@@ -120,8 +137,14 @@ export function AppShell(): React.ReactElement {
       return changed ? next : previous
     })
   }, [activeView, productivityTools.calendarEnabled, productivityTools.obsidianEnabled, productivityTools.todosEnabled, setActiveView, setAgentDiffPanelTabs, setAgentSessionComponentOpenMap])
-  const showRightPanel = !!currentSessionId && !(automationForm.open && activeView !== 'conversations') && activeView !== 'planning' && activeView !== 'agent-skills'
+  // 商业版 _ln：只有 conversations / favorites / automations / vault 带右侧工作区；定时任务表单打开时隐藏。
+  const showRightPanel = !!currentSessionId && !(automationForm.open && activeView === 'automations') && isSidebarPanelView(activeView)
+  // Todo / 日程 / 记忆 / Skills / Obsidian 等整页视图左侧只保留 60px rail（商业版 PZt）。
+  const utilityRailOnly = isUtilityRailOnlyView(activeView)
   const isWindows = React.useMemo(() => detectIsWindows(), [])
+  // Windows / Linux 使用自绘标题栏，chrome 表面去掉顶部描边、rail 去掉红绿灯留白（商业版 proma-desktop-app-shell）。
+  const isDesktopAppShell = React.useMemo(() => isWindows || detectIsLinux(), [isWindows])
+  const [viewportWidth, setViewportWidth] = React.useState(() => window.innerWidth)
 
   // 左侧边栏可拖拽宽度
   const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
@@ -129,6 +152,7 @@ export function AppShell(): React.ReactElement {
   const leftDragging = React.useRef(false)
   const [isDraggingLeftSidebar, setIsDraggingLeftSidebar] = React.useState(false)
   const clampedLeftSidebarWidth = clampLeftSidebarWidth(leftSidebarWidth)
+  const effectiveLeftSidebarWidth = getViewportLeftSidebarWidth(clampedLeftSidebarWidth, viewportWidth)
 
   React.useEffect(() => {
     if (clampedLeftSidebarWidth !== leftSidebarWidth) {
@@ -141,7 +165,7 @@ export function AppShell(): React.ReactElement {
     leftDragging.current = true
     setIsDraggingLeftSidebar(true)
     const startX = e.clientX
-    const startWidth = clampedLeftSidebarWidth
+    const startWidth = effectiveLeftSidebarWidth
     // 记录最新光标位置，rAF 回调读取它而非调度时捕获的旧事件，避免快拖时坐标滞后
     let latestClientX = startX
     let rafId = 0
@@ -176,7 +200,7 @@ export function AppShell(): React.ReactElement {
 
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [clampedLeftSidebarWidth, setLeftSidebarWidth])
+  }, [effectiveLeftSidebarWidth, setLeftSidebarWidth])
 
   // 右侧工作区可拖拽到应用视口的 3/5；每个 Session 恢复自己的普通与宽视图布局。
   const agentSessions = useAtomValue(agentSessionsAtom)
@@ -185,7 +209,6 @@ export function AppShell(): React.ReactElement {
   const setFileBrowserScrollTopMap = useSetAtom(fileBrowserScrollTopMapAtom)
   const setRightPanelSplitMap = useSetAtom(agentSidePanelSplitMapAtom)
   const [rightPanelLayout, setRightPanelLayout] = useAtom(agentSidePanelLayoutAtomFamily(currentSessionId ?? ''))
-  const [viewportWidth, setViewportWidth] = React.useState(() => window.innerWidth)
   const dragging = React.useRef(false)
   const currentSessionIdRef = React.useRef(currentSessionId)
   const rightPanelDragCleanup = React.useRef<(() => void) | null>(null)
@@ -200,7 +223,7 @@ export function AppShell(): React.ReactElement {
   const rightPanelMinimumWidth = activeRightPanelSplit
     ? MIN_SPLIT_PANEL_WIDTH
     : ordinaryRightPanelMinimumWidth
-  const leftSidebarContentWidth = sidebarCollapsed ? COLLAPSED_LEFT_SIDEBAR_WIDTH : clampedLeftSidebarWidth
+  const leftSidebarContentWidth = utilityRailOnly || sidebarCollapsed ? COLLAPSED_LEFT_SIDEBAR_WIDTH : effectiveLeftSidebarWidth
   // 经典界面已移除，侧栏始终只占内容宽度与分隔线。
   const leftSidebarOccupiedWidth = leftSidebarContentWidth + 1
   // 右侧面板是完整的工作区：不论当前为文件、改动或扩展 Tab，继续向左拖拽时
@@ -292,7 +315,7 @@ export function AppShell(): React.ReactElement {
       const normalMaximumWidth = getRightPanelMaxWidth(viewportWidth, leftSidebarOccupiedWidth)
       const shouldCollapseSidebar = canAutoCollapseSidebarForRightPanel && requestedWidth > normalMaximumWidth
       const nextSidebarCollapsed = sidebarCollapsedDuringDrag || shouldCollapseSidebar
-      const nextLeftSidebarContentWidth = nextSidebarCollapsed ? COLLAPSED_LEFT_SIDEBAR_WIDTH : clampedLeftSidebarWidth
+      const nextLeftSidebarContentWidth = utilityRailOnly || nextSidebarCollapsed ? COLLAPSED_LEFT_SIDEBAR_WIDTH : effectiveLeftSidebarWidth
       const nextLeftSidebarOccupiedWidth = nextLeftSidebarContentWidth + 1
       const allowFullAvailableWidth = nextSidebarCollapsed && (
         activeRightPanelSplit !== null || isExpandedRightWorkspace || rightPanelLayout.hasOpenedWideWorkspace
@@ -351,31 +374,33 @@ export function AppShell(): React.ReactElement {
     rightPanelDragCleanup.current = cancelDrag
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [activeRightPanelSplit, canAutoCollapseSidebarForRightPanel, clampedLeftSidebarWidth, currentSessionId, displayedRightPanelWidth, isExpandedRightWorkspace, leftSidebarOccupiedWidth, rightPanelLayout.hasOpenedWideWorkspace, rightPanelMinimumWidth, setRightPanelLayout, setSidebarCollapsed, sidebarCollapsed, usesWidePanelLayout, viewportWidth])
+  }, [activeRightPanelSplit, canAutoCollapseSidebarForRightPanel, effectiveLeftSidebarWidth, utilityRailOnly, currentSessionId, displayedRightPanelWidth, isExpandedRightWorkspace, leftSidebarOccupiedWidth, rightPanelLayout.hasOpenedWideWorkspace, rightPanelMinimumWidth, setRightPanelLayout, setSidebarCollapsed, sidebarCollapsed, usesWidePanelLayout, viewportWidth])
 
   return (
     <>
       <WindowControls />
 
-      <div className="shell-bg relative h-screen w-screen overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
+      <div className={cn('shell-bg relative h-screen w-screen overflow-hidden bg-[hsl(var(--sidebar-surface))]', isDesktopAppShell && 'proma-desktop-app-shell')}>
         <div
           ref={appContentRef}
           className={cn('flex h-full w-full', getWindowTitlebarContentInsetClass(isWindows), settingsOpen && 'hidden')}
         >
-            {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
-            <div className="relative z-[60] crt-sidebar">
-              <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
-              {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
-              {!sidebarCollapsed && (
+            {/* 左侧：rail 常驻，侧栏面板可折叠；宽屏才允许拖拽调整宽度 */}
+            <div className="relative z-[70] crt-sidebar">
+              <LeftSidebar
+                width={utilityRailOnly ? SIDEBAR_RAIL_WIDTH : effectiveLeftSidebarWidth}
+                noTransition={isDraggingLeftSidebar}
+                utilityRailOnly={utilityRailOnly}
+              />
+              {!sidebarCollapsed && !utilityRailOnly && viewportWidth > LEFT_SIDEBAR_RESIZE_MIN_VIEWPORT && (
                 <div
-                  className={cn(
-                    'absolute right-0 top-0 bottom-0 w-4 translate-x-1/2 cursor-col-resize hover:bg-primary/5 active:bg-primary/50 transition-colors z-20'
-                  )}
+                  className="group/resize titlebar-no-drag absolute right-0 top-0 bottom-0 z-20 w-4 translate-x-1/2 cursor-col-resize transition-[background-color] hover:bg-primary/[0.04] active:bg-primary/[0.08]"
                   onMouseDown={handleLeftSidebarMouseDown}
-                />
+                >
+                  <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground/0 transition-[background-color] group-hover/resize:bg-foreground/15 group-active/resize:bg-primary/50" />
+                </div>
               )}
             </div>
-            <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-border/80 dark:bg-border/70" />
 
             {/* 中间容器：relative z-[60] 使其在 z-50 拖动区域之上 */}
             <div className="flex-1 min-w-0 relative z-[60]">
@@ -394,11 +419,11 @@ export function AppShell(): React.ReactElement {
                 {/* 拖拽手柄 */}
                 {isPanelOpen && (
                   <div
-                    className={cn(
-                      'absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors z-20'
-                    )}
+                    className="group/resize absolute left-0 top-0 bottom-0 z-20 w-4 -translate-x-1/2 cursor-col-resize transition-[background-color] hover:bg-primary/[0.04] active:bg-primary/[0.08]"
                     onMouseDown={handleMouseDown}
-                  />
+                  >
+                    <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground/0 transition-[background-color] group-hover/resize:bg-foreground/15 group-active/resize:bg-primary/50" />
+                  </div>
                 )}
                 <RightSidePanel width={displayedRightPanelWidth} />
               </div>

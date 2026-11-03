@@ -22,13 +22,18 @@ import {
   tabsAtom,
 } from '@/atoms/tab-atoms'
 import { agentDiffPanelTabAtom, agentSidePanelOpenAtomFamily, getPreviewSidePanelTab } from '@/atoms/agent-atoms'
+import { inlinePreviewMapAtom, type InlinePreviewSource } from './inline-preview'
 
 /** Jotai store 类型（从 useStore 推导，避免直接 import 内部 Store 类型） */
 type JotaiStore = ReturnType<typeof useStore>
 
-/** 兼容旧调用方；右侧工作区方案下不再使用 mode。 */
+/**
+ * `inline` 在「文件 / 文件改动」页签内就地预览（需同时给出 source）；
+ * 其余取值兼容旧调用方，均打开独立的预览 Tab。
+ */
 export interface OpenPreviewOptions {
-  mode?: 'tab' | 'split'
+  mode?: 'tab' | 'split' | 'inline'
+  source?: InlinePreviewSource
 }
 
 /**
@@ -68,11 +73,35 @@ export function openPreviewInStore(store: JotaiStore, sessionId: string, file: P
   })
 }
 
+/** 在「文件 / 文件改动」页签内就地打开预览（商业版 WIt）。 */
+export function openInlinePreviewInStore(store: JotaiStore, sessionId: string, source: InlinePreviewSource, file: PreviewFile): void {
+  store.set(inlinePreviewMapAtom, (prev) => {
+    const next = new Map(prev)
+    next.set(sessionId, { source, file })
+    return next
+  })
+  store.set(previewFileMapAtom, (prev) => {
+    const next = new Map(prev)
+    next.set(sessionId, file)
+    return next
+  })
+  store.set(agentSidePanelOpenAtomFamily(sessionId), true)
+  store.set(agentDiffPanelTabAtom, (prev) => {
+    const next = new Map(prev)
+    next.set(sessionId, source)
+    return next
+  })
+}
+
 export function useOpenPreview() {
   const store = useStore()
 
   return React.useCallback(
-    (sessionId: string, file: PreviewFile, _options?: OpenPreviewOptions) => {
+    (sessionId: string, file: PreviewFile, options?: OpenPreviewOptions) => {
+      if (options?.mode === 'inline' && options.source) {
+        openInlinePreviewInStore(store, sessionId, options.source, file)
+        return
+      }
       openPreviewInStore(store, sessionId, file)
     },
     [store],

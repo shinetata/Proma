@@ -125,6 +125,25 @@ const CodeLine = React.memo(function CodeLine({ tokens, rawLine }: CodeLineProps
   )
 })
 
+// ===== 主题：跟随 <html> 的 dark 类切换 github-light / github-dark =====
+
+type CodeTheme = 'github-light' | 'github-dark'
+
+function readCodeTheme(): CodeTheme {
+  return typeof document === 'undefined' || document.documentElement.classList.contains('dark') ? 'github-dark' : 'github-light'
+}
+
+function useCodeTheme(): CodeTheme {
+  const [theme, setTheme] = React.useState<CodeTheme>(readCodeTheme)
+  React.useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return
+    const observer = new MutationObserver(() => setTheme(readCodeTheme()))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
+  return theme
+}
+
 // ===== 主组件 =====
 
 /**
@@ -138,6 +157,7 @@ const CodeLine = React.memo(function CodeLine({ tokens, rawLine }: CodeLineProps
 export function CodeBlock({ children, onCopy }: CodeBlockProps): React.ReactElement {
   const { language, code } = React.useMemo(() => extractCodeInfo(children), [children])
   const [copied, setCopied] = React.useState(false)
+  const theme = useCodeTheme()
 
   const trimmedCode = code.replace(/\n$/, '')
   const langOrText = language || 'text'
@@ -145,7 +165,7 @@ export function CodeBlock({ children, onCopy }: CodeBlockProps): React.ReactElem
 
   // ---- 节流 token 高亮 ----
   const [tokenResult, setTokenResult] = React.useState<HighlightTokensResult | null>(
-    () => highlightToTokens({ code: trimmedCode, language: langOrText })
+    () => highlightToTokens({ code: trimmedCode, language: langOrText, theme })
   )
   const pendingCodeRef = React.useRef(trimmedCode)
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -159,7 +179,7 @@ export function CodeBlock({ children, onCopy }: CodeBlockProps): React.ReactElem
 
     const doHighlight = () => {
       const currentCode = pendingCodeRef.current
-      const result = highlightToTokens({ code: currentCode, language: langOrText })
+      const result = highlightToTokens({ code: currentCode, language: langOrText, theme })
       if (result) {
         lastUpdateRef.current = Date.now()
         setTokenResult(result)
@@ -167,7 +187,7 @@ export function CodeBlock({ children, onCopy }: CodeBlockProps): React.ReactElem
     }
 
     // 同步路径可用时
-    const syncResult = highlightToTokens({ code: trimmedCode, language: langOrText })
+    const syncResult = highlightToTokens({ code: trimmedCode, language: langOrText, theme })
     if (syncResult) {
       if (elapsed >= THROTTLE_MS) {
         // 距上次更新已超过节流间隔，立即执行
@@ -186,7 +206,7 @@ export function CodeBlock({ children, onCopy }: CodeBlockProps): React.ReactElem
     // 兜底：高亮器尚未初始化，订阅就绪事件，初始化完成后用同步路径上色
     const unsubscribe = onHighlighterReady(() => doHighlight())
     return () => unsubscribe()
-  }, [trimmedCode, langOrText])
+  }, [trimmedCode, langOrText, theme])
 
   // 清理节流定时器
   React.useEffect(() => {
@@ -225,7 +245,7 @@ export function CodeBlock({ children, onCopy }: CodeBlockProps): React.ReactElem
       <pre
         className="shiki overflow-x-auto p-4 m-0 text-[0.875em] leading-[1.6] bg-[hsl(var(--code-bg))]"
         style={{
-          color: tokenResult?.fgColor ?? '#e1e4e8',
+          color: tokenResult?.fgColor ?? (theme === 'github-light' ? '#24292e' : '#e1e4e8'),
           borderRadius: '0 0 8px 8px',
         }}
       >

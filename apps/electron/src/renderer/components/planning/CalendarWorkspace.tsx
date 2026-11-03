@@ -18,6 +18,10 @@ import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { PlanningFloatingInspector } from '@/components/planning/PlanningFloatingInspector'
 import { PlanningGroupManager } from '@/components/planning/PlanningGroupManager'
 import { PlanningNativeSyncControl } from '@/components/planning/PlanningNativeSyncControl'
+import { PlanningReminderSection } from '@/components/planning/PlanningReminderSection'
+
+/** 日程工具栏与页头一致的水平留白（商业版 jR）。 */
+const CALENDAR_TOOLBAR_PADDING = 'px-5 sm:px-6 xl:px-8'
 
 const DEFAULT_EVENT_DURATION = 60 * 60 * 1000
 const DRAG_SNAP_MINUTES = 15
@@ -187,6 +191,7 @@ export function CalendarWorkspace(): React.ReactElement {
     if (!requestedSelectedId) return
     const event = events.find((candidate) => candidate.id === requestedSelectedId)
     if (!event) return
+    setSelectedTodoId(null)
     setSelectedId(event.id)
     setCursor(event.startAt)
     setRequestedSelectedId(null)
@@ -404,17 +409,21 @@ export function CalendarWorkspace(): React.ReactElement {
   }
 
   return (
-    <section ref={calendarRef} className="relative flex h-full min-h-[560px] flex-col overflow-hidden rounded-none border border-border/60 bg-card">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3 sm:px-6">
+    <section ref={calendarRef} className="relative flex h-full min-h-[560px] flex-col overflow-hidden bg-content-area">
+      <div className={cn('flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/60 py-3', CALENDAR_TOOLBAR_PADDING)}>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-md border border-border/60 p-0.5">
-            <Button type="button" variant={mode === 'week' ? 'secondary' : 'ghost'} size="sm" className="h-10" onClick={() => setMode('week')}>周</Button>
-            <Button type="button" variant={mode === 'month' ? 'secondary' : 'ghost'} size="sm" className="h-10" onClick={() => setMode('month')}>月</Button>
+          <div className="flex h-9 shrink-0 items-center gap-px rounded-md border border-border/60 p-px">
+            <Button type="button" variant={mode === 'week' ? 'secondary' : 'ghost'} size="sm" className="relative h-8 min-w-8 px-2.5 before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']" onClick={() => setMode('week')}>周</Button>
+            <Button type="button" variant={mode === 'month' ? 'secondary' : 'ghost'} size="sm" className="relative h-8 min-w-8 px-2.5 before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']" onClick={() => setMode('month')}>月</Button>
           </div>
-          <PlanningGroupManager scope="calendar" groups={groups} itemLabel="日程" getUsageCount={(groupId) => calendarGroupUsageCounts.get(groupId) ?? 0} onCreate={createCalendarGroup} onRename={renameCalendarGroup} onDelete={deleteCalendarGroup} trigger={<Button type="button" variant="ghost" className="h-10 gap-1.5 px-2.5 text-sm"><Folder size={16} />分组</Button>} />
-          <PlanningNativeSyncControl entity="calendar" />
+          <PlanningNativeSyncControl entity="calendar" triggerClassName="relative h-9 text-xs before:absolute before:inset-x-0 before:-inset-y-0.5 before:content-['']" />
         </div>
-        <div className="flex items-center gap-1.5"><Button type="button" variant="ghost" size="icon" className="size-10" aria-label="上一段时间" onClick={() => navigate(-1)}><ChevronLeft size={17} /></Button><h2 className="min-w-44 text-center text-sm font-semibold tabular-nums">{heading}</h2><Button type="button" variant="ghost" size="icon" className="size-10" aria-label="下一段时间" onClick={() => navigate(1)}><ChevronRight size={17} /></Button></div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button type="button" variant="ghost" size="icon" className="relative size-9 before:absolute before:-inset-0.5 before:content-['']" aria-label="上一段时间" onClick={() => navigate(-1)}><ChevronLeft size={17} /></Button>
+          <h2 className="min-w-44 text-center text-sm font-normal tabular-nums">{heading}</h2>
+          <Button type="button" variant="ghost" size="icon" className="relative size-9 before:absolute before:-inset-0.5 before:content-['']" aria-label="下一段时间" onClick={() => navigate(1)}><ChevronRight size={17} /></Button>
+          <PlanningGroupManager scope="calendar" groups={groups} itemLabel="日程" getUsageCount={(groupId) => calendarGroupUsageCounts.get(groupId) ?? 0} onCreate={createCalendarGroup} onRename={renameCalendarGroup} onDelete={deleteCalendarGroup} trigger={<Button type="button" variant="ghost" className="relative h-9 gap-1.5 px-2.5 text-xs before:absolute before:inset-x-0 before:-inset-y-0.5 before:content-['']"><Folder size={16} />分组管理</Button>} />
+        </div>
       </div>
       <div className="relative grid min-h-0 flex-1 grid-cols-1">
         <div ref={calendarBodyRef} className="min-h-0 overflow-hidden">
@@ -1102,13 +1111,13 @@ function CalendarEventDetail({ event, groups, tags, todos, onClose, onSave, onDe
         : saveState === 'conflict' ? '此日程已在其他窗口更新'
           : '已自动保存'
 
-  return <PlanningFloatingInspector label="日程详情" onClose={handleClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">日程详情</p><div className="mt-1 flex items-center gap-2"><p className="text-xs text-muted-foreground">{statusLabel}</p>{saveState === 'conflict' && <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={reloadLatest}>重新加载</Button>}</div></div><CalendarEventFields draft={draft} setDraft={setDraft} groups={groups} tags={tags} todos={todos} /><div className="flex items-center justify-between border-t border-border/60 pt-4"><Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void onDelete(event)}><Trash2 size={15} />删除</Button><span className="text-xs text-muted-foreground">编辑后自动保存</span></div></div></PlanningFloatingInspector>
+  return <PlanningFloatingInspector label="日程详情" onClose={handleClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">日程详情</p><div className="mt-1 flex items-center gap-2"><p className="text-xs text-muted-foreground">{statusLabel}</p>{saveState === 'conflict' && <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={reloadLatest}>重新加载</Button>}</div></div><CalendarEventFields draft={draft} setDraft={setDraft} groups={groups} tags={tags} todos={todos} /><PlanningReminderSection key={event.id} targetType="calendar_event" targetId={event.id} reminders={event.reminders} referenceAt={event.startAt} /><div className="flex items-center justify-between border-t border-border/60 pt-4"><Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void onDelete(event)}><Trash2 size={15} />删除</Button><span className="text-xs text-muted-foreground">编辑后自动保存</span></div></div></PlanningFloatingInspector>
 }
 
 function CalendarTodoDetail({ todo, onClose }: { todo: Todo; onClose: () => void }): React.ReactElement {
   const priority = todo.priority === 'high' ? '高优先级' : todo.priority === 'low' ? '低优先级' : '中优先级'
   const plannedAt = todo.dueAt ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(todo.dueAt) : undefined
-  return <PlanningFloatingInspector label="Todo 详情" onClose={onClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Todo 详情</p><h3 className="mt-2 text-lg font-semibold leading-snug">{todo.title}</h3></div><div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground"><span className="rounded-md bg-muted px-2 py-1">{priority}</span>{plannedAt && <span className="rounded-md bg-muted px-2 py-1">计划 {plannedAt}</span>}{todo.group && <span className="rounded-md bg-muted px-2 py-1">{todo.group.name}</span>}{todo.tags.map((tag) => <span key={tag.id} className="rounded-md bg-muted px-2 py-1">#{tag.name}</span>)}</div><section><h4 className="mb-2 text-sm font-medium">更多信息</h4><p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{todo.notes || '暂无更多信息'}</p></section><div className="grid grid-cols-2 gap-3 border-t border-border/60 pt-4 text-sm"><div><p className="text-xs text-muted-foreground">提醒</p><p className="mt-1 font-medium">{todo.reminders.filter((item) => item.status === 'pending').length} 条待处理</p></div><div><p className="text-xs text-muted-foreground">关联会话</p><p className="mt-1 font-medium">{todo.sessionLinks.length} 个</p></div></div></div></PlanningFloatingInspector>
+  return <PlanningFloatingInspector label="Todo 详情" onClose={onClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Todo 详情</p><h3 className="mt-2 text-lg font-semibold leading-snug">{todo.title}</h3></div><div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground"><span className="rounded-md bg-muted px-2 py-1">{priority}</span>{plannedAt && <span className="rounded-md bg-muted px-2 py-1">计划 {plannedAt}</span>}{todo.group && <span className="rounded-md bg-muted px-2 py-1">{todo.group.name}</span>}{todo.tags.map((tag) => <span key={tag.id} className="rounded-md bg-muted px-2 py-1">#{tag.name}</span>)}</div><section><h4 className="mb-2 text-sm font-medium">更多信息</h4><p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{todo.notes || '暂无更多信息'}</p></section><PlanningReminderSection key={todo.id} targetType="todo" targetId={todo.id} reminders={todo.reminders} referenceAt={todo.dueAt} completed={todo.status === 'completed'} /><div className="border-t border-border/60 pt-4 text-sm"><div><p className="text-xs text-muted-foreground">关联会话</p><p className="mt-1 font-medium">{todo.sessionLinks.length} 个</p></div></div></div></PlanningFloatingInspector>
 }
 
 function CalendarQuickCreatePopover({ open, anchor, draft, setDraft, groups, saving, onCreateGroup, onOpenChange, onSave }: { open: boolean; anchor?: CalendarPopoverAnchor; draft: EventDraft; setDraft: React.Dispatch<React.SetStateAction<EventDraft>>; groups: PlanningGroup[]; saving: boolean; onCreateGroup: (name: string) => Promise<PlanningGroup | undefined>; onOpenChange: (open: boolean) => void; onSave: () => void }): React.ReactElement {

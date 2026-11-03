@@ -124,7 +124,7 @@ export function ReleaseNotesViewer({
             {release.body}
           </Markdown>
         ) : (
-          <p className="text-muted-foreground italic">暂无发布说明</p>
+          <p className="text-muted-foreground italic">暂无更新说明</p>
         )}
       </div>
     </div>

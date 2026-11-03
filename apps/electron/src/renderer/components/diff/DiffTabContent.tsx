@@ -6,6 +6,7 @@
  */
 
 import * as React from 'react'
+import '@/styles/parity-right-workspace.css'
 import { ChevronRight, Code2, Copy, Check, Eye, FolderOpen, List, Pencil, RotateCw, Save, WrapText, X } from 'lucide-react'
 import { atom, useAtom, useAtomValue, useSetAtom } from 'jotai'
 import DOMPurify from 'dompurify'
@@ -242,9 +243,13 @@ interface DiffTabContentProps {
   toolbarActions?: React.ReactNode
   /** 基准 ref（如 "origin/main"），用于 worktree vs main 模式 */
   baseRef?: string
+  /** 文件页签内联预览的紧凑布局（商业版 GTe compact）。 */
+  compact?: boolean
+  /** 内联预览的关闭入口：关闭预览并展开文件列表。 */
+  onClose?: () => void
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef, compact = false, onClose }: DiffTabContentProps): React.ReactElement {
   const ext = getExtension(filePath)
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isHtml = previewOnly && HTML_EXTS.has(ext)
@@ -1567,9 +1572,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   }, [fileAccess.candidateBasePaths, filePath])
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0">
-        <span className="min-w-0 flex-1 text-[12px] text-foreground/60 truncate" title={filePath}>
+    <div className={cn('workspace-preview flex min-w-0 flex-col h-full', compact && 'workspace-preview-compact')}>
+      <div className={cn('flex flex-wrap items-center gap-1.5 px-3 py-1.5 flex-shrink-0', compact && 'min-h-10 border-b border-border/70')}>
+        <span className={cn('workspace-preview-toolbar-title flex-1 text-[13px] text-foreground/80 truncate', compact ? 'min-w-0' : 'min-w-[4rem]')} title={filePath}>
           {getPreviewPathLabel(filePath)}
         </span>
 
@@ -1578,17 +1583,17 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             <DefaultAppOpenButton
               filePath={previewTargetPath}
               access={fileAccess}
-              variant="labeled"
+              variant={compact ? 'prominent' : 'labeled'}
             />
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   onClick={handleRevealInFolder}
-                  className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                  className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
                   aria-label="在文件夹中显示"
                 >
-                  <FolderOpen className="size-3.5" />
+                  <FolderOpen className="size-4" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">在文件夹中显示</TooltipContent>
@@ -1607,9 +1612,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 viewMode === 'unified' ? 'translate-x-full' : 'translate-x-0',
               )}
             />
-            <span className={cn('relative z-[1] rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors',
+            <span className={cn('relative z-[1] rounded-md px-2 py-0.5 text-[13px] font-medium transition-colors',
               viewMode === 'split' ? 'text-foreground' : 'text-muted-foreground')}>分栏</span>
-            <span className={cn('relative z-[1] rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors',
+            <span className={cn('relative z-[1] rounded-md px-2 py-0.5 text-[13px] font-medium transition-colors',
               viewMode === 'unified' ? 'text-foreground' : 'text-muted-foreground')}>统一</span>
           </div>
         )}
@@ -1618,11 +1623,11 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           <button
             type="button"
             onClick={() => setHtmlSourceMode((sourceMode) => !sourceMode)}
-            className="ml-auto p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0"
+            className="ml-auto p-1.5 rounded hover:bg-foreground/[0.06] text-foreground/60 hover:text-foreground/90 shrink-0"
             title={htmlSourceMode ? '切换到渲染预览' : '切换到源码预览'}
             aria-label={htmlSourceMode ? '切换到渲染预览' : '切换到源码预览'}
           >
-            {htmlSourceMode ? <Eye className="size-3.5" /> : <Code2 className="size-3.5" />}
+            {htmlSourceMode ? <Eye className="size-4" /> : <Code2 className="size-4" />}
           </button>
         )}
 
@@ -1633,20 +1638,20 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 type="button"
                 onClick={exitMarkdownEdit}
                 disabled={markdownSaving}
-                className="p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 disabled:opacity-50 shrink-0"
+                className="p-1.5 rounded hover:bg-foreground/[0.06] text-foreground/60 hover:text-foreground/90 disabled:opacity-50 shrink-0"
                 title="退出编辑"
               >
-                <X className="size-3.5" />
+                <X className="size-4" />
               </button>
               <button
                 type="button"
                 onClick={() => void saveMarkdownEdit()}
                 disabled={markdownSaving}
                 className={cn(
-                  'p-1 rounded hover:bg-foreground/[0.06] disabled:opacity-50 shrink-0 transition-colors duration-300',
+                  'p-1.5 rounded hover:bg-foreground/[0.06] disabled:opacity-50 shrink-0 transition-colors duration-300',
                   autosaveStatus === 'saved' && 'text-green-500 hover:text-green-500',
                   autosaveStatus === 'error' && 'text-red-500 hover:text-red-500',
-                  autosaveStatus !== 'saved' && autosaveStatus !== 'error' && 'text-foreground/40 hover:text-foreground/60',
+                  autosaveStatus !== 'saved' && autosaveStatus !== 'error' && 'text-foreground/60 hover:text-foreground/90',
                 )}
                 title={
                   autosaveStatus === 'error'
@@ -1656,17 +1661,17 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                       : '立即保存'
                 }
               >
-                <Save className="size-3.5" />
+                <Save className="size-4" />
               </button>
             </div>
           ) : (
             <button
               type="button"
               onClick={startMarkdownEdit}
-              className="ml-auto p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0"
+              className="ml-auto p-1.5 rounded hover:bg-foreground/[0.06] text-foreground/60 hover:text-foreground/90 shrink-0"
               title="编辑文本"
             >
-              <Pencil className="size-3.5" />
+              <Pencil className="size-4" />
             </button>
           )
         )}
@@ -1676,10 +1681,10 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             <button
               type="button"
               onClick={handleCopy}
-              className={cn('p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0', previewOnly && !isEditableText && 'ml-auto')}
+              className={cn('p-1.5 rounded hover:bg-foreground/[0.06] text-foreground/60 hover:text-foreground/90 shrink-0', previewOnly && !isEditableText && 'ml-auto')}
               aria-label={copied ? '已复制文件内容' : '复制文件内容'}
             >
-              {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
+              {copied ? <Check className="size-4 text-green-500" /> : <Copy className="size-4" />}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{copied ? '已复制文件内容' : '复制文件内容'}</TooltipContent>
@@ -1690,10 +1695,10 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             <button
               type="button"
               onClick={handleManualRefresh}
-              className="p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0"
+              className="p-1.5 rounded hover:bg-foreground/[0.06] text-foreground/60 hover:text-foreground/90 shrink-0"
               aria-label="刷新文件内容（检测外部编辑器的修改）"
             >
-              <RotateCw className="size-3.5" />
+              <RotateCw className="size-4" />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">刷新文件内容（检测外部编辑器的修改）</TooltipContent>
@@ -1706,12 +1711,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 type="button"
                 onClick={() => setCodeWrap((v) => !v)}
                 className={cn(
-                  'p-1 rounded hover:bg-foreground/[0.06] shrink-0',
-                  codeWrap ? 'text-foreground/70' : 'text-foreground/40 hover:text-foreground/60',
+                  'p-1.5 rounded hover:bg-foreground/[0.06] shrink-0',
+                  codeWrap ? 'text-foreground/70' : 'text-foreground/60 hover:text-foreground/90',
                 )}
                 aria-label={previewWrapLabel}
               >
-                <WrapText className="size-3.5" />
+                <WrapText className="size-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -1727,12 +1732,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 type="button"
                 onClick={() => setTocOpen((v) => !v)}
                 className={cn(
-                  'p-1 rounded hover:bg-foreground/[0.06] shrink-0',
-                  tocOpen ? 'text-foreground/70' : 'text-foreground/40 hover:text-foreground/60',
+                  'p-1.5 rounded hover:bg-foreground/[0.06] shrink-0',
+                  tocOpen ? 'text-foreground/70' : 'text-foreground/60 hover:text-foreground/90',
                 )}
                 aria-label={tocOpen ? '隐藏目录' : '显示目录'}
               >
-                <List className="size-3.5" />
+                <List className="size-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{tocOpen ? '隐藏目录' : '显示目录'}</TooltipContent>
@@ -1740,9 +1745,24 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         )}
 
         {toolbarActions}
+        {onClose && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="关闭预览并展开列表"
+                className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">关闭预览并展开列表</TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
-      <div className="relative flex-1 min-h-0 flex">
+      <div className="workspace-preview-body relative flex-1 min-h-0 flex">
         <PreviewFindBar
           open={findOpen}
           rootRef={scrollContainerRef}
@@ -1769,7 +1789,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 className="mx-2 mb-2 mt-4 flex size-7 shrink-0 items-center justify-center self-start rounded-md bg-muted/40 text-foreground/45 hover:bg-foreground/[0.06] hover:text-foreground/70"
                 aria-label="展开目录"
               >
-                <ChevronRight className="size-3.5" />
+                <ChevronRight className="size-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">展开目录</TooltipContent>
@@ -1779,7 +1799,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           ref={scrollContainerRef}
           onScroll={handleScroll}
           className={cn(
-            'h-full flex-1 min-w-0 scrollbar-thin relative',
+            'workspace-preview-content h-full flex-1 min-w-0 min-h-0 scrollbar-thin relative',
             isOfficePreview ? 'overflow-hidden' : 'overflow-auto',
           )}
         >
@@ -1799,13 +1819,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-filter backdrop-blur-sm border border-border/30 shadow-sm">
                   <button
                     type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                    className="w-7 h-7 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
                     onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'out' }, '*')}
                   >−</button>
-                  <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{pdfZoom}%</span>
+                  <span className="text-[13px] text-muted-foreground min-w-[40px] text-center font-mono">{pdfZoom}%</span>
                   <button
                     type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                    className="w-7 h-7 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
                     onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'in' }, '*')}
                   >+</button>
                 </div>
@@ -1823,13 +1843,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-blur-sm border border-border/30 shadow-sm">
                   <button
                     type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                    className="w-7 h-7 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
                     onClick={() => setImageZoom((z) => Math.max(0.1, z / 1.5))}
                   >−</button>
-                  <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
+                  <span className="text-[13px] text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
                   <button
                     type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                    className="w-7 h-7 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
                     onClick={() => setImageZoom((z) => Math.min(5, z * 1.5))}
                   >+</button>
                 </div>
@@ -1937,11 +1957,11 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 }}
                 autoFocus
                 spellCheck={false}
-                className="w-full min-h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
+                className="w-full min-h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[14px] leading-relaxed text-foreground outline-none focus:outline-none"
               />
             ) : newContent ? (
               newContent.length > MAX_PREVIEW_CHARS ? (
-                <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre className="p-3 text-[14px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {newContent.slice(0, MAX_PREVIEW_CHARS)}
                   <span className="text-muted-foreground block mt-2">
                     （文件过大，仅显示前 {MAX_PREVIEW_CHARS.toLocaleString()} 字符）
@@ -1953,7 +1973,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 </div>
               )
             ) : (
-              <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <pre className="p-3 text-[14px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
                 <span className="text-muted-foreground">（文件为空）</span>
               </pre>
             )

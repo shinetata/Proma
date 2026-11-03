@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RotateCw, AlertTriangle, CheckCircle2, Ban, ChevronDown, ChevronRight } from 'lucide-react'
+import { RotateCw, CircleCheck } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   BasePathsProvider,
@@ -28,7 +28,6 @@ import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/channel-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
-import { cn } from '@/lib/utils'
 import {
   createLocalSearchRecords,
   searchLocalSessionMessages,
@@ -37,15 +36,14 @@ import {
   type SessionMessageSearch,
 } from '@/lib/session-message-search'
 import { toTranscript } from '@proma/session-core'
-import { Spinner } from '@/components/ui/spinner'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { groupIntoTurns, AssistantLogo, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, buildTaskProgressDataForTurn, type MessageGroup } from './SDKMessageRenderer'
 import { buildLiveGroupSet } from './live-group-set'
+import { ProcessExpandStateProvider, RunningProcessSummary } from './ProcessTimeline'
 import { AgentBrowserLinkProvider } from '@/components/browser/AgentBrowserLinkProvider'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import { TaskProgressOverlay, type ContextCompactionProgress } from './TaskProgressOverlay'
 import { createMessageGroupRenderCache, groupMessagesForRendering } from './message-group-rendering'
-import type { AgentEventUsage, RetryAttempt, SDKAssistantMessage, SDKMessage, SDKSystemMessage, SDKTextBlock, SDKThinkingBlock } from '@proma/shared'
+import type { AgentEventUsage, SDKAssistantMessage, SDKMessage, SDKSystemMessage, SDKTextBlock, SDKThinkingBlock } from '@proma/shared'
 import { getSDKCompactStatus } from '@proma/shared'
 import { agentLiveMessagesAtomFamily, agentSessionStreamingStateAtomFamily, type AgentStreamState } from '@/atoms/agent-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
@@ -323,9 +321,35 @@ function EmptyState(): React.ReactElement {
   return <WelcomeEmptyState />
 }
 
-/** 重试提示组件 - 折叠式 */
+const RETRY_REASON_TEXT: Record<string, string> = {
+  connection: '网络连接中断，正在重新连接',
+  rate_limited: '模型服务繁忙，稍后自动重试',
+  service: '模型服务暂时不可用，正在重试',
+  stream_interrupted: '响应传输中断，正在从上一步继续',
+  response_malformed: '响应异常，正在重试',
+  unknown: '正在恢复回答',
+}
+
+function formatRetryStatus(retrying: NonNullable<AgentStreamState['retrying']>, countdown: number): string {
+  const reasonKind = (retrying as { reasonKind?: string }).reasonKind ?? 'unknown'
+  const reason = RETRY_REASON_TEXT[reasonKind] ?? RETRY_REASON_TEXT.unknown
+  const attempt = retrying.currentAttempt < 2 || retrying.maxAttempts < 2 ? '' : `（第 ${retrying.currentAttempt}/${retrying.maxAttempts} 次）`
+  switch (retrying.phase) {
+    case 'scheduled':
+      return `${reason}${attempt}${countdown > 0 ? ` · ${countdown} 秒后继续` : '…'}`
+    case 'running':
+      return `${reason}${attempt}…`
+    case 'succeeded':
+      return '已恢复，继续回答'
+    case 'exhausted':
+      return '自动恢复未完成，请稍后重试'
+    case 'cancelled':
+      return '已暂停自动恢复'
+  }
+}
+
+/** 自动恢复状态：单行状态提示 */
 function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['retrying']> }): React.ReactElement {
-  const [expanded, setExpanded] = React.useState(false)
   const [countdown, setCountdown] = React.useState(0)
 
   // 仅 scheduled 阶段显示倒计时：此时 Pi 仍在 backoff，尚未重新发起模型请求。
@@ -345,179 +369,43 @@ function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['
     return () => clearInterval(timer)
   }, [retrying.delaySeconds, retrying.phase, retrying.scheduledAt])
 
-  const statusText = (() => {
-    const suffix = `第 ${retrying.currentAttempt}/${retrying.maxAttempts} 次继续当前回答`
-    switch (retrying.phase) {
-      case 'scheduled':
-        return countdown > 0 ? `网络暂时中断，${countdown} 秒后开始${suffix}` : `网络暂时中断，即将开始${suffix}`
-      case 'running':
-        return `正在${suffix}…`
-      case 'succeeded':
-        return `已在${suffix}时恢复`
-      case 'exhausted':
-        return retrying.totalAttempt != null && retrying.maxTotalAttempts != null
-          ? `本轮自动恢复已耗尽（${retrying.totalAttempt}/${retrying.maxTotalAttempts}）`
-          : `自动恢复已耗尽（${retrying.currentAttempt}/${retrying.maxAttempts}）`
-      case 'cancelled':
-        return '自动恢复已取消'
-    }
-  })()
-
-  const isTerminal = retrying.phase === 'exhausted' || retrying.phase === 'cancelled'
+  const succeeded = retrying.phase === 'succeeded'
+  const terminal = retrying.phase === 'exhausted' || retrying.phase === 'cancelled'
 
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 p-3 mb-3">
-      <button
-        type="button"
-        className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {retrying.phase === 'succeeded' ? (
-          <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-        ) : isTerminal ? (
-          retrying.phase === 'cancelled'
-            ? <Ban className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            : <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        ) : (
-          <RotateCw className="size-4 animate-spin text-amber-600 dark:text-amber-400 shrink-0" />
-        )}
-        <span className="text-sm text-amber-900 dark:text-amber-100 flex-1 tabular-nums">
-          {statusText}
-          {retrying.reason && ` · ${retrying.reason}`}
-        </span>
-        {expanded ? (
-          <ChevronDown className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        ) : (
-          <ChevronRight className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        )}
-      </button>
-
-      {expanded && (
-        <div className="mt-3 space-y-3 border-t border-amber-200 dark:border-amber-800 pt-3">
-          {retrying.maxTotalAttempts != null && (
-            <div className="text-xs text-amber-700 dark:text-amber-300 tabular-nums">
-              本轮已安排 {retrying.totalAttempt ?? 0}/{retrying.maxTotalAttempts} 次自动恢复
-            </div>
-          )}
-          {retrying.history.length > 0 && (
-            <>
-              <div className="text-xs font-medium text-amber-900 dark:text-amber-100">
-                已执行的恢复记录：
-              </div>
-              {retrying.history.map((attempt, index) => (
-                <RetryAttemptItem
-                  key={attempt.attempt}
-                  attempt={attempt}
-                  isLatest={index === retrying.history.length - 1}
-                />
-              ))}
-            </>
-          )}
-          {retrying.phase === 'scheduled' && (
-            <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300 pl-6 tabular-nums">
-              <RotateCw className="size-3 animate-spin" />
-              <span>{countdown > 0 ? `等待 ${countdown} 秒后开始第 ${retrying.currentAttempt} 次继续当前回答` : `即将开始第 ${retrying.currentAttempt} 次继续当前回答`}</span>
-            </div>
-          )}
-          {retrying.phase === 'running' && (
-            <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300 pl-6 tabular-nums">
-              <RotateCw className="size-3 animate-spin" />
-              <span>正在执行第 {retrying.currentAttempt} 次继续当前回答…</span>
-            </div>
-          )}
-        </div>
+    <div className="mb-2 flex items-center gap-2 px-1 py-1 text-xs text-muted-foreground" role="status">
+      {succeeded ? (
+        <CircleCheck className="size-3.5 shrink-0 text-emerald-600/80 dark:text-emerald-400/80" aria-hidden="true" />
+      ) : (
+        <RotateCw className={`size-3.5 shrink-0 ${terminal ? 'text-muted-foreground/70' : 'animate-spin text-muted-foreground'}`} aria-hidden="true" />
       )}
+      <span className="tabular-nums">{formatRetryStatus(retrying, countdown)}</span>
     </div>
   )
 }
 
-/** 单条重试尝试记录 */
-function RetryAttemptItem({
-  attempt,
-  isLatest,
-}: {
-  attempt: RetryAttempt
-  isLatest: boolean
-}): React.ReactElement {
-  const [showStderr, setShowStderr] = React.useState(false)
-  const [showStack, setShowStack] = React.useState(false)
+/** 浏览器离线状态 */
+function useNavigatorOffline(): boolean {
+  const [offline, setOffline] = React.useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
+  React.useEffect(() => {
+    const handleOffline = (): void => setOffline(true)
+    const handleOnline = (): void => setOffline(false)
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
+    return () => {
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
+    }
+  }, [])
+  return offline
+}
 
-  const time = new Date(attempt.timestamp).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-
+/** 运行中断网提示 */
+function OfflineNotice(): React.ReactElement {
   return (
-    <div className={cn('pl-6 space-y-2', isLatest && 'font-medium')}>
-      {/* 尝试头部 */}
-      <div className="flex items-start gap-2">
-        <span className="text-destructive shrink-0">❌</span>
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="text-xs text-amber-900 dark:text-amber-100 tabular-nums">
-            第 {attempt.attempt} 次恢复前的错误（{time}）- {attempt.reason}
-          </div>
-          <div className="text-xs text-amber-700 dark:text-amber-300 font-mono break-words">
-            {attempt.errorMessage}
-          </div>
-
-          {/* 环境信息 */}
-          {attempt.environment && (
-            <div className="text-[11px] text-amber-600 dark:text-amber-400 space-y-0.5">
-              <div>运行时: {attempt.environment.runtime}</div>
-              <div>平台: {attempt.environment.platform}</div>
-              <div>模型: {attempt.environment.model}</div>
-              {attempt.environment.workspace && <div>项目: {attempt.environment.workspace}</div>}
-            </div>
-          )}
-
-          {/* 可展开的 stderr */}
-          {attempt.stderr && (
-            <div className="mt-2">
-              <button
-                type="button"
-                className="text-[11px] text-amber-700 dark:text-amber-300 hover:underline flex items-center gap-1"
-                onClick={() => setShowStderr(!showStderr)}
-              >
-                {showStderr ? (
-                  <ChevronDown className="size-3" />
-                ) : (
-                  <ChevronRight className="size-3" />
-                )}
-                显示 stderr 输出
-              </button>
-              {showStderr && (
-                <pre className="mt-1 text-[10px] text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-900/30 p-2 rounded overflow-x-auto max-h-[200px] overflow-y-auto">
-                  {attempt.stderr}
-                </pre>
-              )}
-            </div>
-          )}
-
-          {/* 可展开的堆栈跟踪 */}
-          {attempt.stack && (
-            <div className="mt-2">
-              <button
-                type="button"
-                className="text-[11px] text-amber-700 dark:text-amber-300 hover:underline flex items-center gap-1"
-                onClick={() => setShowStack(!showStack)}
-              >
-                {showStack ? (
-                  <ChevronDown className="size-3" />
-                ) : (
-                  <ChevronRight className="size-3" />
-                )}
-                显示堆栈跟踪
-              </button>
-              {showStack && (
-                <pre className="mt-1 text-[10px] text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-900/30 p-2 rounded overflow-x-auto max-h-[200px] overflow-y-auto">
-                  {attempt.stack}
-                </pre>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="mb-2 flex items-center gap-2 px-1 py-1 text-xs text-muted-foreground" role="status">
+      <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60" aria-hidden="true" />
+      <span>网络似乎已断开，正在等待恢复…</span>
     </div>
   )
 }
@@ -546,49 +434,6 @@ export function buildUsageTooltip(durationMs: number, usage?: AgentEventUsage): 
   }
 
   return lines.join('\n')
-}
-
-/** 耗时徽章 — 悬浮显示 token 用量明细 */
-export function DurationBadge({ durationMs, usage }: { durationMs: number; usage?: AgentEventUsage }): React.ReactElement {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="text-[15px] tabular-nums font-light cursor-default">
-          {formatDuration(durationMs)}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        <p className="whitespace-pre-line text-left">{buildUsageTooltip(durationMs, usage)}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-/** Agent 运行指示器 — Shimmer Spinner + 无括号的运行时间 */
-function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.ReactElement {
-  const [elapsed, setElapsed] = React.useState(0)
-
-  React.useEffect(() => {
-    const start = startedAt ?? Date.now()
-    const update = (): void => setElapsed((Date.now() - start) / 1000)
-    update()
-    const timer = setInterval(update, 100)
-    return () => clearInterval(timer)
-  }, [startedAt])
-
-  const formatTime = (seconds: number): string => {
-    if (seconds < 60) return `${seconds.toFixed(1)}s`
-    const m = Math.floor(seconds / 60)
-    const s = seconds % 60
-    return `${m}m ${s.toFixed(1)}s`
-  }
-
-  return (
-    <div className="flex items-center gap-2 min-h-[28px]">
-      <Spinner size="sm" className="text-primary/75" />
-      <span className="text-[13px] font-light text-muted-foreground/75 tabular-nums">Agent Running {formatTime(elapsed)}</span>
-    </div>
-  )
 }
 
 interface AgentTranscriptHistoryHandle {
@@ -822,6 +667,7 @@ const AgentTranscriptHistory = React.forwardRef<AgentTranscriptHistoryHandle, Ag
   }), [scrollRef, stopScroll])
 
   return (
+    <ProcessExpandStateProvider>
     <div className="w-full shrink-0">
       <AgentTranscriptRows
         groups={historyGroups}
@@ -866,6 +712,7 @@ const AgentTranscriptHistory = React.forwardRef<AgentTranscriptHistoryHandle, Ag
         />
       )}
     </div>
+    </ProcessExpandStateProvider>
   )
 })
 
@@ -979,6 +826,8 @@ export const AgentMessages = React.memo(function AgentMessages({
   // 避免每个 sdk_delta 同时更新 transcript 和 legacy content 两条路径。
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
+  const navigatorOffline = useNavigatorOffline()
+  const showOfflineNotice = streaming && navigatorOffline && !retrying
   const optimisticModelId = streamState?.model || sessionModelId
   const optimisticModel = optimisticModelId
     ? resolveModelDisplayName(optimisticModelId, channels)
@@ -1196,7 +1045,7 @@ export const AgentMessages = React.memo(function AgentMessages({
       `}</style>
           <Conversation resize="instant" className={ready ? 'opacity-100' : 'opacity-0'}>
         <ScrollPositionManager id={sessionId} ready={ready} />
-        <ConversationContent>
+        <ConversationContent className="agent-conversation-content">
           {!hasContent && !streaming ? (
             <EmptyState />
           ) : (
@@ -1229,8 +1078,7 @@ export const AgentMessages = React.memo(function AgentMessages({
                   匹配内部 MessageActions 的 gap-0.5(2px)+mt-0.5(2px)=4px 间距 */}
               {hasLiveAssistantContent && !suppressAgentRunning && (
                 <div className="pl-[56px] min-h-[28px]">
-                  {retrying && <RetryingNotice retrying={retrying} />}
-                  {streaming && <AgentRunningIndicator startedAt={startedAt} />}
+                  {retrying ? <RetryingNotice retrying={retrying} /> : showOfflineNotice ? <OfflineNotice /> : null}
                 </div>
               )}
 
@@ -1243,8 +1091,8 @@ export const AgentMessages = React.memo(function AgentMessages({
                     logo={<AssistantLogo model={optimisticModelId} />}
                   />
                   <MessageContent>
-                    {retrying && <RetryingNotice retrying={retrying} />}
-                    {streaming && <AgentRunningIndicator startedAt={startedAt} />}
+                    {retrying ? <RetryingNotice retrying={retrying} /> : showOfflineNotice ? <OfflineNotice /> : null}
+                    {streaming && !retrying && <RunningProcessSummary startedAt={startedAt} />}
                   </MessageContent>
                 </Message>
               )}

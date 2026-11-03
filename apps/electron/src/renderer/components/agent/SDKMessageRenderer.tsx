@@ -19,7 +19,8 @@ import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbo
 import { ContentBlock } from './ContentBlock'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
-import { ProcessBlockGroup, buildAssistantTurnRenderItems } from './ProcessBlockGroup'
+import { buildAssistantTurnSections, buildProcessSummary, findTrailingResult, type AssistantTurnSection } from './assistant-turn-sections'
+import { PROCESS_TIMELINE_CLASS, ProcessMotion, ProcessStepGroup, ProcessSummary, useElapsedSince } from './ProcessTimeline'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
 // 会话转录的纯逻辑(Turn 分组 / 快照去重 / 预览)已下沉到 @proma/session-core 作为唯一真源。
@@ -36,7 +37,7 @@ import {
 } from '@proma/session-core'
 export { groupIntoTurns, getGroupPreview, extractUserText } from '@proma/session-core'
 export type { MessageGroup, AssistantTurn } from '@proma/session-core'
-import { DurationBadge } from './AgentMessages'
+import { buildUsageTooltip } from './AgentMessages'
 import {
   Message,
   MessageHeader,
@@ -398,6 +399,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
+    sourceMessage: SDKAssistantMessage
     parentToolUseId?: string | null
   }
 
@@ -422,7 +424,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     if (Array.isArray(blocks)) {
       for (const block of blocks) {
         for (const normalizedBlock of normalizeThinkTagsInContentBlocks([block])) {
-          enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: aMsg.parent_tool_use_id })
+          enrichedBlocks.push({ block: normalizedBlock, sourceMessage: aMsg, parentToolUseId: aMsg.parent_tool_use_id })
         }
       }
     }
@@ -447,7 +449,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
 
   const childBlocksMap = new Map<string, SDKContentBlock[]>()
-  const topLevelBlocks: SDKContentBlock[] = []
+  const topLevelEntries: EnrichedBlock[] = []
 
   for (const eb of enrichedBlocks) {
     if (eb.parentToolUseId && agentToolIds.has(eb.parentToolUseId)) {
@@ -455,20 +457,72 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       children.push(eb.block)
       childBlocksMap.set(eb.parentToolUseId, children)
     } else {
-      topLevelBlocks.push(eb.block)
+      topLevelEntries.push(eb)
     }
   }
+  const topLevelBlocks = topLevelEntries.map((entry) => entry.block)
 
   // 检测是否有主要内容（text 块），用于决定 tool/thinking 是否 dimmed
   const hasTextContent = topLevelBlocks.some(
     (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
   )
 
-  const renderItems = React.useMemo(() => {
-    return buildAssistantTurnRenderItems(topLevelBlocks, {
-      isStreaming,
+  // 将内容块拆分为「执行过程」与「最终输出」（与商业版轮次结构一致）
+  const sections = buildAssistantTurnSections(topLevelEntries, {
+    messages: turn.assistantMessages.filter((m) => !m.parent_tool_use_id || !agentToolIds.has(m.parent_tool_use_id)),
+    isStreaming,
+    stoppedByUser,
+    result: findTrailingResult(turn.turnMessages),
+  })
+  const sectionItems = sections.items
+  const lastSectionIndex = sectionItems.length - 1
+  const promotedThinkingText = sectionItems
+    .filter((item) => item.type === 'block' && item.promotedFromThinking)
+    .map((item) => {
+      const block = item.type === 'block' ? topLevelBlocks[item.item.index] : undefined
+      return block?.type === 'thinking' ? block.thinking : ''
     })
-  }, [topLevelBlocks, isStreaming])
+    .join('\n\n')
+  const sectionKeys: string[] = []
+  {
+    let runIndex = 0
+    let textIndex = 0
+    for (const item of sectionItems) sectionKeys.push(item.type === 'activity' ? `run-${runIndex++}` : `text-${textIndex++}`)
+  }
+  const processSections: Array<{ item: AssistantTurnSection; index: number }> = []
+  const outputSections: Array<{ item: AssistantTurnSection; index: number }> = []
+  sectionItems.forEach((item, index) => {
+    if (item.type === 'block' && item.output) outputSections.push({ item, index })
+    else processSections.push({ item, index })
+  })
+
+  // 一旦经历过流式输出，后续的过程/正文切换使用动画；历史消息直接静态渲染
+  const hasStreamedRef = React.useRef(false)
+  if (isStreaming) hasStreamedRef.current = true
+  const hasStreamed = hasStreamedRef.current
+  const turnStartedAt = getAssistantTurnStartedAt(turn)
+  const liveElapsed = useElapsedSince(isStreaming ? turnStartedAt : undefined)
+  const elapsedMs = isStreaming ? liveElapsed : durationMs
+  const processSummary = buildProcessSummary(
+    processSections.flatMap(({ item }) => item.type === 'activity' ? item.items.map((entry) => entry.block) : []),
+    elapsedMs,
+  )
+  const usageTooltip = !isStreaming && durationMs != null ? buildUsageTooltip(durationMs, usage) : undefined
+  const { completedToolIds, failedToolIds } = React.useMemo(() => {
+    const completed = new Set<string>()
+    const failed = new Set<string>()
+    for (const message of allMessages) {
+      if (message.type !== 'user') continue
+      for (const block of (message as SDKUserMessage).message?.content ?? []) {
+        if (block.type !== 'tool_result') continue
+        const resultBlock = block as SDKToolResultBlock
+        completed.add(resultBlock.tool_use_id)
+        if (resultBlock.is_error) failed.add(resultBlock.tool_use_id)
+      }
+    }
+    return { completedToolIds: completed, failedToolIds: failed }
+  }, [allMessages])
+  const turnKey = getGroupId(turn)
 
   // 本轮「文件名 → 绝对路径」映射：与 footer chips 同源，供正文内联文件引用补全裸文件名
   const turnFileMap = React.useMemo(
@@ -491,9 +545,9 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
 
   // 如果没有任何内容
-  if (enrichedBlocks.length === 0 && !hasError) return null
+  if (enrichedBlocks.length === 0 && !hasError && !sections.completedWithoutAnswer) return null
 
-  const renderTopLevelBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
+  const renderTopLevelBlock = (block: SDKContentBlock, i: number, showFullThinking = false): React.ReactNode => {
     // 任务进度由底部浮层统一呈现，输出记录不再重复显示任务卡。
     if (block.type === 'tool_use' && TASK_TOOL_NAMES.has((block as SDKToolUseBlock).name)) {
       return null
@@ -513,16 +567,49 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         basePath={basePath}
         animate={!!isStreaming}
         index={i}
-        dimmed={hasTextContent && block.type !== 'text'}
+        dimmed={!showFullThinking && hasTextContent && block.type !== 'text'}
         childBlocks={childBlocks}
         isStreaming={isStreaming}
+        showFullThinking={showFullThinking}
       />
     )
   }
 
-  const renderProcessGroupBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
-    return renderTopLevelBlock(block, i)
+  const renderSection = (section: AssistantTurnSection, sectionIndex: number): React.ReactNode => {
+    if (section.type === 'block') {
+      const block = topLevelBlocks[section.item.index]
+      if (!block) return null
+      if (section.promotedFromThinking && block.type === 'thinking') {
+        return (
+          <div className="space-y-1.5">
+            <div className="text-xs text-muted-foreground" role="note">模型将本轮结果写在了思考中，已作为正文展示</div>
+            {renderTopLevelBlock({ type: 'text', text: block.thinking }, section.item.index)}
+          </div>
+        )
+      }
+      return renderTopLevelBlock(block, section.item.index)
+    }
+    return (
+      <ProcessStepGroup
+        key={sectionKeys[sectionIndex]}
+        expandKey={`${turnKey}:${sectionKeys[sectionIndex]}`}
+        blocks={section.items.map((entry) => entry.block)}
+        isActive={!!isStreaming && sectionIndex === lastSectionIndex}
+        startFromThinking={!!isStreaming && sectionIndex === 0}
+        completedToolIds={completedToolIds}
+        failedToolIds={failedToolIds}
+        renderChildren={(showFullThinking) => section.items.map((entry, stepIndex) => (
+          <ProcessMotion key={`step-${stepIndex}`} animate={!!isStreaming}>
+            {renderTopLevelBlock(entry.block, entry.index, showFullThinking)}
+          </ProcessMotion>
+        ))}
+      />
+    )
   }
+  const shouldAnimateSection = (section: AssistantTurnSection, sectionIndex: number): boolean => (
+    hasStreamed && !(sectionIndex === 0 && section.type === 'activity')
+  )
+  const hasProcess = processSections.length > 0
 
   return (
     <Message from="assistant">
@@ -533,59 +620,70 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       />
       <MessageContent>
         <TurnFileMapProvider map={turnFileMap}>
-        <div className={cn('space-y-2')}>
-          {renderItems.map((item, itemIndex) => {
-            if (item.type === 'block') {
-              return renderTopLevelBlock(item.item.block, item.item.index)
-            }
-
-            const groupBlocks = item.items.map((groupItem) => groupItem.block)
-            const firstIndex = item.items[0]?.index ?? 0
-            const groupKey = `process-${firstIndex}`
-            return (
-              <ProcessBlockGroup
-                key={groupKey}
-                blocks={groupBlocks}
-                isStreaming={isStreaming}
-                renderChildren={() => item.items.map((groupItem) => (
-                  <React.Fragment key={groupItem.index}>
-                    {renderProcessGroupBlock(groupItem.block, groupItem.index)}
-                  </React.Fragment>
-                ))}
-                isMessageTail={itemIndex === renderItems.length - 1}
-              />
-            )
-          })}
-        </div>
-        {/* 如果有错误但也有内容块，在末尾以 tail 形式挂错误横幅附错误提示 + 重试按钮，保留正文本身的 markdown 排版 */}
-        {hasError && errorContent && topLevelBlocks.length > 0 && (
-          <AssistantErrorTail
-            message={errorContent}
-            onRetry={onRetry}
-            onRetryInNewSession={onRetryInNewSession}
-            onCompact={onCompact}
-            onRelinkProjectRoot={onRelinkProjectRoot}
-            onRestoreProjectRoot={onRestoreProjectRoot}
-          />
-        )}
+          <div className="space-y-2" style={{ display: 'flow-root' }}>
+            {(hasProcess || processSummary) && (
+              <ProcessSummary
+                coordinatedCompletion
+                isStreaming={!!isStreaming}
+                summary={processSummary ?? '执行过程'}
+                tooltip={usageTooltip}
+                hasContent={hasProcess}
+              >
+                {hasProcess ? (
+                  <div className={PROCESS_TIMELINE_CLASS}>
+                    {processSections.map(({ item, index }) => (
+                      <ProcessMotion key={`process-${sectionKeys[index]}`} animate={shouldAnimateSection(item, index)}>
+                        {renderSection(item, index)}
+                      </ProcessMotion>
+                    ))}
+                  </div>
+                ) : null}
+              </ProcessSummary>
+            )}
+            {outputSections.map(({ item, index }, outputIndex) => (
+              <ProcessMotion key={`body-${sectionKeys[index]}`} mode="reveal" animate={shouldAnimateSection(item, index)}>
+                {outputIndex === 0 && sections.outputState === 'incomplete' && (
+                  <div className="text-xs text-muted-foreground" role="status">未完成输出</div>
+                )}
+                {renderSection(item, index)}
+              </ProcessMotion>
+            ))}
+          </div>
+          {sections.completedWithoutAnswer && (
+            <div className="text-sm text-muted-foreground">本轮已结束，未提供文字总结。</div>
+          )}
+          {/* 如果有错误但也有内容块，在末尾以 tail 形式挂错误横幅附错误提示 + 重试按钮，保留正文本身的 markdown 排版 */}
+          {hasError && errorContent && topLevelBlocks.length > 0 && (
+            <AssistantErrorTail
+              message={errorContent}
+              onRetry={onRetry}
+              onRetryInNewSession={onRetryInNewSession}
+              onCompact={onCompact}
+              onRelinkProjectRoot={onRelinkProjectRoot}
+              onRestoreProjectRoot={onRestoreProjectRoot}
+            />
+          )}
         </TurnFileMapProvider>
       </MessageContent>
       {/* 完成态汇总：Skill 使用记录与文件改动 chip */}
       {!isStreaming && (
-        <>
+        <div className="animate-in fade-in duration-300">
           <TurnSkillUsageSummary
             inputMessage={turn.inputMessage}
             turnMessages={turn.turnMessages}
           />
           <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
-        </>
+        </div>
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}
       {!isStreaming && (() => {
-        const textContent = topLevelBlocks
+        const answerText = topLevelBlocks
           .filter((b) => b.type === 'text' && 'text' in b)
           .map((b) => (b as { text: string }).text)
           .join('\n\n')
+        const textContent = promotedThinkingText
+          ? [answerText, promotedThinkingText].filter((part) => part.trim()).join('\n\n')
+          : answerText
         // 仅取主线 assistant 消息的 uuid 作为 fork/rewind 截断点。
         // SDK forkSession 内部会过滤掉 sidechain（parent_tool_use_id 非空的子代理消息），
         // 若把子代理 uuid 传过去会触发 "Message <uuid> not found in session" 错误。
@@ -594,17 +692,10 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
           : undefined
         const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
-        const hasDuration = durationMs != null
-        if (!hasDuration && !hasActions && !showStoppedBadge) return null
+        if (!hasActions && !showStoppedBadge) return null
         return (
-          <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start">
-            {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
+          <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start animate-in fade-in duration-300">
             {textContent && <CopyButton content={textContent} />}
-            {textContent && onCreateTodo && (
-              <MessageAction tooltip="标记为 Todo" onClick={() => onCreateTodo(textContent)}>
-                <ListTodo className="size-3.5" />
-              </MessageAction>
-            )}
             {onFork && lastUuid && (
               <MessageAction tooltip="从此处探索（保留主线，结论可带回）" onClick={() => onFork(lastUuid)}>
                 <Split className="size-3.5" />
@@ -620,11 +711,24 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                 已被用户中断
               </Badge>
             )}
+            {textContent && onCreateTodo && (
+              <MessageAction tooltip="标记为 Todo" onClick={() => onCreateTodo(textContent)}>
+                <ListTodo className="size-3.5" />
+              </MessageAction>
+            )}
           </MessageActions>
         )
       })()}
     </Message>
   )
+}
+
+/** 本轮开始时间：取首条助手消息时间与触发输入时间中较晚者 */
+function getAssistantTurnStartedAt(turn: AssistantTurn): number | undefined {
+  const inputCreatedAt = turn.inputMessage ? extractMeta(turn.inputMessage as unknown as SDKMessage).createdAt : undefined
+  if (inputCreatedAt == null) return turn.createdAt
+  if (turn.createdAt == null) return inputCreatedAt
+  return Math.max(turn.createdAt, inputCreatedAt)
 }
 
 // ===== SDKMessageRenderer 主组件（用于实时消息逐条渲染） =====
@@ -987,11 +1091,11 @@ function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
       <div className="flex items-start gap-2.5 mb-2.5">
         <UserAvatar avatar={userProfile.avatar} size={35} />
         <div className="flex flex-col justify-between h-[35px]">
-          <span className="text-sm font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
+          <span className="text-[15px] font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
           {(meta.createdAt || isScheduledRun) && (
             <span className="flex items-center gap-2 leading-none">
               {meta.createdAt && (
-                <span className="message-time text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
+                <span className="message-time text-[12px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
               )}
               {isScheduledRun && (
                 <ScheduledRunBadge />
@@ -1221,11 +1325,11 @@ export function AssistantErrorTail({
       )}
       {standalone ? (
         <div className="text-destructive">
-          <MessageResponse>{displayContentText}</MessageResponse>
+          <MessageResponse className="text-[length:var(--chat-body-font-size,16px)]">{displayContentText}</MessageResponse>
         </div>
       ) : (
         displayContentText && (
-          <div className="text-sm text-destructive/90 whitespace-pre-wrap break-words">
+          <div className="text-[length:var(--chat-body-font-size,16px)] text-destructive/90 whitespace-pre-wrap break-words">
             {displayContentText}
           </div>
         )

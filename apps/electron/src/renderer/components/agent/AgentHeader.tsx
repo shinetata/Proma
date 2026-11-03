@@ -7,7 +7,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Check, ChevronDown, PanelRight, Pencil, Split, X } from 'lucide-react'
-import { agentSessionsAtom, agentSideTemporaryAgentMapAtom, agentDiffPanelTabAtom, currentSessionSidePanelOpenAtom, getExplorationSidePanelTab } from '@/atoms/agent-atoms'
+import { agentSessionsAtom, agentWorkspacesAtom, agentDiffUnseenChangesAtom, agentSideTemporaryAgentMapAtom, agentDiffPanelTabAtom, currentSessionSidePanelOpenAtom, getExplorationSidePanelTab } from '@/atoms/agent-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
 import { cn } from '@/lib/utils'
@@ -25,7 +25,10 @@ interface AgentHeaderProps {
 
 export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement | null {
   const sessions = useAtomValue(agentSessionsAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
   const session = sessions.find((s) => s.id === sessionId) ?? null
+  const workspace = workspaces.find((w) => w.id === session?.workspaceId)
+  const hasUnseenChanges = useAtomValue(agentDiffUnseenChangesAtom).get(sessionId) === true
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setTabs = useSetAtom(tabsAtom)
   const setSideTemporaryAgentMap = useSetAtom(agentSideTemporaryAgentMapAtom)
@@ -97,7 +100,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
   }
 
   return (
-    <div className="relative z-[51] flex items-center gap-2 px-3 h-[48px]">
+    <div className="relative z-[51] flex h-10 items-center gap-2 proma-chrome-surface px-5 sm:px-6">
       {/* 页面标题栏仍可拖动；系统控制按钮由窗口顶部的统一标题栏承载。 */}
       <div className="absolute inset-0 titlebar-drag-region pointer-events-none" />
       {editing ? (
@@ -133,7 +136,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="titlebar-no-drag group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-left transition-colors hover:bg-muted/60"
+              className="titlebar-no-drag group -ml-2 flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-left transition-colors hover:bg-muted/60"
               aria-label={`会话菜单：${session.title}`}
             >
               <span className="truncate text-[15px] font-normal text-foreground">{session.title}</span>
@@ -147,6 +150,11 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+      )}
+      {workspace && (
+        <span className="relative hidden max-w-40 truncate rounded-md bg-foreground/[0.045] px-2 py-1 text-xs text-muted-foreground md:inline">
+          {workspace.name}
+        </span>
       )}
       {explorationBranches.length > 0 && (
         <DropdownMenu>
@@ -181,10 +189,14 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
         <button
           type="button"
           onClick={() => setRightPanelOpen(true)}
-          className="titlebar-no-drag ml-auto inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[background-color,color,transform] hover:bg-muted hover:text-foreground active:scale-[0.96]"
-          aria-label="展开右侧工作区"
+          className="titlebar-no-drag relative ml-auto inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[background-color,color,transform] hover:bg-muted hover:text-foreground active:scale-[0.96]"
+          aria-label={hasUnseenChanges ? '展开右侧工作区（有未查看的文件改动）' : '展开右侧工作区'}
+          title={hasUnseenChanges ? '有未查看的文件改动' : undefined}
         >
           <PanelRight className="size-4" />
+          {hasUnseenChanges && (
+            <span aria-hidden="true" className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary ring-2 ring-background" />
+          )}
         </button>
       )}
     </div>

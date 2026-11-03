@@ -92,9 +92,9 @@ export function MarkdownToc({ containerRef, content, editorRef, editorReady, ena
   }
 
   return (
-    <nav aria-label="文档目录" className="m-2 flex h-[calc(100%-1rem)] min-h-0 w-52 shrink-0 self-start flex-col rounded-lg bg-muted/40">
+    <nav aria-label="文档目录" className="flex min-h-0 flex-col workspace-preview-toc m-2 h-[calc(100%-1rem)] w-52 shrink-0 self-start rounded-lg bg-muted/40">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <div className="min-w-0 flex-1 text-[11px] font-medium text-foreground/40 select-none">目录</div>
+        <div className="min-w-0 flex-1 text-[13px] font-medium text-foreground/60 select-none">目录</div>
         {onOpenChange && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -107,8 +107,9 @@ export function MarkdownToc({ containerRef, content, editorRef, editorReady, ena
         )}
       </div>
       <div ref={listRef} className="min-h-0 flex-1 overflow-auto scrollbar-thin px-1 pb-2">
+        {headings.length === 0 && <p className="px-2 py-2 text-[13px] text-muted-foreground">暂无标题</p>}
         {headings.map((heading) => (
-          <button key={heading.id} type="button" data-toc-id={heading.id} onClick={() => jumpTo(heading)} disabled={!navigationReady} title={navigationReady ? heading.text : '正在准备目录跳转'} style={{ paddingLeft: `${(heading.level - minLevel) * 12 + 8}px` }} className={cn('block w-full text-left truncate rounded py-1 pr-2 text-[12px] leading-snug transition-colors disabled:cursor-wait disabled:opacity-50', 'border-l-2 border-transparent', heading.id === activeId ? 'border-primary text-foreground font-medium bg-foreground/[0.04]' : 'text-foreground/55 hover:text-foreground/80 hover:bg-foreground/[0.03]')}>
+          <button key={heading.id} type="button" data-toc-id={heading.id} onClick={() => jumpTo(heading)} disabled={!navigationReady} title={navigationReady ? heading.text : '正在准备目录跳转'} style={{ paddingLeft: `${(heading.level - minLevel) * 12 + 8}px` }} className={cn('block w-full text-left truncate rounded py-1 pr-2 text-[14px] leading-snug transition-colors disabled:cursor-wait disabled:opacity-50', 'border-l-2 border-transparent', heading.id === activeId ? 'border-primary text-foreground font-medium bg-foreground/[0.04]' : 'text-foreground/70 hover:text-foreground/80 hover:bg-foreground/[0.03]')}>
             {heading.text}
           </button>
         ))}

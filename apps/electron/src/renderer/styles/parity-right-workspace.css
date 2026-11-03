@@ -1,0 +1,101 @@
+/* 商业版 0.21.88 右侧工作区 / 预览 / 浏览器 / Launcher / Diff 仓库头的专用样式（取自 com.css 第 477-574 行）。 */
+.right-workspace {
+  --workspace-list-row-height: 36px;
+}
+.workspace-preview {
+  container: workspace-preview / inline-size;
+  --md-preview-font-size: calc(16px + var(--reading-font-size-offset, 0px));
+  --diffs-font-size: 14px;
+  --diffs-line-height: 22px;
+}
+@container workspace-preview (max-width: 420px) {
+  .workspace-preview-compact .workspace-preview-toolbar-title {
+    flex-basis: 100%;
+  }
+}
+.workspace-preview-compact .live-markdown-table-editor table {
+  table-layout: auto;
+}
+.workspace-preview-compact .live-markdown-table-editor th,
+.workspace-preview-compact .live-markdown-table-editor td {
+  min-width: 6rem;
+}
+.workspace-preview-compact .live-markdown-table-value {
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.workspace-preview-compact .live-markdown-table-editor-hint {
+  opacity: 0;
+}
+.workspace-preview-compact .live-markdown-table-editor:hover .live-markdown-table-editor-hint,
+.workspace-preview-compact .live-markdown-table-editor:focus-within .live-markdown-table-editor-hint {
+  opacity: 1;
+}
+@media (max-width:1366px), (max-height:900px) {
+  .right-workspace {
+    --workspace-list-row-height: 32px;
+  }
+}
+.workspace-browser {
+  container: workspace-browser / inline-size;
+}
+@container workspace-browser (max-width: 320px) {
+  .workspace-browser-toolbar {
+    height: auto;
+    min-height: 42px;
+    flex-wrap: wrap;
+    padding-block: 4px;
+  }
+  .workspace-browser-address {
+    order: 1;
+    flex-basis: 100%;
+  }
+}
+.workspace-launcher {
+  container: workspace-launcher / inline-size;
+}
+@container workspace-launcher (min-width: 480px) {
+  .workspace-launcher-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .workspace-launcher-sites {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@container workspace-launcher (min-width: 320px) and (max-width: 479px) {
+  .workspace-launcher-sites {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container workspace-preview (max-width: 600px) {
+  .workspace-preview-body:has(> .workspace-preview-toc) {
+    flex-direction: column;
+  }
+  .workspace-preview-toc {
+    width: auto;
+    height: auto;
+    max-height: 35%;
+    flex: 0 1 160px;
+    align-self: stretch;
+  }
+  .workspace-preview-body:has(> .workspace-preview-toc) > .workspace-preview-content {
+    height: auto;
+  }
+}
+.diff-repo-header .diff-repo-sources-full,
+.diff-repo-header .diff-repo-count-label {
+  display: none;
+}
+@container diff-repo (min-width: 400px) {
+  .diff-repo-header .diff-repo-count-label {
+    display: inline;
+  }
+}
+@container diff-repo (min-width: 480px) {
+  .diff-repo-header .diff-repo-sources-compact {
+    display: none;
+  }
+  .diff-repo-header .diff-repo-sources-full {
+    display: flex;
+  }
+}

@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RefreshCw, Loader2, CheckCircle2, AlertCircle, Info, Terminal, ChevronDown, ChevronUp, ExternalLink, RotateCw } from 'lucide-react'
+import { RefreshCw, Loader2, AlertCircle, Info, Terminal, ChevronDown, ChevronUp } from 'lucide-react'
 import type { EnvironmentCheckResult, RuntimeStatus, WindowsShellPreference } from '@proma/shared'
 import {
   SettingsSection,
@@ -22,6 +22,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { ReleaseNotesViewer } from './ReleaseNotesViewer'
 import { VersionHistory } from './VersionHistory'
+import { UpdateStatusCard } from './UpdateStatusCard'
 
 /** 从 package.json 构建时由 Vite define 注入 */
 declare const __APP_VERSION__: string
@@ -36,9 +37,6 @@ function UpdateCard(): React.ReactElement | null {
   const [checking, setChecking] = React.useState(false)
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
   const [release, setRelease] = React.useState<import('@proma/shared').GitHubRelease | null>(null)
-
-  // updater 不可用时不渲染
-  if (!available) return null
 
   const handleCheck = async (): Promise<void> => {
     setChecking(true)
@@ -83,58 +81,21 @@ function UpdateCard(): React.ReactElement | null {
     }
   }, [status.status, status.version, release])
 
-  const isChecking = checking || status.status === 'checking' || status.status === 'downloading'
+  // updater 不可用时不渲染
+  if (!available) return null
+
   const hasReleaseNotes = status.releaseNotes || release?.body
 
   return (
     <SettingsCard>
-      <SettingsRow label="软件更新">
-        <div className="flex items-center gap-3">
-          {/* 状态文字 */}
-          <StatusText status={status.status} version={status.version} error={status.error} />
-
-          {/* 操作按钮 */}
-          {status.status === 'downloaded' ? (
-            status.installScheduled ? (
-              <button
-                onClick={handleCancelIdleInstall}
-                className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors"
-              >
-                取消安排
-              </button>
-            ) : (
-              <button
-                onClick={handleInstallWhenIdle}
-                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-              >
-                <RotateCw className="h-3.5 w-3.5" />
-                空闲时更新
-              </button>
-            )
-          ) : status.status === 'available' ? (
-            <button
-              onClick={handleGoToDownload}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              前往下载
-            </button>
-          ) : (
-            <button
-              onClick={handleCheck}
-              disabled={isChecking}
-              className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
-            >
-              {isChecking ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
-              )}
-              检查更新
-            </button>
-          )}
-        </div>
-      </SettingsRow>
+      <UpdateStatusCard
+        status={status}
+        checking={checking && (status.status === 'idle' || status.status === 'checking')}
+        onCheck={() => { void handleCheck() }}
+        onDownload={handleGoToDownload}
+        onInstall={handleInstallWhenIdle}
+        onCancelInstall={handleCancelIdleInstall}
+      />
 
       {/* Release Notes（新版本可用时显示） */}
       {status.status === 'available' && hasReleaseNotes && (
@@ -164,55 +125,6 @@ function UpdateCard(): React.ReactElement | null {
       )}
     </SettingsCard>
   )
-}
-
-/** 状态文字组件 */
-function StatusText({ status, version, error }: {
-  status: string
-  version?: string
-  error?: string
-}): React.ReactElement {
-  switch (status) {
-    case 'checking':
-      return <span className="text-xs text-muted-foreground">正在检查...</span>
-    case 'available':
-      return (
-        <span className="text-xs text-primary flex items-center gap-1">
-          <ExternalLink className="h-3 w-3" />
-          新版本 v{version} 可用
-        </span>
-      )
-    case 'downloading':
-      return (
-        <span className="text-xs text-muted-foreground flex items-center gap-1">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          正在下载 v{version}
-        </span>
-      )
-    case 'downloaded':
-      return (
-        <span className="text-xs text-primary flex items-center gap-1">
-          <CheckCircle2 className="h-3 w-3" />
-          更新 v{version} 已就绪
-        </span>
-      )
-    case 'not-available':
-      return (
-        <span className="text-xs text-muted-foreground flex items-center gap-1">
-          <CheckCircle2 className="h-3 w-3" />
-          已是最新版本
-        </span>
-      )
-    case 'error':
-      return (
-        <span className="text-xs text-destructive flex items-center gap-1" title={error}>
-          <AlertCircle className="h-3 w-3" />
-          检查失败
-        </span>
-      )
-    default:
-      return <span className="text-xs text-muted-foreground">未检查</span>
-  }
 }
 
 /** 环境检测卡片 */
@@ -482,7 +394,7 @@ export function AboutSettings(): React.ReactElement {
   return (
     <SettingsSection
       title="关于 Proma"
-      description="集成通用 AI Agent 的下一代人工智能软件"
+      description="为专业用户设计的 Agent 桌面客户端"
     >
       <SettingsCard>
         <SettingsRow label="版本">
@@ -504,14 +416,14 @@ export function AboutSettings(): React.ReactElement {
             AGPL-3.0
           </a>
         </SettingsRow>
-        <SettingsRow label="项目地址">
+        <SettingsRow label="Proma 官网">
           <a
-            href="https://github.com/proma-ai/Proma.git"
+            href="https://proma.cool"
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-primary hover:underline"
           >
-            github.com/proma-ai/Proma
+            proma.cool
           </a>
         </SettingsRow>
       </SettingsCard>

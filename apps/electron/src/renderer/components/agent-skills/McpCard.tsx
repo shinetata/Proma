@@ -57,8 +57,8 @@ export function McpCard({
         }
       }}
       className={cn(
-        'group relative flex flex-col gap-2.5 rounded-lg bg-card px-4 pb-3 pt-4 text-left shadow-md cursor-pointer',
-        'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'group relative flex flex-col gap-2.5 rounded-xl border border-border/60 bg-content-area px-4 pb-3 pt-4 text-left transition-[border-color,box-shadow] cursor-pointer',
+        'hover:border-border hover:shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         !entry.enabled && 'bg-muted/35',
       )}
     >

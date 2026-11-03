@@ -135,13 +135,13 @@ export function BrowserPanel({ sessionId, tabId, state, isAddTabMenuOpen = false
   const externalBrowserUrl = resolveExternalBrowserUrl(url)
   const isBackgroundRun = state?.executionSource === 'automation' || state?.executionSource === 'delegation'
   return (
-    <div className="flex h-full min-w-0 flex-col overflow-hidden border-l border-border/80 bg-content-area titlebar-no-drag">
-      <div className="flex items-center h-[42px] gap-1 px-2 border-b border-border/40 bg-muted/20">
+    <div className="workspace-browser flex h-full min-w-0 flex-col overflow-hidden border-l border-border/80 bg-content-area titlebar-no-drag">
+      <div className="workspace-browser-toolbar flex items-center h-[42px] gap-1 px-2 border-b border-border/40 bg-muted/20">
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-8 rounded-lg text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" disabled={riskBlocked || !isControllerTabActive || !state?.canGoBack} onClick={() => void window.electronAPI.goBackAgentBrowser?.(sessionId)}><ChevronLeft className="size-5" /></Button></TooltipTrigger><TooltipContent>后退</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-8 rounded-lg text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" disabled={riskBlocked || !isControllerTabActive || !state?.canGoForward} onClick={() => void window.electronAPI.goForwardAgentBrowser?.(sessionId)}><ChevronRight className="size-5" /></Button></TooltipTrigger><TooltipContent>前进</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-8 rounded-lg text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" disabled={riskBlocked || !isControllerTabActive} onClick={() => void window.electronAPI.reloadAgentBrowser?.(sessionId)}><RotateCw className="size-[18px]" /></Button></TooltipTrigger><TooltipContent>刷新</TooltipContent></Tooltip>
-        <form className="flex-1 min-w-0" onSubmit={(event) => { event.preventDefault(); if (!riskBlocked) void navigate() }}>
-          <Input disabled={riskBlocked || !isControllerTabActive} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="输入网址或搜索内容" className="h-7 bg-background/70 text-xs text-muted-foreground/70" aria-label="浏览器地址" />
+        <form className="workspace-browser-address flex-1 min-w-0" onSubmit={(event) => { event.preventDefault(); if (!riskBlocked) void navigate() }}>
+          <Input disabled={riskBlocked || !isControllerTabActive} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="输入网址或搜索内容" className="h-8 bg-background/70 text-[14px] text-foreground/85" aria-label="浏览器地址" />
         </form>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -182,7 +182,7 @@ export function BrowserPanel({ sessionId, tabId, state, isAddTabMenuOpen = false
           <div className="max-w-sm space-y-2 text-muted-foreground">
             <ShieldAlert className="mx-auto size-7 text-amber-500/90" />
             <p className="text-sm font-medium text-foreground">使用前请阅读风险告知</p>
-            <p className="text-xs leading-5">受管浏览器将在确认后启用，登录状态只保存在本机。</p>
+            <p className="text-[13px] leading-5">受管浏览器将在确认后启用，登录状态只保存在本机。</p>
           </div>
         </div>
       )}
@@ -197,7 +197,7 @@ export function BrowserPanel({ sessionId, tabId, state, isAddTabMenuOpen = false
               <div className="space-y-3 text-left leading-6">
                 <p>Proma 可让 Agent 在浏览器中读取、搜索、点击和输入。部分平台可能将这些行为或高频操作识别为自动化活动。</p>
                 <p>这可能导致验证码、限流、功能限制、账号风控，严重时可能造成账号处罚或封禁。请自行了解并遵守目标平台规则，并自行承担相应风险。</p>
-                <p className="text-xs">Proma 不会保证第三方平台接受这些操作；请避免不必要的高频互动，并在重要操作前核对页面状态。</p>
+                <p className="text-[13px]">Proma 不会保证第三方平台接受这些操作；请避免不必要的高频互动，并在重要操作前核对页面状态。</p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

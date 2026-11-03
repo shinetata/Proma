@@ -13,6 +13,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { currentAgentWorkspaceIdAtom, agentSettingsReadyAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
@@ -25,7 +26,8 @@ export function WelcomeView(): React.ReactElement {
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const { createAgent } = useCreateSession()
-  const initializedRef = React.useRef(false)
+  const [failed, setFailed] = React.useState(false)
+  const [retryKey, setRetryKey] = React.useState(0)
 
   // 将高频变化的值收集到 ref 中，避免污染 useEffect 依赖数组（否则 tabs/draftSessionIds
   // 引用变化会导致重复触发，而 createAgent 每次渲染都是新引用）
@@ -46,13 +48,15 @@ export function WelcomeView(): React.ReactElement {
     createAgent,
   }
 
+  // 对齐商业版 LZt：工作区切换或用户重试时重新解析入口；失败时给出可重试的提示。
   React.useEffect(() => {
     // settings 就绪前 workspaceId 可能为空，等到就绪再决定
     if (!agentSettingsReady) return
-    if (initializedRef.current) return
-    initializedRef.current = true
+    let active = true
+    setFailed(false)
 
     window.electronAPI.listActiveAgentSessions().then((freshSessions) => {
+      if (!active) return
       const {
         tabs: currentTabs,
         draftSessionIds: currentDrafts,
@@ -61,6 +65,7 @@ export function WelcomeView(): React.ReactElement {
         setActiveTabId: currentSetActiveTabId,
         createAgent: currentCreateAgent,
       } = latestRef.current
+      if (currentTabs.length > 0) return
 
       // 按当前工作区过滤。持久化草稿在侧栏中无入口，必须优先恢复，
       // 否则同项目的普通会话会让草稿永久不可访问。
@@ -92,14 +97,27 @@ export function WelcomeView(): React.ReactElement {
         return
       }
       // 没有任何会话时才创建新的 draft 会话
-      currentCreateAgent({ draft: true })
-    }).catch(console.error)
-  }, [agentSettingsReady])
+      void currentCreateAgent({ draft: true }).then((sessionId) => {
+        if (active && !sessionId) setFailed(true)
+      })
+    }).catch((error) => {
+      console.error('[会话入口] 加载失败:', error)
+      if (active) setFailed(true)
+    })
+    return () => { active = false }
+  }, [agentSettingsReady, currentWorkspaceId, retryKey])
 
   // 短暂的过渡状态（通常几十毫秒内就会被 TabContent 替换）
   return (
     <div className="flex h-full items-center justify-center">
-      <Loader2 className="size-5 animate-spin text-muted-foreground/40" />
+      {failed ? (
+        <div role="alert" className="space-y-3 text-center text-sm text-muted-foreground">
+          <p>暂时无法打开任务，请重试。</p>
+          <Button variant="outline" onClick={() => setRetryKey((key) => key + 1)}>重试</Button>
+        </div>
+      ) : (
+        <Loader2 className="size-5 animate-spin text-muted-foreground/40" />
+      )}
     </div>
   )
 }

@@ -772,6 +772,8 @@ export interface AgentSessionMeta {
   pinned?: boolean
   /** 是否已星标（仅用于侧栏快速识别，不影响排序或置顶） */
   starred?: boolean
+  /** 最近一次加入收藏的时间戳；用于收藏面板「按收藏时间」排序，缺失时回退 updatedAt。 */
+  starredAt?: number
   /** 是否已归档 */
   archived?: boolean
   /**

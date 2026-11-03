@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Check, ChevronDown, Cpu, Search } from 'lucide-react'
+import { Check, ChevronDown, Circle, Cpu, Search, Zap } from 'lucide-react'
 import {
   Popover,
   PopoverContent,
@@ -50,6 +50,88 @@ function ModelSelectorListIcon({ src }: ModelSelectorListIconProps): React.React
     >
       <img src={src} alt="" className="size-5 rounded-md object-contain" />
     </span>
+  )
+}
+
+/** Codex 响应速度档位；Dev 后端目前支持标准与快速两档。 */
+export type CodexSpeed = 'standard' | 'fast'
+
+const CODEX_SPEED_LABELS: Record<CodexSpeed, string> = { standard: '标准', fast: '快速' }
+
+/** Codex 速度配置：由会话视图传入，仅在 Codex 渠道且模型支持多档速度时显示。 */
+export interface ModelSelectorCodexSpeed {
+  speed: CodexSpeed
+  speeds: CodexSpeed[]
+  disabled?: boolean
+  onChange: (speed: CodexSpeed) => void
+}
+
+/** 触发按钮内的速度徽标 */
+function CodexSpeedBadge({ speed }: { speed: CodexSpeed }): React.ReactElement {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none',
+        speed !== 'standard' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+      )}
+      aria-label={`Codex 速度：${CODEX_SPEED_LABELS[speed]}`}
+    >
+      {speed !== 'standard' && <Zap className="size-3" aria-hidden="true" />}
+      {CODEX_SPEED_LABELS[speed]}
+    </span>
+  )
+}
+
+/** 模型列表底部的「响应速度」单选组 */
+function CodexSpeedPicker({ speed, speeds, disabled, onChange }: ModelSelectorCodexSpeed): React.ReactElement {
+  const id = React.useId()
+  return (
+    <div className="mx-4 mb-2 mt-2 border-t border-border/50 pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span id={`${id}-label`} className="text-xs font-medium text-foreground">响应速度</span>
+        <div
+          role="radiogroup"
+          aria-labelledby={`${id}-label`}
+          aria-describedby={`${id}-hint`}
+          aria-orientation="horizontal"
+          className="flex gap-1 rounded-lg bg-muted/60 p-1"
+        >
+          {speeds.map((item) => {
+            const checked = speed === item
+            return (
+              <label
+                key={item}
+                className={cn(
+                  'flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs',
+                  checked && 'bg-background text-foreground shadow-sm',
+                  disabled && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={checked}
+                  aria-label={CODEX_SPEED_LABELS[item]}
+                  disabled={disabled}
+                  onClick={() => { if (!checked) onChange(item) }}
+                  className={cn('aspect-square h-4 w-4 rounded-full border border-primary text-primary shadow focus:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50', 'size-3')}
+                >
+                  {checked && (
+                    <span className="flex items-center justify-center">
+                      <Circle className="h-3.5 w-3.5 fill-primary" />
+                    </span>
+                  )}
+                </button>
+                {CODEX_SPEED_LABELS[item]}
+              </label>
+            )
+          })}
+        </div>
+      </div>
+      <p id={`${id}-hint`} className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+        快速模式优先响应，消耗更多额度。{disabled ? '当前暂不可切换。' : '仅应用于当前会话，不改变思考强度。'}
+      </p>
+    </div>
   )
 }
 
@@ -114,6 +196,10 @@ interface ModelSelectorProps {
   excludedProviders?: readonly ProviderType[]
   /** 是否使用全局 modelSelectorOpenAtom 控制打开状态（用于外部拉起，如错误提示按钮） */
   useSharedOpenState?: boolean
+  /** 触发按钮文字的宽度约束，默认 max-w-[200px] */
+  triggerLabelClassName?: string
+  /** Codex 响应速度（仅 Codex 渠道支持多档速度的模型显示） */
+  codexSpeed?: ModelSelectorCodexSpeed
 }
 
 export function ModelSelector({
@@ -124,6 +210,8 @@ export function ModelSelector({
   showChannelInTrigger = false,
   excludedProviders,
   useSharedOpenState = false,
+  triggerLabelClassName,
+  codexSpeed,
 }: ModelSelectorProps): React.ReactElement {
   const setChannels = useSetAtom(channelsAtom)
   const channels = useAtomValue(channelsAtom)
@@ -209,6 +297,7 @@ export function ModelSelector({
   const stableModelInfoRef = React.useRef(currentModelInfo)
   if (currentModelInfo) stableModelInfoRef.current = currentModelInfo
   const displayModelInfo = currentModelInfo ?? stableModelInfoRef.current
+  const showCodexSpeed = !!(codexSpeed && currentModelInfo?.provider === 'openai-codex' && codexSpeed.speeds.length > 1)
 
   // Tooltip 必须始终保持 controlled 或 uncontrolled 之一。此前在 Popover 打开时传 false、关闭时传
   // undefined，Radix 会发出 controlled/uncontrolled 告警，且与模型 Popover 的 trigger 竞争焦点。
@@ -274,12 +363,13 @@ export function ModelSelector({
               ) : (
                 <Cpu className="size-3.5" />
               )}
-              <span className="max-w-[200px] truncate">
+              <span className={cn('truncate', triggerLabelClassName ?? 'max-w-[200px]')}>
                 {displayModelInfo
                   ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
                   : '选择模型'}
               </span>
-              <ChevronDown className="size-3" />
+              {showCodexSpeed && codexSpeed && <CodexSpeedBadge speed={codexSpeed.speed} />}
+              <ChevronDown className="size-3 shrink-0" />
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -293,7 +383,7 @@ export function ModelSelector({
         align="end"
         sideOffset={8}
         collisionPadding={12}
-        className="w-[min(400px,calc(100vw-24px))] p-0"
+        className="w-[min(480px,calc(100vw-24px))] p-0"
         aria-label="选择模型"
       >
         {/* 搜索栏 */}
@@ -363,6 +453,7 @@ export function ModelSelector({
                           onClick={() => handleSelect(option)}
                           onMouseEnter={() => setHighlightIndex(currentFlatIndex)}
                           className={cn(
+                            'group',
                             MODEL_SELECTOR_ROW_LAYOUT,
                             'min-h-9 rounded-lg py-1.5 text-left transition-colors',
                             'hover:bg-accent/60 focus:outline-none focus-visible:bg-accent/70',
@@ -373,18 +464,26 @@ export function ModelSelector({
                           <ModelSelectorListIcon
                             src={getModelLogo(option.modelId, option.provider)}
                           />
-                          <span className={cn(
-                            'min-w-0 truncate text-sm',
-                            isSelected ? 'font-medium text-foreground' : 'text-foreground/80',
-                          )}>
-                            {option.modelName}
+                          <span className="min-w-0 overflow-hidden block">
+                            <span
+                              className={cn(
+                                'block min-w-0 truncate text-sm',
+                                isSelected ? 'font-medium text-foreground' : 'text-foreground/80',
+                              )}
+                              title={option.modelName}
+                            >
+                              {option.modelName}
+                            </span>
                           </span>
-                          <span className="flex size-5 items-center justify-center" aria-hidden="true">
+                          <span className="relative flex size-5 items-center justify-center justify-self-end" aria-hidden="true">
                             {isSelected ? <Check className="size-4 text-primary" strokeWidth={2.5} /> : null}
                           </span>
                         </button>
                       )
                     })}
+                    {showCodexSpeed && codexSpeed && channelId === currentModelInfo?.channelId && (
+                      <CodexSpeedPicker {...codexSpeed} />
+                    )}
                   </div>
                 )
               })

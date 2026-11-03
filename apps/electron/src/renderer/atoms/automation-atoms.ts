@@ -6,6 +6,7 @@
  */
 
 import { atom } from 'jotai'
+import { atomWithStorage, createJSONStorage } from 'jotai/utils'
 import type {
   Automation,
   AutomationNotificationTarget,
@@ -17,6 +18,34 @@ import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } f
 
 /** 全部定时任务列表 */
 export const automationsAtom = atom<Automation[]>([])
+
+/**
+ * 请求侧栏展开并聚焦某个定时任务（商业版 t_e）。
+ * 由外部入口写入任务 ID，AutomationSidebarPanel 消费后清空。
+ */
+export const automationFocusRequestAtom = atom<string | null>(null)
+
+/** 定时任务侧栏中运行会话的排序方式（商业版 pL） */
+export type AutomationSessionSort = 'activity' | 'created-desc' | 'created-asc'
+
+export const AUTOMATION_SESSION_SORT_LABELS: Record<AutomationSessionSort, string> = {
+  activity: '最近活动',
+  'created-desc': '创建时间（最新优先）',
+  'created-asc': '创建时间（最早优先）',
+}
+
+const automationSessionSortStorage = createJSONStorage<AutomationSessionSort>(() => localStorage, {
+  reviver: (key, value) => (
+    key === '' && value !== 'created-desc' && value !== 'created-asc' ? 'activity' : value
+  ),
+})
+
+/** 运行会话排序偏好，持久化到 localStorage（商业版 Xwe，同一 key） */
+export const automationSessionSortAtom = atomWithStorage<AutomationSessionSort>(
+  'proma-automation-session-sort',
+  'activity',
+  automationSessionSortStorage,
+)
 
 /**
  * 表单草稿
@@ -77,6 +106,18 @@ export function createEmptyDraft(): AutomationDraft {
     sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
     active: true,
   }
+}
+
+/** 新建草稿并自动命名为「定时任务 N」（取现有最大 N + 1，商业版 Ast） */
+export function createNamedDraft(automations: Automation[]): AutomationDraft {
+  let maxN = 0
+  for (const a of automations) {
+    const m = /^定时任务\s*(\d+)$/.exec(a.name.trim())
+    if (m) maxN = Math.max(maxN, Number(m[1]))
+  }
+  const draft = createEmptyDraft()
+  draft.name = `定时任务 ${maxN + 1}`
+  return draft
 }
 
 /**

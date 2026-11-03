@@ -113,7 +113,7 @@ export function AgentMessageQueue({
               {isDropBefore && <div className="absolute left-2 right-2 top-0 h-0.5 rounded-full bg-primary" />}
               {isDropAfter && <div className="absolute left-2 right-2 bottom-0 h-0.5 rounded-full bg-primary" />}
               <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground/55 active:cursor-grabbing" />
-              <div className="min-w-0 flex-1 text-[13px] leading-5 text-foreground/80">
+              <div className="min-w-0 flex-1 text-[length:calc(13px+var(--reading-font-size-offset,0px))] leading-5 text-foreground/80">
                 {item.quotedSelection && (
                   <div className="mb-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
                     <Quote className="size-3 shrink-0" />

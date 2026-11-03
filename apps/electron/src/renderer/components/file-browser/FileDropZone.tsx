@@ -7,7 +7,13 @@
 
 import * as React from 'react'
 import { toast } from 'sonner'
-import { Paperclip, FolderPlus, Loader2 } from 'lucide-react'
+import { Paperclip, FolderPlus, Loader2, Plus } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { fileToBase64, formatFileNames } from '@/lib/file-utils'
@@ -21,9 +27,11 @@ interface FileDropZoneProps {
   onFilesAttached?: (filePaths: string[]) => Promise<void> | void
   onAttachFolder: () => void
   onFoldersDropped: (folderPaths: string[]) => void
+  /** 紧凑模式：单个「+」按钮与下拉菜单，用于内联预览的文件列表顶栏（商业版 b_ compact）。 */
+  compact?: boolean
 }
 
-export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onFilesUploaded, onFilesAttached, onAttachFolder, onFoldersDropped }: FileDropZoneProps): React.ReactElement {
+export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onFilesUploaded, onFilesAttached, onAttachFolder, onFoldersDropped, compact = false }: FileDropZoneProps): React.ReactElement {
   const [isDragOver, setIsDragOver] = React.useState<'left' | 'right' | null>(null)
   const [isUploading, setIsUploading] = React.useState(false)
 
@@ -102,7 +110,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
     }
   }, [workspaceSlug, sessionId, isWorkspace, onFilesUploaded, onFilesAttached])
 
-  const handleDrop = React.useCallback(async (e: React.DragEvent, side: 'left' | 'right'): Promise<void> => {
+  const handleDrop = React.useCallback(async (e: React.DragEvent, side: 'left' | 'right' | 'auto'): Promise<void> => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(null)
@@ -132,10 +140,11 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
       try {
         const { directories, files: filePaths } = await window.electronAPI.checkPathsType(paths)
 
-        // 左侧：只上传文件，忽略目录
-        if (side === 'left') {
+        // 左侧：只上传文件，忽略目录；紧凑模式（auto）下文件上传、文件夹附加
+        if (side !== 'right') {
           if (directories.length > 0) {
-            toast.info('文件夹请拖到右侧「附加文件夹」区')
+            if (side === 'auto') onFoldersDropped(directories)
+            else toast.info('文件夹请拖到右侧「附加文件夹」区')
           }
           const regularFiles = filePaths.flatMap((p) => {
             const f = pathMap.get(p)
@@ -160,14 +169,14 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
         }
       } catch (error) {
         console.error('[FileDropZone] 路径检测失败，回退处理:', error)
-        if (side === 'left') {
+        if (side !== 'right') {
           await saveFiles(droppedFiles)
         } else {
           toast.warning('无法识别文件夹，请使用按钮选择')
         }
       }
     } else {
-      if (side === 'left') {
+      if (side !== 'right') {
         await saveFiles(droppedFiles)
       } else {
         toast.warning('无法识别文件夹，请使用按钮选择')
@@ -276,10 +285,48 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
     }
   }
 
+  if (compact) {
+    return (
+      <DropdownMenu>
+        <Tooltip open={isDragOver ? false : undefined}>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                disabled={isUploading}
+                aria-label={isUploading ? '正在上传文件' : '添加文件或文件夹'}
+                className={cn(
+                  'flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-50',
+                  isDragOver && 'bg-primary/15 ring-2 ring-primary/50',
+                )}
+                onDragOver={(e) => handleDragOver(e, 'left')}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => void handleDrop(e, 'auto')}
+              >
+                {isUploading ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">添加文件或文件夹，也可拖到此处</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => void handleSelectFiles()}>
+            <Paperclip className="size-4" />
+            添加文件
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onAttachFolder}>
+            <FolderPlus className="size-4" />
+            附加文件夹
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
+  }
+
   return (
     <div className="flex gap-2 px-3 pt-2 pb-1.5 flex-shrink-0">
       {isUploading ? (
-        <div className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] text-muted-foreground">
+        <div className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[13px] text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
           正在上传...
         </div>
@@ -299,7 +346,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
                 onClick={handleSelectFiles}
                 onKeyDown={activateOnKey(handleSelectFiles)}
               >
-                <span className="text-[11px] text-muted-foreground/75">添加文件</span>
+                <span className="text-[13px] text-muted-foreground/75">添加文件</span>
                 <Paperclip className="size-4 text-muted-foreground/60" />
               </div>
             </TooltipTrigger>
@@ -320,7 +367,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
                 onClick={onAttachFolder}
                 onKeyDown={activateOnKey(onAttachFolder)}
               >
-                <span className="text-[11px] text-muted-foreground/75">附加文件夹</span>
+                <span className="text-[13px] text-muted-foreground/75">附加文件夹</span>
                 <FolderPlus className="size-4 text-muted-foreground/60" />
               </div>
             </TooltipTrigger>

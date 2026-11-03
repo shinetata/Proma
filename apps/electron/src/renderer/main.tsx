@@ -64,6 +64,7 @@ import {
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { tabsAtom, activeTabIdAtom, getPersistableTabState } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
+import { conversationTabStateAtom } from './atoms/active-view'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { slackBotStatesAtom } from './atoms/slack-atoms'
@@ -907,9 +908,9 @@ function TabStatePersistenceInitializer(): null {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
 
+    // 只持久化会话首页的 Tab 集合；收藏、定时任务视图的 Tab 不写入（商业版 QL）
     const save = (): void => {
-      const tabs = store.get(tabsAtom)
-      const activeTabId = store.get(activeTabIdAtom)
+      const { tabs, activeTabId } = store.get(conversationTabStateAtom)
       const persistableTabState = getPersistableTabState(tabs, activeTabId)
       window.electronAPI.updateSettings({
         tabState: persistableTabState,
@@ -922,15 +923,13 @@ function TabStatePersistenceInitializer(): null {
       timer = setTimeout(save, 500)
     }
 
-    const unsub1 = store.sub(tabsAtom, debouncedSave)
-    const unsub2 = store.sub(activeTabIdAtom, debouncedSave)
+    const unsub1 = store.sub(conversationTabStateAtom, debouncedSave)
 
     // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
     const handleBeforeUnload = (): void => {
       if (timer) clearTimeout(timer)
       // 使用同步 IPC 确保关闭前数据写入磁盘
-      const tabs = store.get(tabsAtom)
-      const activeTabId = store.get(activeTabIdAtom)
+      const { tabs, activeTabId } = store.get(conversationTabStateAtom)
       const persistableTabState = getPersistableTabState(tabs, activeTabId)
       if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
         const ok = window.electronAPI.updateSettingsSync({ tabState: persistableTabState })
@@ -946,7 +945,6 @@ function TabStatePersistenceInitializer(): null {
 
     return () => {
       unsub1()
-      unsub2()
       if (timer) clearTimeout(timer)
       window.removeEventListener('beforeunload', handleBeforeUnload)
     }

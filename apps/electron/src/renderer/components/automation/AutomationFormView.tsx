@@ -39,6 +39,7 @@ import { activeViewAtom, agentSkillsTabAtom } from '@/atoms/active-view'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { LiveMarkdownEditor } from '@/components/markdown/LiveMarkdownEditor'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
+import { CreateAutomationWithAgentButton } from './CreateAutomationWithAgentButton'
 import type {
   AutomationFeishuNotificationTarget,
   AutomationNotificationTarget,
@@ -211,14 +212,17 @@ function createFeishuTarget(binding: FeishuChatBinding): AutomationFeishuNotific
   }
 }
 
-function AutomationPromptEmptyGuide(): React.ReactElement {
+function AutomationPromptEmptyGuide({ beforeCreate }: { beforeCreate: () => Promise<boolean> }): React.ReactElement {
   return (
     <div className="rounded-xl bg-foreground/[0.035] p-4 shadow-inner">
       <div className="flex flex-col gap-3">
         <div>
           <div className="text-[13px] font-semibold text-foreground">推荐：让 Proma Agent 创建</div>
-          <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            在左侧会话里说清目标，并明确表示要求创建定时任务，Proma Agent 会生成任务描述，并补全周期、项目和模型等配置，手动编辑更适合微调任务描述。
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-3">
+            <p className="min-w-0 flex-1 basis-72 text-xs leading-relaxed text-muted-foreground">
+              在左侧会话里说清目标，并明确表示要求创建定时任务，Proma Agent 会生成任务描述，并补全周期、项目和模型等配置，手动编辑更适合微调任务描述。
+            </p>
+            <CreateAutomationWithAgentButton className="shrink-0" beforeCreate={beforeCreate} />
           </div>
         </div>
         <div className="h-px bg-border/50" />
@@ -295,6 +299,8 @@ export function AutomationFormView({ embedded = false }: { embedded?: boolean } 
   const openSession = useOpenSession()
 
   const [form, setForm] = React.useState<AutomationDraft | null>(null)
+  // 每次打开新草稿时递增，用作编辑器 key 强制重新挂载（商业版 Hge 的 b 计数）
+  const [editorKey, setEditorKey] = React.useState(0)
   const [weekdayPresetOverride, setWeekdayPresetOverride] = React.useState<'custom' | null>(null)
   const [editingName, setEditingName] = React.useState(false)
   const [runningNow, setRunningNow] = React.useState(false)
@@ -319,6 +325,7 @@ export function AutomationFormView({ embedded = false }: { embedded?: boolean } 
     if (formState.open && formState.draft) {
       const draft = formState.draft
       setForm(draft)
+      setEditorKey((key) => key + 1)
       setWeekdayPresetOverride(null)
       lastSavedSignatureRef.current = draft.id && canPersistDraft(draft)
         ? getDraftSignature(draft)
@@ -553,8 +560,8 @@ export function AutomationFormView({ embedded = false }: { embedded?: boolean } 
     const latest = latestFormRef.current
     if (latest) void persistDraft(latest)
     setFormState({ open: false, draft: null })
-    setActiveView('conversations')
-    openSession('agent', session.id, session.title)
+    // 运行会话在定时任务视图的主区打开（商业版 view: 'automations'）
+    openSession('agent', session.id, session.title, { view: 'automations' })
   }
 
   const startEditName = (): void => {
@@ -657,12 +664,19 @@ export function AutomationFormView({ embedded = false }: { embedded?: boolean } 
           </div>
           <div className="min-h-0 flex-1">
             <div className="flex h-full min-h-0 flex-col gap-3">
-              <AutomationPromptEmptyGuide />
+              <AutomationPromptEmptyGuide
+                beforeCreate={async () => {
+                  const latest = latestFormRef.current
+                  if (!latest || !canPersistDraft(latest)) return true
+                  return (await persistDraft(latest)) !== null
+                }}
+              />
               <div
                 id="automation-prompt"
                 className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-foreground/[0.03] shadow-inner scrollbar-thin"
               >
                 <LiveMarkdownEditor
+                  key={editorKey}
                   value={form.prompt}
                   onChange={(value) => update({ prompt: value })}
                 />

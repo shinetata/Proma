@@ -107,8 +107,8 @@ export function MessageHeader({
         </div>
       )}
       <div className="flex flex-col justify-between h-[35px]">
-        {model && <span className="text-sm font-semibold text-foreground/60 leading-none">{model}</span>}
-        {time && <span className="message-time text-[10px] text-foreground/[0.38] leading-none">{time}</span>}
+        {model && <span className="text-[15px] font-semibold text-foreground/60 leading-none">{model}</span>}
+        {time && <span className="message-time text-[12px] text-foreground/[0.38] leading-none">{time}</span>}
       </div>
       {children}
     </div>
@@ -382,7 +382,7 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
         disabled={!canNavigate}
         onClick={canNavigate ? () => onAgentHistoryQuoteClick?.(quote) : undefined}
         className={cn(
-          'inline-flex items-center gap-0.5 rounded px-1 py-[1px] text-[13px] font-medium whitespace-nowrap align-baseline',
+          'inline-flex items-center gap-0.5 rounded px-1 py-[1px] text-[length:calc(13px+var(--reading-font-size-offset,0px))] font-medium whitespace-nowrap align-baseline',
           style.className,
           canNavigate ? 'cursor-pointer hover:bg-primary/[0.16]' : 'cursor-default',
         )}
@@ -415,7 +415,7 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-0.5 rounded px-1 py-[1px] text-[13px] font-medium whitespace-nowrap align-baseline',
+        'inline-flex items-center gap-0.5 rounded px-1 py-[1px] text-[length:calc(13px+var(--reading-font-size-offset,0px))] font-medium whitespace-nowrap align-baseline',
         style.className
       )}
       title={type === 'file' || isNamedReference ? (label || referenceId) : undefined}
@@ -814,7 +814,7 @@ export const MessageResponse = React.memo(
     return (
       <div
         className={cn(
-          'prose dark:prose-invert max-w-none text-[length:var(--md-preview-font-size,15px)]',
+          'prose dark:prose-invert max-w-none text-[length:var(--md-preview-font-size,16px)]',
           'prose-p:my-1.5 prose-p:leading-[1.6] prose-li:leading-[1.6] prose-pre:my-0 prose-headings:my-2 prose-hr:my-3',
           '[&_.code-block-wrapper+.code-block-wrapper]:mt-4',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
@@ -890,13 +890,13 @@ export const UserMessageContent = React.memo(
         <div
           ref={contentRef}
           className={cn(
-            'overflow-hidden transition-[max-height] duration-200',
+            'overflow-hidden text-[length:var(--chat-body-font-size,16px)] leading-[1.72] transition-[max-height] duration-200',
             '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
-            shouldCollapse && !isExpanded && 'max-h-[6.5em]'
+            shouldCollapse && !isExpanded && 'max-h-[6.88em]'
           )}
         >
           <AgentHistoryQuoteClickContext.Provider value={onAgentHistoryQuoteClick}>
-            <MessageResponse className="prose-p:my-0.5 prose-headings:my-1.5" remarkPlugins={USER_REMARK_PLUGINS}>{children}</MessageResponse>
+            <MessageResponse className="text-[length:var(--chat-body-font-size,16px)] font-normal leading-[1.72] text-foreground/90 prose-p:my-0.5 prose-p:leading-[1.72] prose-p:text-foreground/90 prose-li:leading-[1.72] prose-li:text-foreground/90 prose-headings:my-1.5 prose-strong:font-semibold prose-strong:text-foreground" remarkPlugins={USER_REMARK_PLUGINS}>{children}</MessageResponse>
           </AgentHistoryQuoteClickContext.Provider>
         </div>
         {shouldCollapse && (

@@ -6,7 +6,6 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-const TREE_ROW_HEIGHT = 32
 const TREE_ROW_HORIZONTAL_MARGIN = 8
 const TREE_INDENT_WIDTH = 16
 /**
@@ -32,7 +31,8 @@ export const STICKY_ROW_BASE_CLASS = 'sticky file-tree-sticky-row'
 export interface TreeRowLayout {
   paddingLeft: number
   guideLeft: number
-  stickyTop: number
+  /** 跟随 `--workspace-list-row-height`（右侧工作区 36px，小屏 32px）计算 sticky 偏移。 */
+  stickyTop: string
   stickyZIndex: number
 }
 
@@ -44,7 +44,7 @@ export function computeTreeRowLayout(depth: number): TreeRowLayout {
     paddingLeft,
     // 外边距已合进 paddingLeft，guideLeft 只需 +7 对齐箭头中心
     guideLeft: paddingLeft + 7,
-    stickyTop: depth * TREE_ROW_HEIGHT,
+    stickyTop: `calc(${depth} * var(--workspace-list-row-height, 32px))`,
     // 起点 10 已足够压住普通行内元素；保持外层目录在更上层以遮住下方滚过的内层。
     stickyZIndex: Math.max(1, 10 - depth),
   }

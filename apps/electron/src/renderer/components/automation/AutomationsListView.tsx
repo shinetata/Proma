@@ -23,54 +23,10 @@ import {
   automationsAtom,
   automationFormAtom,
   automationToDraft,
-  createEmptyDraft,
+  createNamedDraft,
 } from '@/atoms/automation-atoms'
 import type { Automation } from '@proma/shared'
-
-/** 把调度配置格式化为可读文案 */
-function formatSchedule(a: Automation): string {
-  if (a.scheduleType === 'once') {
-    const when = a.scheduledAt
-      ? new Date(a.scheduledAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-      : '指定时间'
-    return `仅一次 ${when}`
-  }
-  if (a.scheduleType === 'daily') return `每天 ${a.timeOfDay ?? '09:00'}`
-  if (a.scheduleType === 'weekly') {
-    const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-    return `每${names[a.dayOfWeek ?? 1]} ${a.timeOfDay ?? '09:00'}`
-  }
-  if (a.scheduleType === 'monthly') {
-    const dom = a.dayOfMonth ?? 1
-    // 29-31 号在短月会自动落在当月最后一天，列表里追加提示避免用户误以为漏跑
-    const suffix = dom >= 29 ? '（短月落在最后一天）' : ''
-    return `每月 ${dom} 号 ${a.timeOfDay ?? '09:00'}${suffix}`
-  }
-  const min = a.intervalMinutes
-  let label: string
-  if (min < 60) label = `每 ${min} 分钟`
-  else if (min < 1440) label = `每 ${min / 60} 小时`
-  else label = `每 ${min / 1440} 天`
-  const weekdayLabel = a.activeWeekdays && a.activeWeekdays.length > 0 ? ` · ${formatWeekdays(a.activeWeekdays)}` : ''
-  const windowLabel = a.activeWindowStart && a.activeWindowEnd ? ` · ${a.activeWindowStart}–${a.activeWindowEnd}` : ''
-  if (weekdayLabel || windowLabel) label += `${weekdayLabel}${windowLabel}`
-  // 叠加了运行次数上限时在末尾标注，让列表能看出"跑 N 次就停"
-  return a.maxRuns !== undefined ? `${label}·限 ${a.maxRuns} 次` : label
-}
-
-function formatWeekdays(days?: number[]): string {
-  const normalized = [...new Set(days ?? [])].sort((a, b) => a - b)
-  if (normalized.length === 0) return '每天'
-  if (normalized.join(',') === '1,2,3,4,5') return '工作日'
-  if (normalized.join(',') === '0,6') return '周末'
-  const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  return normalized.map((day) => names[day] ?? '').join('、')
-}
-
-function formatNextRun(a: Automation): string {
-  if (!a.active) return a.completedAt ? '已完成' : '已暂停'
-  return `下次 ${new Date(a.nextRunAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`
-}
+import { formatAutomationNextRun, formatAutomationSchedule } from './automation-format'
 
 /** 定时任务列表嵌入统一的任务/日程页，页头由父级提供。 */
 export function AutomationsListView(): React.ReactElement {
@@ -90,15 +46,8 @@ export function AutomationsListView(): React.ReactElement {
   const paused = automations.filter((a) => !a.active && !a.completedAt)
 
   const handleCreate = (): void => {
-    // 自动命名「定时任务 N」：取现有最大 X + 1
-    let maxN = 0
-    for (const a of automations) {
-      const m = /^定时任务\s*(\d+)$/.exec(a.name.trim())
-      if (m) maxN = Math.max(maxN, Number(m[1]))
-    }
-    const draft = createEmptyDraft()
-    draft.name = `定时任务 ${maxN + 1}`
-    setForm({ open: true, draft })
+    // 自动命名「定时任务 N」：取现有最大 X + 1（商业版 mJt）
+    setForm({ open: true, draft: createNamedDraft(automations) })
   }
 
   const handleEdit = (a: Automation): void => {
@@ -108,10 +57,11 @@ export function AutomationsListView(): React.ReactElement {
     const automation = pendingDeletion
     if (!automation) return
     try {
-      await window.electronAPI.deleteAutomation(automation.id)
+      const deleted = await window.electronAPI.deleteAutomation(automation.id)
       await refreshList()
       setPendingDeletion(null)
-      toast.success('已删除')
+      if (deleted) toast.success('已删除')
+      else toast.error('定时任务不存在或已被删除')
     } catch (error) {
       console.error('[定时任务] 删除失败:', error)
       toast.error('删除失败')
@@ -232,8 +182,8 @@ function Section({ title, automations, onEdit, onRefresh, onDelete }: SectionPro
                 </span>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted-foreground">
-                <span className="inline-flex items-center gap-1"><Clock className="size-3" />{formatSchedule(a)}</span>
-                <span className="tabular-nums">{formatNextRun(a)}</span>
+                <span className="inline-flex items-center gap-1"><Clock className="size-3" />{formatAutomationSchedule(a)}</span>
+                <span className="tabular-nums">{formatAutomationNextRun(a)}</span>
               </div>
             </div>
             {/* 右侧槽位固定宽度，只在悬浮时显示行操作，避免改变列表布局。 */}
@@ -310,7 +260,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement 
       <button
         type="button"
         onClick={onCreate}
-	        className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
+        className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
       >
         <Plus size={14} />
         <span>新建定时任务</span>

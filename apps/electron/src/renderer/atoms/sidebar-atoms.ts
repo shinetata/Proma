@@ -19,8 +19,11 @@ export const projectListHeightAtom = atomWithStorage<number>(
   120,
 )
 
-/** 左侧边栏宽度（px），用户可拖拽调整，持久化到 localStorage */
+/** 左侧边栏宽度（px），用户可拖拽调整，持久化到 localStorage（商业版默认 300） */
 export const leftSidebarWidthAtom = atomWithStorage<number>(
   'proma-left-sidebar-width',
-  240,
+  300,
 )
+
+/** 收藏面板最近一次打开的会话，再次进入收藏时用于决定显示「收藏会话」还是「已归档收藏」。 */
+export const lastFavoriteSessionIdAtom = atom<string | null>(null)

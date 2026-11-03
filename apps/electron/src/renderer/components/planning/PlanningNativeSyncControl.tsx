@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { detectIsMac } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 
 const COPY: Record<PlanningNativeSyncEntity, { label: string; targetLabel: string; icon: typeof CalendarDays }> = {
   calendar: { label: '系统日历', targetLabel: 'Calendar', icon: CalendarDays },
@@ -32,7 +33,7 @@ function permissionMessage(permission: PlanningNativeSyncPermissionResult): stri
   }
 }
 
-export function PlanningNativeSyncControl({ entity }: { entity: PlanningNativeSyncEntity }): React.ReactElement | null {
+export function PlanningNativeSyncControl({ entity, triggerClassName }: { entity: PlanningNativeSyncEntity; triggerClassName?: string }): React.ReactElement | null {
   const isMac = React.useMemo(() => detectIsMac(), [])
   const [open, setOpen] = React.useState(false)
   const [status, setStatus] = React.useState<PlanningNativeSyncStatus | null>(null)
@@ -141,7 +142,7 @@ export function PlanningNativeSyncControl({ entity }: { entity: PlanningNativeSy
 
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild>
-      <Button type="button" variant="outline" size="sm" className="h-8 text-xs">
+      <Button type="button" variant="outline" size="sm" className={cn('h-8 text-xs', triggerClassName)}>
         {profile ? <Settings2 className="size-3.5" /> : <Icon className="size-3.5" />}
         {profile ? '同步设置' : `同步到${COPY[entity].label}`}
       </Button>

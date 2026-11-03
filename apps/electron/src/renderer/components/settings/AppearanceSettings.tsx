@@ -45,6 +45,7 @@ import promaEmeraldLogo from '@/assets/bots/proma-logos/proma-emerald.png'
 import proma8bitLogo from '@/assets/bots/proma-logos/proma-8bit.png'
 import promaCyberpunkLogo from '@/assets/bots/proma-logos/proma-cyberpunk.png'
 import promaFuturisticLogo from '@/assets/bots/proma-logos/proma-futuristic.png'
+import promaAppIcon from './assets/proma-app-icon.png'
 
 // ===== 主题预览图片导入 =====
 import themeCloudDancer from '@/assets/theme-previews/theme-cloud-dancer.webp'
@@ -63,10 +64,10 @@ const THEME_OPTIONS = [
   { value: 'special', label: '特殊风格' },
 ]
 
-/** Markdown 字号选项 */
+/** 文字大小选项 */
 const MARKDOWN_FONT_SIZE_OPTIONS = [
   { value: 'small', label: '小' },
-  { value: 'medium', label: '中' },
+  { value: 'medium', label: '标准' },
   { value: 'large', label: '大' },
 ]
 
@@ -147,7 +148,7 @@ interface IconVariant {
 }
 
 const ICON_VARIANTS: readonly IconVariant[] = [
-  { id: 'default', name: '默认', src: '', previewBg: 'bg-neutral-900' },
+  { id: 'default', name: '默认', src: promaAppIcon, previewBg: 'bg-transparent' },
   { id: 'black', name: '经典黑', src: promaBlackLogo, previewBg: 'bg-neutral-900' },
   { id: 'white', name: '纯白版', src: promaWhiteLogo, previewBg: 'bg-white' },
   { id: 'blue', name: '品牌蓝', src: promaBlueLogo, previewBg: 'bg-blue-900' },
@@ -242,8 +243,8 @@ export function AppearanceSettings(): React.ReactElement {
           />
 
           <SettingsSegmentedControl
-            label="Markdown 字号"
-            description="调整 AI 回复与 Markdown 编辑器的正文字号"
+            label="文字大小"
+            description="调整会话列表、对话内容和 Markdown 文档的文字大小"
             value={markdownFontSize}
             onValueChange={handleMarkdownFontSizeChange}
             options={MARKDOWN_FONT_SIZE_OPTIONS}
@@ -343,29 +344,12 @@ function IconCard({
           variant.previewBg,
         )}
       >
-        {variant.id === 'default' ? (
-          // 默认图标用 CSS 模拟 Proma logo 形状
-          <div className="flex items-end gap-[2px] -rotate-12">
-            {[1, 0.85, 0.7, 0.55, 0.4, 0.25].map((opacity, i) => (
-              <div
-                key={i}
-                className="rounded-[1px]"
-                style={{
-                  width: i === 0 ? 4 : 3,
-                  height: i === 0 ? 14 : 14 - i * 1.5,
-                  backgroundColor: `rgba(255,255,255,${opacity})`,
-                }}
-              />
-            ))}
-          </div>
-        ) : (
-          <img
-            src={variant.src}
-            alt={variant.name}
-            className="w-full h-full object-contain"
-            draggable={false}
-          />
-        )}
+        <img
+          src={variant.src}
+          alt={variant.name}
+          className="w-full h-full object-contain"
+          draggable={false}
+        />
       </div>
       <span className="text-[10px] font-medium text-muted-foreground leading-tight text-center">
         {variant.name}

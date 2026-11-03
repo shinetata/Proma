@@ -18,8 +18,8 @@ interface DefaultAppOpenButtonProps {
   filePath: string
   /** 透传给 systemOpenFile 作为路径授权上下文 */
   access?: FileAccessOptions
-  /** 紧凑模式（仅图标）/ 完整模式（图标 + App 名） */
-  variant?: 'compact' | 'labeled'
+  /** 紧凑模式（仅图标）/ 完整模式（图标 + App 名）/ 内联预览的醒目按钮 */
+  variant?: 'compact' | 'labeled' | 'prominent'
   className?: string
 }
 
@@ -37,7 +37,9 @@ export function DefaultAppOpenButton({
     })
   }, [filePath, access])
 
-  const labeled = variant === 'labeled'
+  const prominent = variant === 'prominent'
+  const labeled = variant !== 'compact'
+  const iconClass = prominent ? 'size-5' : labeled ? 'size-4' : 'size-3.5'
   const label = getDefaultAppOpenLabel(info)
 
   return (
@@ -48,7 +50,9 @@ export function DefaultAppOpenButton({
           onClick={handleClick}
           className={cn(
             'flex items-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors',
-            labeled ? 'gap-1 h-6 px-1.5 max-w-[140px]' : 'justify-center size-6',
+            prominent
+              ? 'h-9 max-w-[220px] gap-2 rounded-md bg-muted/50 px-3 text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+              : labeled ? 'gap-1 h-7 px-1.5 max-w-[140px]' : 'justify-center size-7',
             className,
           )}
           aria-label={label}
@@ -57,14 +61,16 @@ export function DefaultAppOpenButton({
             <img
               src={info.iconDataUrl}
               alt=""
-              className={cn('shrink-0', labeled ? 'size-4' : 'size-3.5')}
+              className={cn('shrink-0', iconClass)}
               draggable={false}
             />
           ) : (
-            <ExternalLink className={cn('shrink-0', labeled ? 'size-4' : 'size-3.5')} />
+            <ExternalLink className={cn('shrink-0', iconClass)} />
           )}
           {labeled && (
-            <span className="text-[11px] leading-none truncate">{info?.name ?? '系统默认应用'}</span>
+            <span className={cn('text-[13px] leading-none truncate', prominent && 'font-medium')}>
+              {prominent ? (info ? `用 ${info.name} 打开` : '默认应用打开') : info?.name ?? '系统默认应用'}
+            </span>
           )}
         </button>
       </TooltipTrigger>

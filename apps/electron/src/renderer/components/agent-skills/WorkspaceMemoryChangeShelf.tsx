@@ -11,6 +11,11 @@ interface WorkspaceMemoryChangeShelfProps {
   className?: string
 }
 
+/** 商业版 LQ：同一文件以绝对路径去重，外部目录监听没有绝对路径时退回分类标签。 */
+export function changeKey(change: WorkspaceMemoryFileChange): string {
+  return change.absolutePath ? `absolute:${change.absolutePath}` : `relative:${change.relativePath}`
+}
+
 function formatKind(kind: WorkspaceMemoryFileChange['kind']): string {
   if (kind === 'created') return '新增'
   if (kind === 'deleted') return '删除'
@@ -28,24 +33,24 @@ function MemoryChangeDiff({
 
   return (
     <article className="overflow-hidden rounded-xl border border-border/70 bg-background/40">
-      <div className="flex items-start justify-between gap-3 border-b border-border/60 px-4 py-3">
-        <p className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={change.relativePath}>{change.relativePath}</p>
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border/60 px-4 py-3">
+        <p className="min-w-[8rem] flex-1 truncate font-mono text-[15px] text-foreground" title={change.absolutePath ?? change.relativePath}>{change.relativePath}</p>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="text-xs text-muted-foreground">{formatKind(change.kind)}</span>
-          {onOpenFile && change.kind !== 'deleted' && (
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onOpenFile(change)}>查看原文件</Button>
+          <span className="text-[13px] text-muted-foreground">{formatKind(change.kind)}</span>
+          {onOpenFile && (
+            <Button size="sm" variant="outline" className="h-7 px-2 text-[13px]" disabled={change.kind === 'deleted'} onClick={() => onOpenFile(change)}>查看原文件</Button>
           )}
         </div>
       </div>
       {hasDiff ? (
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5">
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words p-4 font-mono text-[14px] leading-[22px]">
           {change.diff?.context.map((line, lineIndex) => <div key={`context-${lineIndex}`} className="text-muted-foreground">  {line || ' '}</div>)}
           {change.diff?.removed.map((line, lineIndex) => <div key={`removed-${lineIndex}`} className="bg-red-500/10 px-1 text-red-700 dark:text-red-300">- {line || ' '}</div>)}
           {change.diff?.added.map((line, lineIndex) => <div key={`added-${lineIndex}`} className="bg-emerald-500/10 px-1 text-emerald-700 dark:text-emerald-300">+ {line || ' '}</div>)}
           {change.diff?.truncated && <div className="mt-1 text-muted-foreground">… 其余变更请打开文件查看</div>}
         </pre>
       ) : (
-        <p className="p-4 text-xs leading-relaxed text-muted-foreground">该文件已变化，但无法生成受限文本 Diff。</p>
+        <p className="p-4 text-[13px] leading-relaxed text-muted-foreground">该文件已变化，但无法生成受限文本 Diff。</p>
       )}
     </article>
   )
@@ -56,16 +61,16 @@ export function WorkspaceMemoryChangeShelf({ changes, onOpenFile, onDismissChang
   if (changes.length === 0) return null
 
   return (
-    <section className={className ?? 'h-full min-h-0 overflow-y-auto bg-content-area p-4'} aria-label="知识已更新">
+    <section className={className ?? 'h-full min-h-0 overflow-y-auto bg-content-area p-4'} aria-label="知识更新">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-foreground">知识已更新</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{changes.length} 个文件变更 · 项目记忆、规则与全局画像</p>
+          <h2 className="text-[16px] font-semibold text-foreground">知识已更新</h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">{changes.length} 个文件变更 · 项目记忆、规则与全局画像</p>
         </div>
-        {onDismissChanges && <Button size="sm" variant="ghost" className="h-8 shrink-0 px-2 text-xs" onClick={onDismissChanges}>完成</Button>}
+        {onDismissChanges && <Button size="sm" variant="ghost" className="h-8 shrink-0 px-2 text-[13px]" onClick={onDismissChanges}>完成</Button>}
       </div>
       <div className="space-y-5">
-        {changes.map((change) => <MemoryChangeDiff key={`${change.relativePath}:${change.changedAt}`} change={change} onOpenFile={onOpenFile} />)}
+        {changes.map((change) => <MemoryChangeDiff key={`${changeKey(change)}:${change.changedAt}`} change={change} onOpenFile={onOpenFile} />)}
       </div>
     </section>
   )

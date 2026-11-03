@@ -954,10 +954,12 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
           size="icon"
           className="h-8 w-8"
           onClick={handleBack}
+          title="返回模型配置列表"
+          aria-label="返回模型配置列表"
         >
           <ArrowLeft size={18} />
         </Button>
-        <h3 className="text-lg font-medium text-foreground flex-1">
+        <h3 className="flex-1 text-lg font-medium text-foreground">
           {isEdit ? '编辑模型配置' : '添加模型配置'}
         </h3>
         {/* 新建模式：创建按钮 */}

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { workspaceMemoryChangesAtom } from '@/atoms/memory-change-atoms'
+import { changeKey } from './WorkspaceMemoryChangeShelf'
 
 /** Keeps the selected workspace observed even while its right file panel is closed. */
 export function WorkspaceMemoryChangeObserver({ workspaceSlug }: { workspaceSlug: string }): null {
@@ -13,7 +14,7 @@ export function WorkspaceMemoryChangeObserver({ workspaceSlug }: { workspaceSlug
         const existing = next.get(workspaceSlug) ?? []
         next.set(workspaceSlug, [
           change,
-          ...existing.filter((item) => item.relativePath !== change.relativePath),
+          ...existing.filter((item) => changeKey(item) !== changeKey(change)),
         ].slice(0, 8))
         return next
       })

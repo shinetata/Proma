@@ -23,7 +23,7 @@ import {
   Mic,
   HardDriveDownload,
   HardDrive,
-  Archive,
+  History,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ShortcutKeycaps } from "@/components/shortcuts/ShortcutKeycaps";
@@ -98,7 +98,7 @@ const VOICE_INPUT_TAB: TabItem = {
 };
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
-  { id: "legacy-chat", label: "历史 Chat", icon: <Archive size={16} /> },
+  { id: "legacy-chat", label: "历史 Chat", icon: <History size={16} /> },
   { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
   { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
@@ -249,7 +249,7 @@ export function SettingsPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-content-area text-foreground">
-      <div className="relative h-[35px] flex-shrink-0 bg-[hsl(var(--sidebar-surface))]">
+      <div className={cn("relative flex flex-shrink-0 proma-chrome-surface", isWindows ? "h-8" : "h-[35px]")}>
         <div
           aria-hidden="true"
           className="titlebar-drag-region pointer-events-none absolute inset-y-0 left-0"

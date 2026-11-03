@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { CornerDownLeft, Square, Settings, X, Copy, Check, Brain, Sparkles, ListTodo, Paperclip } from 'lucide-react'
+import { CornerDownLeft, Square, Settings, X, Copy, Check, Brain, Sparkles, ListTodo, Paperclip, ArrowRight } from 'lucide-react'
 import { AgentMessages, type AgentHistoryQuoteNavigationRequest } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { AgentMessageQueue } from './AgentMessageQueue'
@@ -119,7 +119,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
-import { channelsAtom } from '@/atoms/channel-atoms'
+import { channelsAtom, channelsLoadedAtom } from '@/atoms/channel-atoms'
 import { modelSelectorOpenAtom } from '@/atoms/model-selector-atoms'
 import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
@@ -843,6 +843,15 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     [globalChannels],
   )
   const isComposerDisabled = isLegacyTranscript || !agentChannelId || !hasAvailableModel
+  const channelsLoaded = useAtomValue(channelsLoadedAtom)
+  // 当前会话选择的模型已不在任何启用渠道中，或上一轮返回「model is not available」时提示重新选择。
+  const isSelectedModelOffline = React.useMemo(
+    () => (
+      channelsLoaded && !!agentChannelId && !!agentModelId
+      && !globalChannels.some((channel) => channel.id === agentChannelId && channel.enabled && channel.models.some((model) => model.enabled && model.id === agentModelId))
+    ) || isModelNotAvailableError(agentError),
+    [agentChannelId, agentError, agentModelId, channelsLoaded, globalChannels],
+  )
   React.useEffect(() => {
     if (!agentChannelId || agentModelId) return
 
@@ -2815,28 +2824,6 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const canSend = !isStopping && messagesLoaded && (streaming || !messagesRefreshing) && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
-    ...(isCodexFastModeAvailable ? [{
-      key: 'codex-fast-mode',
-      node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-8 min-w-10 rounded-md px-2 text-xs font-medium text-foreground/60 transition-transform hover:bg-muted/50 hover:text-foreground active:scale-[0.96]"
-              onClick={handleCodexFastModeChange}
-              disabled={streaming || backgroundWaiting}
-              aria-pressed={codexFastModeEnabled}
-            >
-              {codexFastModeEnabled ? '快速' : '标准'}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>{codexFastModeEnabled ? '已启用快速模式：优先响应，消耗更多额度' : '开启快速模式：优先响应，消耗更多额度'}</p>
-          </TooltipContent>
-        </Tooltip>
-      ),
-    }] : []),
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
     {
       key: 'thinking',
@@ -2894,9 +2881,6 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   ], [
     planQuotaChannelId,
     planQuotaChannelUpdatedAt,
-    isCodexFastModeAvailable,
-    codexFastModeEnabled,
-    handleCodexFastModeChange,
     isSessionThinkingAvailable,
     openAIThinkingLevel,
     openAIThinkingLevels,
@@ -2958,11 +2942,20 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
   const inputTrailingNode = (
     <>
-      <div className="flex min-w-0 items-center gap-1 [&_.model-selector-trigger>span]:max-w-[min(18rem,42vw)]">
+      <div className="flex min-w-0 items-center gap-1">
         <ModelSelector
           externalSelectedModel={externalSelectedModel}
+          codexSpeed={isCodexFastModeAvailable ? {
+            speed: codexFastModeEnabled ? 'fast' : 'standard',
+            speeds: ['standard', 'fast'],
+            disabled: streaming || backgroundWaiting,
+            onChange: (speed) => {
+              if ((speed === 'fast') !== codexFastModeEnabled) void handleCodexFastModeChange()
+            },
+          } : undefined}
           onModelSelect={handleModelSelect}
           showChannelInTrigger
+          triggerLabelClassName="max-w-[clamp(10rem,40cqw,18rem)]"
           // 全局打开状态只供主会话的“选择模型”引导使用；右侧嵌入会话必须保持独立，
           // 否则任一触发器打开时会同时挂载两侧的 Popover，遮挡并阻断模型切换。
           useSharedOpenState={!embedded}
@@ -2989,7 +2982,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   return (
     <SkillMentionNamesProvider workspaceSlug={workspaceSlug}>
       <div
-        className="flex h-full min-h-0 flex-1 min-w-0 flex-col overflow-hidden"
+        className="agent-view flex h-full min-h-0 flex-1 min-w-0 flex-col overflow-hidden"
         onFocusCapture={markStopShortcutTarget}
         onPointerDownCapture={markStopShortcutTarget}
       >
@@ -3035,7 +3028,26 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
-        <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
+        <div className="agent-input-container px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
+          {isSelectedModelOffline && (
+            <div
+              className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5 text-sm text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04)] animate-in fade-in-0 slide-in-from-bottom-1 duration-200"
+              role="status"
+            >
+              <p className="min-w-0 text-pretty leading-5">
+                当前选择的模型「{agentModelId ?? '未知模型'}」已下线，请从最新可用模型中重新选择。
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                className="relative h-8 min-h-8 shrink-0 gap-1 px-2.5 text-xs active:scale-[0.96] transition-transform before:absolute before:-inset-1 before:content-['']"
+                onClick={() => setModelSelectorOpen(true)}
+              >
+                选择新模型
+                <ArrowRight className="size-3.5" aria-hidden="true" />
+              </Button>
+            </div>
+          )}
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
@@ -3230,4 +3242,20 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     </AlertDialog>
     </SkillMentionNamesProvider>
   )
+}
+
+/** 识别上游返回的「400 model is not available」错误（与商业版判定一致）。 */
+function isModelNotAvailableError(error: string | null | undefined): boolean {
+  if (!error) return false
+  const jsonStart = error.indexOf('{')
+  if (jsonStart < 0 || !/\b400\b/.test(error.slice(0, jsonStart))) return false
+  try {
+    const parsed = JSON.parse(error.slice(jsonStart)) as { type?: unknown; error?: { type?: unknown; message?: unknown } }
+    return parsed?.type === 'error'
+      && parsed.error?.type === 'invalid_request_error'
+      && typeof parsed.error.message === 'string'
+      && parsed.error.message.trim().toLowerCase().replace(/[.!]+$/, '') === 'model is not available'
+  } catch {
+    return false
+  }
 }

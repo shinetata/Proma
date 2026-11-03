@@ -250,16 +250,16 @@ export function FileSearchBar({
   return (
     <div ref={containerRef} className="relative mx-2 flex-shrink-0">
       {/* 搜索输入框 */}
-      <div className="flex items-center gap-1.5 px-2 h-7 rounded-md bg-muted/40 border border-transparent focus-within:border-primary/40 focus-within:bg-muted/70 transition-colors">
+      <div className="flex items-center gap-1.5 px-2 h-8 rounded-md bg-muted/40 border border-transparent focus-within:border-primary/40 focus-within:bg-muted/70 transition-colors">
         {searching ? (
-          <Loader2 className="size-3 text-muted-foreground flex-shrink-0 animate-spin" />
+          <Loader2 className="size-4 text-muted-foreground flex-shrink-0 animate-spin" />
         ) : (
-          <Search className="size-3 text-muted-foreground flex-shrink-0" />
+          <Search className="size-4 text-muted-foreground flex-shrink-0" />
         )}
         <input
           ref={inputRef}
           type="text"
-          className="flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground/40"
+          className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground/70"
           placeholder={placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -331,16 +331,16 @@ function ResultItem({
           onClick={() => onClick(entry)}
           onMouseEnter={onHover}
         >
-          <FileTypeIcon name={entry.name} isDirectory={entry.type === 'dir'} size={12} />
-          <span className="text-[11px] font-medium truncate max-w-[90px]">
+          <FileTypeIcon name={entry.name} isDirectory={entry.type === 'dir'} size={18} />
+          <span className="min-w-0 flex-1 text-[15px] font-medium truncate">
             {entry.name}
           </span>
           {showSessionBadge && entry.source === 'session' && (
-            <span className="flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">会话文件</span>
+            <span className="flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[12px] leading-none text-muted-foreground">会话文件</span>
           )}
           {dirPath && (
             <span
-              className="text-[10px] text-muted-foreground/55 truncate flex-1 min-w-0"
+              className="text-[12px] text-muted-foreground truncate max-w-[35%] min-w-0"
             >
               {dirPath}
             </span>

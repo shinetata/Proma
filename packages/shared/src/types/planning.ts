@@ -317,6 +317,11 @@ export interface CreatePlanningReminderRequest extends CreatePlanningReminderInp
 }
 
 
+export interface UpdatePlanningReminderRequest {
+  id: string
+  triggerAt: number
+}
+
 export interface SnoozePlanningReminderInput {
   id: string
   minutes: number
@@ -349,6 +354,10 @@ export const PLANNING_IPC_CHANNELS = {
   LIST_ACTIVE_REMINDERS: 'planning:list-active-reminders',
   ACKNOWLEDGE_REMINDER: 'planning:acknowledge-reminder',
   SNOOZE_REMINDER: 'planning:snooze-reminder',
+  /** Todo / 日程详情中的提醒管理（创建、改期、删除）。 */
+  CREATE_REMINDER: 'planning:create-reminder',
+  UPDATE_REMINDER: 'planning:update-reminder',
+  DELETE_REMINDER: 'planning:delete-reminder',
   REMINDER_DUE: 'planning:reminder-due',
   CHANGED: 'planning:changed',
   AGENT_OPERATION: 'planning:agent-operation',

@@ -1,23 +1,16 @@
 /**
  * DiffPanelTabBar — 右侧工作区的统一顶栏。
  *
- * 文件、改动、预览、问答和每个浏览器网页位于同一层级；网页不再拥有嵌套 Tab 栏。
+ * 文件、文件改动、预览、新建标签页和每个浏览器网页位于同一层级；网页不再拥有嵌套 Tab 栏。
+ * 结构与样式对齐商业版 0.21.88 的 `uRt`：灰色 chrome 条，选中 Tab 为白色圆角块。
  */
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Blocks, Brain, CalendarDays, Clock, Columns2, FolderOpen, Globe, ListTodo, MessageCircle, PanelRight, Plus, Repeat2, ServerCog, SquareTerminal, X } from 'lucide-react'
-import { OBSIDIAN_NAME, ObsidianIcon } from '@/components/obsidian/obsidian-brand'
+import { Columns2, PanelRight, Plus, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getScrollLeftToRevealTab } from '@/lib/tab-visibility'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -25,10 +18,9 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
-import type { AgentSidePanelTab, SessionIndicatorStatus, WorkspaceComponentTab } from '@/atoms/agent-atoms'
+import type { AgentSidePanelTab, SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { groupRightWorkspaceTabs, type RightWorkspacePane } from '@/lib/right-workspace-split'
 import { getDelegationStatusIconClass } from '@/lib/agent-session-list'
-import type { ProductivityToolsSettings } from '@/types/settings'
 
 export interface RightWorkspaceTabDragState {
   tabId: AgentSidePanelTab
@@ -50,15 +42,8 @@ interface DiffPanelTabBarProps {
   activeTab: AgentSidePanelTab
   onTabChange: (tab: AgentSidePanelTab) => void
   onCloseTab: (tab: AgentSidePanelTab) => void
-  onOpenBrowser: () => void
-  /** 加号菜单是否展开；供原生浏览器视图临时避让。 */
-  onAddTabMenuOpenChange?: (open: boolean) => void
-  onOpenFile: () => void
-  onOpenTerminal?: () => void
-  onOpenWorkspaceComponent?: (component: WorkspaceComponentTab) => void
-  onOpenVault?: () => void
-  productivityTools?: ProductivityToolsSettings
-  onOpenChat?: () => void
+  /** 新建「新建标签页」启动器标签（商业版 uRt 的 onCreateLauncher）。 */
+  onCreateLauncher: () => void
   /** 仅当前右侧 Tab 需要的紧凑动作，渲染于标签列表之后，不影响内容区布局。 */
   activeTabAction?: React.ReactNode
   visibleTabs?: Partial<Record<RightWorkspacePane, AgentSidePanelTab>>
@@ -75,14 +60,7 @@ export function DiffPanelTabBar({
   activeTab,
   onTabChange,
   onCloseTab,
-  onOpenBrowser,
-  onAddTabMenuOpenChange,
-  onOpenFile,
-  onOpenTerminal,
-  onOpenWorkspaceComponent,
-  onOpenVault,
-  productivityTools = { todosEnabled: true, calendarEnabled: true, obsidianEnabled: true },
-  onOpenChat,
+  onCreateLauncher,
   activeTabAction,
   visibleTabs,
   focusedPane,
@@ -96,10 +74,7 @@ export function DiffPanelTabBar({
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
-  const [isAddTabMenuOpen, setIsAddTabMenuOpen] = React.useState(false)
   const [isSplitTabGroupHovered, setIsSplitTabGroupHovered] = React.useState(false)
-  // 仅鼠标在菜单外取消时抑制 Radix 的回焦；Esc 与键盘选择必须保留可见焦点。
-  const suppressPointerDismissFocusRestoreRef = React.useRef(false)
   const tabListRef = React.useRef<HTMLDivElement>(null)
   const scrollbarTrackRef = React.useRef<HTMLDivElement>(null)
   const scrollbarThumbRef = React.useRef<HTMLDivElement>(null)
@@ -109,17 +84,10 @@ export function DiffPanelTabBar({
   const suppressClickTabRef = React.useRef<AgentSidePanelTab | null>(null)
   const activeTabDragCancelRef = React.useRef<(() => void) | null>(null)
 
-  React.useEffect(() => () => onAddTabMenuOpenChange?.(false), [onAddTabMenuOpenChange])
   React.useEffect(() => () => activeTabDragCancelRef.current?.(), [])
   React.useEffect(() => {
     if (!visibleTabs?.left || !visibleTabs.right) setIsSplitTabGroupHovered(false)
   }, [visibleTabs?.left, visibleTabs?.right])
-
-  const handleAddTabMenuOpenChange = React.useCallback((open: boolean) => {
-    if (open) suppressPointerDismissFocusRestoreRef.current = false
-    setIsAddTabMenuOpen(open)
-    onAddTabMenuOpenChange?.(open)
-  }, [onAddTabMenuOpenChange])
 
   const syncScrollbarThumb = React.useCallback(() => {
     const tabList = tabListRef.current
@@ -315,7 +283,7 @@ export function DiffPanelTabBar({
   }, [tabs, visibleTabs?.left, visibleTabs?.right])
 
   return (
-    <div ref={barRef} className="relative flex h-10 shrink-0 items-center border-b border-border/50 bg-content-area">
+    <div ref={barRef} className="relative flex h-10 shrink-0 items-center proma-chrome-surface">
       <div className="pointer-events-none absolute inset-0 titlebar-drag-region" />
       <div className="relative flex h-full min-w-0 flex-1 items-center titlebar-no-drag">
         <div className="relative flex min-w-0 flex-1 self-stretch">
@@ -325,6 +293,7 @@ export function DiffPanelTabBar({
             const isSplitView = visibleTabs?.left !== undefined && visibleTabs.right !== undefined
             const visiblePane = visibleTabs?.left === tab.id ? 'left' : visibleTabs?.right === tab.id ? 'right' : null
             const isSplitTab = isSplitView && visiblePane !== null
+            const isFocusedSplitTab = isSplitTab && visiblePane === focusedPane
             const isFirstSplitTab = isSplitTab && visiblePane === 'left'
             const isLastSplitTab = isSplitTab && visiblePane === 'right'
             const isChangesTab = tab.id === 'changes'
@@ -340,7 +309,9 @@ export function DiffPanelTabBar({
                     'group flex h-7 min-w-[84px] max-w-60 shrink-0 items-center transition-[background-color,color,box-shadow] duration-150',
                     isSplitTab
                       ? cn(
-                          'bg-foreground/[0.055] text-foreground/90',
+                          isFocusedSplitTab
+                            ? 'bg-primary/12 text-foreground shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.45)]'
+                            : 'bg-foreground/[0.055] text-foreground/90',
                           isFirstSplitTab && 'rounded-l-lg',
                           isLastSplitTab && 'rounded-r-lg',
                           !isFirstSplitTab && '-ml-1.5',
@@ -348,8 +319,8 @@ export function DiffPanelTabBar({
                       : cn(
                           'rounded-lg',
                           selected && !isSplitView
-                            ? 'bg-foreground/[0.08] text-foreground'
-                            : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                            ? 'bg-content-area text-foreground shadow-sm'
+                            : 'text-foreground/90 hover:bg-muted/50 hover:text-foreground',
                         ),
                   )}
                 data-visible-pane={visiblePane ?? undefined}
@@ -363,13 +334,13 @@ export function DiffPanelTabBar({
                   aria-description={visiblePane ? `显示在${visiblePane === 'left' ? '左侧' : '右侧'} Pane` : undefined}
                   onClick={() => selectTab(tab.id)}
                   onPointerDown={(event) => beginTabDrag(tab.id, event)}
-                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch px-3 text-left text-[13px] outline-none"
+                  className="flex min-w-0 flex-1 items-center gap-2 self-stretch px-3 text-left text-[15px] font-medium outline-none"
                 >
                   {tab.activity || (isChangesTab && unseenChanges && !selected) ? (
                     <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="有未查看更新" />
                   ) : (
                     <span className={cn(
-                      'shrink-0',
+                      'flex size-4 shrink-0 items-center justify-center [&>svg]:size-4 [&>img]:size-4',
                       tab.status
                         ? getDelegationStatusIconClass(tab.status)
                         : selected ? 'text-foreground' : 'text-muted-foreground/80',
@@ -444,103 +415,25 @@ export function DiffPanelTabBar({
                 aria-label="退出并排，保留当前标签"
               >
                 <Columns2 className="size-3.5" />
-                <span className="text-[11px]">退出并排</span>
+                <span className="text-[12px]">退出并排</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">退出并排，保留当前标签</TooltipContent>
           </Tooltip>
         )}
-        <DropdownMenu open={isAddTabMenuOpen} onOpenChange={handleAddTabMenuOpenChange}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[background-color,color,transform] hover:bg-muted hover:text-foreground active:scale-[0.96]"
-                  aria-label="添加右侧工作区标签"
-                >
-                  <Plus className="size-4" />
-                </button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">添加标签</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent
-            align="end"
-            className="z-[100] min-w-40 titlebar-no-drag"
-            onPointerDownOutside={() => { suppressPointerDismissFocusRestoreRef.current = true }}
-            onCloseAutoFocus={(event) => {
-              if (!suppressPointerDismissFocusRestoreRef.current) return
-              suppressPointerDismissFocusRestoreRef.current = false
-              event.preventDefault()
-            }}
-          >
-            <DropdownMenuItem onSelect={onOpenBrowser}>
-              <Globe className="size-3.5" />
-              新建浏览器标签
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={onOpenFile}>
-              <FolderOpen className="size-3.5" />
-              打开文件
-            </DropdownMenuItem>
-            {onOpenTerminal && (
-              <DropdownMenuItem onSelect={onOpenTerminal}>
-                <SquareTerminal className="size-3.5" />
-                新建终端
-              </DropdownMenuItem>
-            )}
-            {onOpenWorkspaceComponent && (
-              <>
-                <DropdownMenuSeparator />
-                {productivityTools.todosEnabled && (
-                  <DropdownMenuItem onSelect={() => onOpenWorkspaceComponent('todos')}>
-                    <ListTodo className="size-3.5" />
-                    打开 Todo
-                  </DropdownMenuItem>
-                )}
-                {productivityTools.calendarEnabled && (
-                  <DropdownMenuItem onSelect={() => onOpenWorkspaceComponent('calendar')}>
-                    <CalendarDays className="size-3.5" />
-                    打开日程
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem onSelect={() => onOpenWorkspaceComponent('skills')}>
-                  <Blocks className="size-3.5" />
-                  打开 Skills
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onOpenWorkspaceComponent('mcp')}>
-                  <ServerCog className="size-3.5" />
-                  打开 MCP
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onOpenWorkspaceComponent('memory')}>
-                  <Brain className="size-3.5" />
-                  打开项目记忆
-                </DropdownMenuItem>
-              </>
-            )}
-            {onOpenChat && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={onOpenChat}>
-                  <MessageCircle className="size-3.5" />
-                  打开问答
-                </DropdownMenuItem>
-              </>
-            )}
-            {onOpenWorkspaceComponent && (
-              <DropdownMenuItem onSelect={() => onOpenWorkspaceComponent('automations')}>
-                <Clock className="size-3.5" />
-                打开定时任务
-              </DropdownMenuItem>
-            )}
-            {onOpenVault && (
-              <DropdownMenuItem onSelect={onOpenVault}>
-                <ObsidianIcon className="size-3.5" />
-                打开 {OBSIDIAN_NAME}
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[background-color,color,transform] hover:bg-muted hover:text-foreground active:scale-[0.96]"
+              aria-label="新建右侧工作区标签"
+              onClick={onCreateLauncher}
+            >
+              <Plus className="size-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">新建标签</TooltipContent>
+        </Tooltip>
         {onClose && (
           <Tooltip>
             <TooltipTrigger asChild>

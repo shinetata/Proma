@@ -404,9 +404,9 @@ export function PreviewFindBar({ open, rootRef, contentKey, unsupportedReason, m
       data-proma-find-ignore
       role="search"
       aria-label="文件内查找"
-      className="absolute right-3 top-2 z-30 flex max-w-[min(390px,calc(100%-24px))] items-center gap-0.5 rounded-lg bg-popover/95 px-1.5 py-1 text-popover-foreground shadow-lg ring-1 ring-border/40 backdrop-blur"
+      className="absolute right-3 top-2 z-30 flex flex-wrap max-w-[min(430px,calc(100%-24px))] items-center gap-0.5 rounded-lg bg-popover/95 px-1.5 py-1 text-popover-foreground shadow-lg ring-1 ring-border/40 backdrop-blur"
     >
-      <Search className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <input
         ref={inputRef}
         value={query}
@@ -416,13 +416,13 @@ export function PreviewFindBar({ open, rootRef, contentKey, unsupportedReason, m
         aria-label="查找关键词"
         disabled={Boolean(unsupportedReason)}
         spellCheck={false}
-        className="h-5 w-[145px] min-w-0 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-7 w-[145px] min-w-[70px] flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
       />
       <button
         type="button"
         onClick={() => setCaseSensitive((v) => !v)}
         disabled={Boolean(unsupportedReason)}
-        className={cn('h-5 rounded px-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground', caseSensitive && 'bg-primary/15 text-primary')}
+        className={cn('h-7 rounded px-1 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground', caseSensitive && 'bg-primary/15 text-primary')}
         title="区分大小写"
         aria-label="区分大小写"
         aria-pressed={caseSensitive}
@@ -433,7 +433,7 @@ export function PreviewFindBar({ open, rootRef, contentKey, unsupportedReason, m
         type="button"
         onClick={() => setWholeWord((v) => !v)}
         disabled={Boolean(unsupportedReason)}
-        className={cn('h-5 rounded px-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground', wholeWord && 'bg-primary/15 text-primary')}
+        className={cn('h-7 rounded px-1 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground', wholeWord && 'bg-primary/15 text-primary')}
         title="全词匹配"
         aria-label="全词匹配"
         aria-pressed={wholeWord}
@@ -444,7 +444,7 @@ export function PreviewFindBar({ open, rootRef, contentKey, unsupportedReason, m
         type="button"
         onClick={() => setRegex((v) => !v)}
         disabled={Boolean(unsupportedReason)}
-        className={cn('h-5 rounded px-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground', regex && 'bg-primary/15 text-primary')}
+        className={cn('h-7 rounded px-1 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground', regex && 'bg-primary/15 text-primary')}
         title="使用正则表达式"
         aria-label="使用正则表达式"
         aria-pressed={regex}
@@ -462,30 +462,30 @@ export function PreviewFindBar({ open, rootRef, contentKey, unsupportedReason, m
         type="button"
         onClick={goToPrevious}
         disabled={Boolean(unsupportedReason) || matchCount === 0}
-        className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+        className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
         title="上一个匹配"
         aria-label="上一个匹配"
       >
-        <ChevronUp className="size-3.5" aria-hidden="true" />
+        <ChevronUp className="size-4" aria-hidden="true" />
       </button>
       <button
         type="button"
         onClick={goToNext}
         disabled={Boolean(unsupportedReason) || matchCount === 0}
-        className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+        className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
         title="下一个匹配"
         aria-label="下一个匹配"
       >
-        <ChevronDown className="size-3.5" aria-hidden="true" />
+        <ChevronDown className="size-4" aria-hidden="true" />
       </button>
       <button
         type="button"
         onClick={close}
-        className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         title="关闭查找"
         aria-label="关闭查找"
       >
-        <X className="size-3.5" aria-hidden="true" />
+        <X className="size-4" aria-hidden="true" />
       </button>
     </div>
   )

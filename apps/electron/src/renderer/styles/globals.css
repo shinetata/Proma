@@ -137,8 +137,8 @@ body {
     --dialog: 0 0% 100%;
     --dialog-foreground: 0 0% 3.9%;
     --content-area: 0 0% 100%;            /* 主内容区域背景 */
-    --sidebar-surface: 60 14.3% 98.6%;    /* 默认浅色侧栏：RGB 252/252/251 */
-    --tabbar-surface: 60 14.3% 98.6%;     /* 默认浅色未选中 Tab 背景：RGB 252/252/251 */
+    --sidebar-surface: 0 0% 95.3%;  /* 商业版 0.21.88 对齐 */
+    --tabbar-surface: 0 0% 95.3%;  /* 商业版 0.21.88 对齐 */
     --tab-indicator: var(--primary);       /* 顶部 Tab 选中条，默认跟随主色 */
     --sidebar-control-surface: 60 7% 93%;
     --sidebar-control-surface-hover: 60 7% 90%;
@@ -150,47 +150,50 @@ body {
     --tooltip-foreground: 0 0% 98%;
     --tooltip-muted: 0 0% 75%;
     /* 代码块背景 */
-    --code-bg: 210 13% 12%;                   /* #1e2228 */
+    --code-bg: var(--sidebar-surface);  /* 商业版 0.21.88 对齐 */
     /* 虚线边框色（新会话按钮、搜索按钮） */
     --dashed-border: 0 0% 9% / 0.35;
     --dashed-border-hover: 0 0% 9% / 0.50;
     /* Markdown 预览正文字号（medium 档默认；initializer 加载用户偏好后会覆盖） */
-    --md-preview-font-size: 15px;
+    --md-preview-font-size: 16px;
+    --sidebar-list-surface: 0 0% 98.4%;  /* 商业版 0.21.88 新增 */
+    --reading-font-size-offset: 0px;  /* 商业版 0.21.88 新增 */
+    --chat-body-font-size: var(--md-preview-font-size, 16px);  /* 商业版 0.21.88 新增 */
   }
 
   .dark {
-    --background: 0 0% 10%;                /* 侧栏锚点，略亮于内容区 */
+    --background: 0 0% 11%;  /* 商业版 0.21.88 对齐 */
     --foreground: 0 0% 98%;
     --sidebar-primary-foreground: 0 0% 96%;
-    --muted: 0 0% 17%;
+    --muted: 0 0% 14.1%;
     --muted-foreground: 0 0% 63.9%;
-    --border: 0 0% 22%;
-    --input: 0 0% 22%;
+    --border: 0 0% 16.5%;
+    --input: 0 0% 16.5%;
     --ring: 0 0% 83.1%;
     --primary: 0 0% 98%;
     --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 17%;
+    --secondary: 0 0% 14.1%;
     --secondary-foreground: 0 0% 98%;
-    --accent: 0 0% 40%;
+    --accent: 0 0% 17.3%;
     --accent-foreground: 0 0% 98%;
     --destructive: 0 55% 45%;
     --destructive-foreground: 0 0% 98%;
     --stop-hover-bg: hsl(0, 40%, 18%);
-    --card: 0 0% 13%;                      /* 卡片：浮起于背景 */
+    --card: 0 0% 9.8%;  /* 商业版 0.21.88 对齐 */
     --card-foreground: 0 0% 98%;
-    --popover: 0 0% 14%;                   /* 弹出层：最高浮起 */
+    --popover: 0 0% 12.5%;  /* 商业版 0.21.88 对齐 */
     --popover-foreground: 0 0% 98%;
-    --dialog: 0 0% 16%;                    /* 弹窗：比弹出层更亮 */
+    --dialog: 0 0% 14.1%;  /* 商业版 0.21.88 对齐 */
     --dialog-foreground: 0 0% 98%;
-    --content-area: 0 0% 7%;              /* 主内容区域：最深，专注 */
-    --sidebar-surface: 0 0% 10%;
-    --tabbar-surface: 0 0% 10%;
+    --content-area: 0 0% 6.3%;  /* 商业版 0.21.88 对齐 */
+    --sidebar-surface: 0 0% 11%;
+    --tabbar-surface: 0 0% 11%;
     --tab-indicator: var(--primary);
-    --sidebar-control-surface: 0 0% 17%;
-    --sidebar-control-surface-hover: 0 0% 21%;
+    --sidebar-control-surface: 0 0% 14.1%;
+    --sidebar-control-surface-hover: 0 0% 17.3%;
     --sidebar-control-stroke: 0 0% 100% / 0.10;
-    --input-surface: 0 0% 9%;              /* 输入区：介于背景和内容区之间 */
-    --tab-surface: 0 0% 7%;                /* 与内容区域无缝衔接 */
+    --input-surface: 0 0% 7.8%;  /* 商业版 0.21.88 对齐 */
+    --tab-surface: 0 0% 6.3%;  /* 商业版 0.21.88 对齐 */
     /* 毛玻璃 Tooltip：深色半透明背景 + 白色文字 */
     --tooltip: 0 0% 20%;
     --tooltip-foreground: 0 0% 98%;
@@ -200,6 +203,7 @@ body {
     /* 虚线边框色（新会话按钮、搜索按钮） */
     --dashed-border: 0 0% 98% / 0.25;
     --dashed-border-hover: 0 0% 98% / 0.40;
+    --sidebar-list-surface: 0 0% 9%;  /* 商业版 0.21.88 新增 */
   }
 
   /* ===== 特殊风格主题 ===== */
@@ -210,9 +214,9 @@ body {
     --foreground: 210 30% 15%;            /* #1b2632 前景文字 */
     --content-area: 205 30% 97%;          /* #f4f7fa 内容区域 */
     --muted: 205 35% 88%;                 /* #d7e4ef 次要背景 */
-    --muted-foreground: 210 15% 40%;      /* #576675 次要文字 */
+    --muted-foreground: 210 15% 39%;  /* 商业版 0.21.88 对齐 */
     --border: 205 30% 82%;                /* #c3d5e5 边框 */
-    --primary: 205 50% 50%;               /* #408abf 主色 */
+    --primary: 205 50% 44%;  /* 商业版 0.21.88 对齐 */
     --primary-foreground: 0 0% 100%;      /* #ffffff 主色前景 */
     --secondary: 205 35% 91%;             /* #e2ebf3 二级背景 */
     --secondary-foreground: 210 30% 20%;  /* #243342 二级前景 */
@@ -224,7 +228,7 @@ body {
     --input: 205 35% 91%;                 /* #e2ebf3 输入框背景 */
     --popover: 205 30% 97%;               /* #f4f7fa 弹出层 */
     --popover-foreground: 210 30% 15%;    /* #1b2632 弹出前景 */
-    --dialog: 0 0% 100%;                  /* #ffffff 弹窗背景 */
+    --dialog: 205 28% 98%;  /* 商业版 0.21.88 对齐 */
     --dialog-foreground: 210 30% 15%;     /* #1b2632 弹窗前景 */
     --sidebar-surface: 205 35% 94%;
     --tabbar-surface: 205 35% 94%;
@@ -234,17 +238,18 @@ body {
     --sidebar-control-stroke: 205 45% 34% / 0.12;
     --input-surface: 205 32% 96%;
     --tab-surface: 205 30% 97%;
-    --destructive: 0 84.2% 60.2%;         /* #ef4444 危险色 */
+    --destructive: 0 70% 47%;  /* 商业版 0.21.88 对齐 */
     --destructive-foreground: 0 0% 98%;   /* #fafafa 危险前景 */
     --stop-hover-bg: hsla(0, 80%, 60%, 0.12);
     --tooltip: 210 45% 18%;               /* #192e43 Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 210 20% 75%;         /* #b3bfcc Tooltip弱 */
     /* 代码块背景 - 蓝调 */
-    --code-bg: 210 35% 14%;               /* #172030 深蓝 */
+    --code-bg: var(--sidebar-surface);  /* 商业版 0.21.88 对齐 */
     /* 虚线边框色 */
     --dashed-border: 205 50% 50% / 0.30;
     --dashed-border-hover: 205 50% 50% / 0.45;
+    --sidebar-list-surface: 205 30% 96%;  /* 商业版 0.21.88 新增 */
   }
 
   /* 远山暮霭 (ocean-dark) — "干净的深海玻璃"
@@ -261,11 +266,11 @@ body {
     --sidebar-control-surface: 210 12% 18%;
     --sidebar-control-surface-hover: 210 13% 21%;
     --sidebar-control-stroke: 210 18% 72% / 0.10;
-    --input-surface: 210 12% 13%;
+    --input-surface: 210 12% 10.5%;
     --muted: 210 12% 17%;
     --muted-foreground: 210 10% 60%;
     --border: 210 14% 24%;                /* 与背景拉开 11% 亮度，hairline 后可见 */
-    --primary: 210 28% 48%;               /* 雾蓝灰主色，对齐 mode-slider 灰度 */
+    --primary: 210 28% 47%;  /* 商业版 0.21.88 对齐 */
     --primary-foreground: 0 0% 100%;      /* 白字配中性灰蓝 */
     --secondary: 210 12% 17%;
     --secondary-foreground: 210 14% 92%;
@@ -290,6 +295,8 @@ body {
     /* 虚线边框色 */
     --dashed-border: 210 28% 48% / 0.35;
     --dashed-border-hover: 210 28% 48% / 0.55;
+    --tab-surface: 210 14% 9%;  /* 商业版 0.21.88 新增 */
+    --sidebar-list-surface: 210 12% 11%;  /* 商业版 0.21.88 新增 */
   }
 
   /* ===== 森系色系 ===== */
@@ -300,7 +307,7 @@ body {
     --foreground: 132 16% 18%;            /* 暖墨绿文字 */
     --content-area: 80 26% 96%;           /* 主阅读区仍保持干净 */
     --muted: 82 18% 88%;
-    --muted-foreground: 96 8% 42%;
+    --muted-foreground: 96 8% 38%;
     --border: 84 14% 78%;
     --primary: 134 24% 38%;               /* 鼠尾草绿主色，不用荧光绿 */
     --primary-foreground: 0 0% 100%;
@@ -330,9 +337,10 @@ body {
     --tooltip: 132 18% 18%;
     --tooltip-foreground: 0 0% 98%;
     --tooltip-muted: 82 12% 68%;
-    --code-bg: 138 22% 13%;
+    --code-bg: var(--sidebar-surface);
     --dashed-border: 134 24% 38% / 0.34;
     --dashed-border-hover: 134 24% 38% / 0.50;
+    --sidebar-list-surface: 82 22% 94%;  /* 商业版 0.21.88 新增 */
   }
 
   /* 森息夜语（深色）— "雾林清晨"
@@ -349,11 +357,11 @@ body {
     --sidebar-control-surface: 150 9% 17%;
     --sidebar-control-surface-hover: 150 10% 20%;
     --sidebar-control-stroke: 140 14% 72% / 0.10;
-    --input-surface: 150 8% 14%;
+    --input-surface: 150 9% 10.5%;
     --muted: 150 10% 17%;
     --muted-foreground: 145 8% 60%;
     --border: 150 12% 25%;
-    --primary: 145 25% 42%;               /* 雾绿灰主色，沉静的森林背影 */
+    --primary: 145 25% 40%;  /* 商业版 0.21.88 对齐 */
     --primary-foreground: 0 0% 100%;      /* 白字配中性灰绿 */
     --secondary: 150 10% 17%;
     --secondary-foreground: 140 10% 92%;
@@ -378,6 +386,8 @@ body {
     /* 虚线边框色 */
     --dashed-border: 145 25% 42% / 0.35;
     --dashed-border-hover: 145 25% 42% / 0.55;
+    --tab-surface: 150 10% 9%;  /* 商业版 0.21.88 新增 */
+    --sidebar-list-surface: 150 9% 11.5%;  /* 商业版 0.21.88 新增 */
   }
 
   /* ===== 赛博朋克色系 ===== */
@@ -390,11 +400,11 @@ body {
     --content-area: 40 8% 94%;            /* #f0efec 内容区域（RGB 240,239,236 主题色） */
     /* 次要色 */
     --muted: 40 6% 85%;                   /* #dbd8d2 次要背景 */
-    --muted-foreground: 40 5% 45%;        /* #787568 次要文字 */
+    --muted-foreground: 40 5% 36%;  /* 商业版 0.21.88 对齐 */
     --border: 40 6% 80%;                  /* #d0cdc6 边框 */
     /* 交互色 */
     --primary: 18 20% 67%;                /* #bda59b 主色（RGB 189,165,155） */
-    --primary-foreground: 0 0% 100%;      /* #ffffff 主色前景（白色文字） */
+    --primary-foreground: 40 8% 18%;  /* 商业版 0.21.88 对齐 */
     --secondary: 40 6% 90%;               /* #e8e6e2 二级背景 */
     --secondary-foreground: 40 8% 22%;    /* #3c3933 二级前景 */
     --accent: 40 6% 86%;                  /* #dddad4 强调背景 */
@@ -414,7 +424,7 @@ body {
     --sidebar-control-surface: 40 6% 88%;
     --sidebar-control-surface-hover: 40 6% 86%;
     --sidebar-control-stroke: 40 10% 28% / 0.11;
-    --input-surface: 40 8% 95%;
+    --input-surface: 40 7% 93%;
     --tab-surface: 40 8% 94%;
     /* 功能色 */
     --destructive: 0 65% 50%;             /* #d43c3c 危险色 */
@@ -424,10 +434,11 @@ body {
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 40 5% 55%;           /* #928e84 Tooltip弱 */
     /* 代码块背景 - 与主色相近的深暖棕 */
-    --code-bg: 18 15% 18%;                /* #362f2b 深暖棕（主色深版） */
+    --code-bg: var(--sidebar-surface);  /* 商业版 0.21.88 对齐 */
     /* 虚线边框色 */
     --dashed-border: 18 20% 50% / 0.40;
     --dashed-border-hover: 18 20% 50% / 0.55;
+    --sidebar-list-surface: 40 7% 93%;  /* 商业版 0.21.88 新增 */
   }
 
   /* 莫兰迪夜（深色） */
@@ -442,7 +453,7 @@ body {
     --sidebar-control-surface: 260 7% 18%;
     --sidebar-control-surface-hover: 260 8% 21%;
     --sidebar-control-stroke: 30 12% 74% / 0.10;
-    --input-surface: 260 6% 12%;
+    --input-surface: 260 6% 10%;
     /* 次要色 - 淡紫灰调 */
     --muted: 260 6% 16%;                  /* #272429 次要背景 */
     --muted-foreground: 30 8% 60%;        /* #9f9690 次要文字 */
@@ -475,6 +486,8 @@ body {
     /* 虚线边框色 */
     --dashed-border: 15 25% 68% / 0.30;
     --dashed-border-hover: 15 25% 68% / 0.45;
+    --tab-surface: 270 8% 9%;  /* 商业版 0.21.88 新增 */
+    --sidebar-list-surface: 260 6% 10.5%;  /* 商业版 0.21.88 新增 */
   }
 
   /* ===== CRT 终端 (terminal-dark) — 暖磷光 =====
@@ -495,10 +508,10 @@ body {
     --sidebar-control-surface: 100 5% 12%;
     --sidebar-control-surface-hover: 100 6% 16%;
     --sidebar-control-stroke: 100 20% 55% / 0.12;
-    --input-surface: 100 6% 5%;
+    --input-surface: 100 6% 6.5%;
     /* 次要色 */
     --muted: 100 5% 10%;                  /* #1a1b19 次要背景 */
-    --muted-foreground: 90 12% 38%;       /* #636b5e 次要文字 */
+    --muted-foreground: 90 12% 48%;  /* 商业版 0.21.88 对齐 */
     --border: 90 10% 18%;                 /* #2d3029 暗暖边框 */
     /* 交互色 — 低饱和暖绿，不荧光 */
     --primary: 100 30% 48%;               /* #6b9e52 收敛暖绿 */
@@ -518,7 +531,7 @@ body {
     --dialog-foreground: 90 20% 65%;
     /* 功能色 — 暖红调 */
     --destructive: 10 35% 42%;            /* #9e5546 暖红 */
-    --destructive-foreground: 90 20% 65%;
+    --destructive-foreground: 0 0% 98%;
     --stop-hover-bg: hsl(10, 25%, 15%);
     /* 毛玻璃 Tooltip */
     --tooltip: 100 8% 14%;
@@ -531,6 +544,8 @@ body {
     /* 虚线边框色 */
     --dashed-border: 100 30% 48% / 0.25;
     --dashed-border-hover: 100 30% 48% / 0.40;
+    --tab-surface: 100 6% 6%;  /* 商业版 0.21.88 新增 */
+    --sidebar-list-surface: 100 6% 7%;  /* 商业版 0.21.88 新增 */
   }
 }
 
@@ -602,7 +617,8 @@ body {
 /* Windows 顶部标题栏与系统控制按钮。拖拽区和按钮组分属独立矩形，避免高 DPI 下的 hitmask 重叠。 */
 .window-titlebar {
   --window-titlebar-controls-width: 138px;
-  background-color: hsl(var(--background));
+  background-color: hsl(var(--sidebar-surface));
+  border-bottom: 1px solid hsl(var(--border) / .72);
 }
 
 .window-controls {
@@ -620,22 +636,22 @@ body {
   width: 46px;
   height: 32px;
   border-radius: 0;
-  color: hsl(var(--muted-foreground));
+  color: hsl(var(--foreground) / .68);
   background: transparent;
   border: none;
   cursor: default;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color .12s ease, color .12s ease;
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
 .window-control-btn:hover {
-  background-color: hsl(var(--muted) / 0.35);
+  background-color: hsl(var(--foreground) / .07);
   color: hsl(var(--foreground));
 }
 
 .window-control-btn:active {
-  background-color: hsl(var(--muted) / 0.5);
+  background-color: hsl(var(--foreground) / .12);
 }
 
 .window-control-close:hover {
@@ -677,11 +693,11 @@ body {
 /* ===== 特殊主题：模式切换器选中状态 ===== */
 /* 晴空碧海：蓝色背景滑块 + 白色文字 */
 .theme-ocean-light .mode-slider {
-  background: hsl(205 50% 50%) !important;  /* #408abf 主色 */
-  box-shadow: 0 2px 4px rgba(64, 138, 191, 0.3);
+  background: hsl(var(--primary)) !important;
+  box-shadow: 0 2px 4px hsl(var(--primary) / .3);
 }
 .theme-ocean-light .mode-btn-selected {
-  color: #ffffff !important;
+  color: hsl(var(--primary-foreground)) !important;
 }
 
 /* 远山暮霭：mode-slider 调灰 — 不再用饱和度 90% 的亮蓝，改为低饱和的"雾蓝" */
@@ -717,7 +733,7 @@ body {
   box-shadow: 0 2px 4px rgba(189, 165, 155, 0.4);
 }
 .theme-slate-light .mode-btn-selected {
-  color: #ffffff !important;
+  color: hsl(var(--primary-foreground)) !important;
 }
 
 /* ===== 碧海主题：会话/工作区选中状态 ===== */
@@ -1051,7 +1067,7 @@ body {
 /* 浅色主题：使用深色 code-bg + 浅色文字，与 AI 代码块一致 */
 .tiptap pre {
   background-color: hsl(var(--code-bg));
-  color: hsl(0 0% 90%);
+  color: hsl(var(--foreground));
 }
 .tiptap pre code {
   color: inherit;
@@ -1143,7 +1159,7 @@ body {
 .scrollbar-thin,
 .scrollbar-thin > * {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  scrollbar-color: hsl(var(--foreground) / .14) transparent;
 }
 .scrollbar-thin::-webkit-scrollbar,
 .scrollbar-thin > *::-webkit-scrollbar {
@@ -1156,12 +1172,12 @@ body {
 }
 .scrollbar-thin::-webkit-scrollbar-thumb,
 .scrollbar-thin > *::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground) / 0.3);
+  background-color: hsl(var(--foreground) / .14);
   border-radius: 3px;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover,
 .scrollbar-thin > *::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.5);
+  background-color: hsl(var(--foreground) / .25);
 }
 .scrollbar-thin::-webkit-scrollbar-corner,
 .scrollbar-thin > *::-webkit-scrollbar-corner {
@@ -1233,7 +1249,7 @@ body {
   padding: 0;
 }
 
-/* 浅色主题代码块是深底，用偏浅的蓝灰选区承托原有文字与 Shiki 语法色。 */
+/* 浅色主题代码块（商业版 0.21.88 起为浅底）选区。 */
 :root:not(.dark) :is(
   .code-block-wrapper pre.shiki,
   .tiptap pre
@@ -1242,7 +1258,7 @@ body {
   .code-block-wrapper pre.shiki,
   .tiptap pre
 ) ::selection {
-  background-color: hsl(210 80% 68% / 0.32);
+  background-color: #2680d94d;
 }
 
 :root:not(.dark) :is(
@@ -1253,7 +1269,7 @@ body {
   .code-block-wrapper pre.shiki,
   .tiptap pre
 ) ::-moz-selection {
-  background-color: hsl(210 80% 68% / 0.32);
+  background-color: #2680d94d;
 }
 
 /* 代码行：限制重排范围，GPU 合成优化 */
@@ -2378,7 +2394,7 @@ body {
 .vault-ink-mde {
   --ink-color: hsl(var(--foreground));
   --ink-font-family: inherit;
-  --ink-editor-font-size: var(--md-preview-font-size, 15px);
+  --ink-editor-font-size: var(--md-preview-font-size, 16px);
   --ink-editor-line-height: 1.625;
   --ink-border-radius: 0;
   --ink-block-background-color: transparent;
@@ -2798,6 +2814,7 @@ body {
   font-weight: 500;
   letter-spacing: 0.02em;
   white-space: nowrap;
+  margin-left: auto;
 }
 .vault-ink-mde .vault-properties-list {
   display: flex;
@@ -2806,7 +2823,7 @@ body {
 }
 .vault-ink-mde .vault-property-row {
   display: grid;
-  grid-template-columns: 1.55rem minmax(7.5rem, 0.36fr) minmax(0, 1fr) 1.4rem;
+  grid-template-columns: 1.55rem minmax(4.5rem, 0.36fr) minmax(0, 1fr) 1.4rem;
   min-height: 2.45rem;
   align-items: center;
   column-gap: 0.35rem;
@@ -2873,6 +2890,7 @@ body {
 .vault-ink-mde .vault-property-value {
   min-width: 0;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
   color: hsl(var(--foreground) / 0.92);
   font-size: 0.94em;
   font-weight: 400;
@@ -2948,4 +2966,433 @@ body {
 }
 .vault-ink-mde .vault-mermaid-block .mermaid-block-wrapper {
   margin: 0;
+}
+
+/* ===== 商业版 0.21.88 对齐：新增自定义样式（rail、收藏面板、chrome 表面、记忆页等，按商业版编译产物原值迁入） ===== */
+.proma-desktop-chrome {
+  color: hsl(var(--foreground) / .76);
+}
+.proma-desktop-app-shell .proma-chrome-surface {
+  border-top: 0;
+}
+.proma-desktop-app-shell .sidebar-rail-top-inset {
+  height: 0;
+}
+.proma-desktop-app-shell .sidebar-window-drag-strip {
+  display: none;
+}
+.window-titlebar-brand {
+  color: hsl(var(--foreground) / .82);
+}
+.window-titlebar-brand img {
+  color: hsl(var(--foreground) / .76);
+}
+.mermaid-block-scroll--persistent {
+  scrollbar-width: none;
+}
+.mermaid-block-scroll--persistent::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.mermaid-block-scrollbar-track {
+  position: absolute;
+  right: 12px;
+  bottom: 2px;
+  left: 12px;
+  z-index: 2;
+  height: 12px;
+  cursor: pointer;
+  touch-action: none;
+}
+.mermaid-block-scrollbar-track:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+.mermaid-block-scrollbar-thumb {
+  position: absolute;
+  top: 3px;
+  z-index: 1;
+  height: 6px;
+  border-radius: 999px;
+  background-color: hsl(var(--muted-foreground) / .3);
+  cursor: grab;
+}
+.mermaid-block-scrollbar-track--dragging,
+.mermaid-block-scrollbar-track--dragging .mermaid-block-scrollbar-thumb {
+  cursor: grabbing;
+}
+.mermaid-block-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / .5);
+}
+.input-toolbar-overflow,
+.skills-embedded-container {
+  container-type: inline-size;
+}
+.live-markdown-editor .live-markdown-web-link,
+.live-markdown-editor .live-markdown-autolink {
+  cursor: pointer;
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: .16em;
+}
+.vault-ink-mde .vault-property-value-date svg {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground));
+}
+.vault-ink-mde .vault-properties-source {
+  min-height: 2.5rem;
+  padding: .35rem .5rem;
+  border-radius: .4rem;
+  color: hsl(var(--muted-foreground));
+  font-size: .75rem;
+  font-weight: 400;
+  white-space: nowrap;
+  transition: background-color .12s ease, color .12s ease;
+}
+.vault-ink-mde .vault-properties-source:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+.vault-ink-mde .vault-properties-source:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+.vault-ink-mde .vault-property-value-chip.vault-property-tag {
+  border-radius: 999px;
+  background: #7c3bed17;
+  color: #7536e2;
+  padding: .12rem .65rem;
+  font-size: 1em;
+}
+.dark .vault-ink-mde .vault-property-value-chip.vault-property-tag {
+  background: #a273f226;
+  color: #b994f9;
+}
+.vault-ink-mde .vault-property-alias {
+  padding: .12rem .35rem .12rem 0;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout {
+  --callout-color: 210 85% 46%;
+  background: hsl(var(--callout-color) / .075) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 1rem !important;
+  color: hsl(var(--foreground));
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout-cyan {
+  --callout-color: 180 85% 36%;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout-green {
+  --callout-color: 145 65% 36%;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout-orange {
+  --callout-color: 32 90% 45%;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout-red {
+  --callout-color: 0 75% 52%;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout-purple {
+  --callout-color: 262 75% 58%;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout-gray {
+  --callout-color: 220 10% 47%;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout.live-markdown-callout-title {
+  padding-top: .85rem !important;
+  padding-bottom: .35rem !important;
+  border-radius: .5rem .5rem 0 0 !important;
+  color: hsl(var(--callout-color));
+  font-weight: 650;
+}
+.vault-ink-mde .ink-mde .cm-line.live-markdown-callout.live-markdown-callout-end {
+  padding-bottom: .85rem !important;
+  border-bottom-left-radius: .5rem !important;
+  border-bottom-right-radius: .5rem !important;
+}
+.dark .vault-ink-mde .ink-mde .cm-line.live-markdown-callout {
+  background: hsl(var(--callout-color) / .14) !important;
+}
+.dark .vault-ink-mde .ink-mde .cm-line.live-markdown-callout.live-markdown-callout-title {
+  color: color-mix(in srgb, hsl(var(--callout-color)), white 32%);
+}
+.vault-ink-mde .ink-mde .cm-line .live-markdown-callout-marker {
+  display: inline-flex !important;
+  align-items: center;
+  gap: .45rem;
+  margin-right: .45rem;
+  vertical-align: -.2em;
+}
+.live-markdown-callout-marker svg {
+  flex-shrink: 0;
+}
+.proma-chrome-surface {
+  background-color: hsl(var(--sidebar-surface));
+}
+.proma-sidebar-list-surface {
+  background-color: hsl(var(--sidebar-list-surface));
+}
+.sidebar-rail {
+  display: flex;
+  height: 100%;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+}
+.sidebar-rail-top-inset {
+  height: 54px;
+  flex-shrink: 0;
+}
+.sidebar-rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.sidebar-rail-button {
+  position: relative;
+  display: flex;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 12px;
+}
+.sidebar-rail-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.sidebar-rail-icon {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.sidebar-rail-icon > svg {
+  width: 22px;
+  height: 22px;
+}
+.sidebar-rail-icon > .lucide-library-big {
+  translate: 1px 0;
+}
+.sidebar-rail-icon > .lucide-list-todo,
+.sidebar-rail-icon > .lucide-plug {
+  translate: .5px .5px;
+}
+.sidebar-rail-icon > .sidebar-rail-obsidian-icon {
+  translate: 0 -.5px;
+}
+.sidebar-rail-button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+.sidebar-rail-button:active:not(:disabled) {
+  transform: scale(.96);
+}
+.favorite-list-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.favorite-sidebar-list,
+.automation-sidebar-list {
+  scrollbar-gutter: stable;
+}
+.favorite-session-row {
+  min-height: var(--sidebar-favorite-row-height, 56px);
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+}
+.favorite-session-content {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  -moz-column-gap: 8px;
+  column-gap: 8px;
+}
+.favorite-session-copy {
+  display: flex;
+  min-width: 0;
+  min-height: var(--sidebar-favorite-content-height, 40px);
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.favorite-session-title {
+  display: flex;
+  min-width: 0;
+  min-height: 20px;
+  align-items: center;
+  font-size: calc(15px + var(--reading-font-size-offset, 0px));
+  font-weight: 500;
+  line-height: max(20px, calc(20px + var(--reading-font-size-offset, 0px)));
+}
+.favorite-session-title > .truncate {
+  min-width: 0;
+  width: 100%;
+}
+.favorite-session-title > input {
+  min-height: 20px;
+  line-height: max(20px, calc(20px + var(--reading-font-size-offset, 0px)));
+}
+.favorite-session-star {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+}
+.favorite-session-row .session-item-actions {
+  width: 40px;
+}
+.favorite-session-row .session-item-actions > span {
+  text-align: center;
+}
+.favorite-session-row .session-item-actions > div {
+  left: 0;
+  justify-content: center;
+}
+.favorite-session-star button,
+.favorite-session-row .session-item-actions button {
+  position: relative;
+}
+.favorite-session-star button:after,
+.favorite-session-row .session-item-actions button:after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+.favorite-session-row:focus-visible,
+.favorite-sidebar-panel button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+@media (max-width:1366px), (max-height:900px) {
+  :root {
+    --sidebar-row-padding: 6px;
+    --sidebar-session-row-height: 34px;
+    --sidebar-project-row-height: 34px;
+    --sidebar-favorite-row-height: 54px;
+    --sidebar-favorite-content-height: 38px;
+  }
+}
+.agent-view {
+  container: agent-view / inline-size;
+}
+@container agent-view (max-width: 600px) {
+  .agent-conversation-content {
+    padding-inline: 12px;
+  }
+  .agent-input-container {
+    padding-inline: 10px;
+  }
+}
+@media (max-height:700px) {
+  .agent-conversation-content {
+    padding-block: 8px;
+  }
+  .agent-input-container {
+    padding-bottom: 8px;
+  }
+}
+.sidebar-rail-entry {
+  background-color: transparent;
+  color: hsl(var(--foreground) / .56);
+  box-shadow: none;
+  transition-property:
+    background-color,
+    color,
+    box-shadow,
+    transform;
+  transition-duration: .15s;
+}
+.sidebar-rail-entry:hover {
+  background-color: hsl(var(--foreground) / .055);
+  color: hsl(var(--foreground) / .82);
+}
+.sidebar-rail-entry[data-active=true] {
+  background-color: hsl(var(--primary) / .1);
+  color: hsl(var(--primary));
+  box-shadow: 0 1px 2px #0000000d;
+}
+.sidebar-rail-entry[data-active=true]:hover {
+  background-color: hsl(var(--primary) / .15);
+  color: hsl(var(--primary));
+}
+.sidebar-rail-entry-attention {
+  background-color: hsl(var(--primary) / .1);
+  color: hsl(var(--primary));
+}
+.sidebar-rail-entry-attention:hover {
+  background-color: hsl(var(--primary) / .15);
+  color: hsl(var(--primary));
+}
+.sidebar-rail-entry-drop-active {
+  border: 1px solid hsl(38 92% 50% / .75);
+  background-color: #f59f0a26;
+  color: #f59f0a;
+  box-shadow: var(--shadow-sm);
+  transform: scale(1.06);
+}
+@keyframes model-hover-ring-progress {
+  0% {
+    stroke-dashoffset: var(--ring-length);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.group:hover .model-hover-ring {
+  animation-name: model-hover-ring-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+.memory-page-editor {
+  --md-preview-font-size: calc(16px + var(--reading-font-size-offset, 0px));
+  --vault-editor-horizontal-inset: 24px;
+  --ink-editor-line-height: 1.8;
+}
+.memory-project-fullscreen .memory-file-row {
+  min-height: 44px;
+  padding-block: 10px;
+  gap: 10px;
+  font-size: 15px;
+}
+.memory-project-fullscreen .memory-file-row svg {
+  width: 17px;
+  height: 17px;
+}
+.memory-project-fullscreen .memory-file-meta {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.memory-project-fullscreen .memory-file-reveal {
+  width: 36px;
+  height: 36px;
+}
+.memory-project-fullscreen .memory-file-reveal svg {
+  width: 16px;
+  height: 16px;
+}
+.memory-project-fullscreen [role=status] {
+  font-size: 13px;
+  line-height: 1.6;
 }

@@ -1,18 +1,18 @@
 /**
- * AgentSkillsView — 「Agent 技能」全屏视图
+ * AgentSkillsView — Skills/MCP 能力中心（对应商业版 Otn / Etn / Ttn）
  *
- * 由侧边栏「Agent 技能」入口触发，全屏占据中间内容区（隐藏 TabBar 与右侧文件面板）。
- *
- * 结构：
- * - 顶部：标题 + 工作区切换下拉
- * - 工具条：Skills / MCP 切换 + 搜索 + 社区市场（占位）+ 新增入口
- * - 内容：能力卡片网格（商店风），点击卡片在当前 Skills 视图中预览详情
+ * 全屏模式（activeView === 'agent-skills'，左侧只有 rail）：
+ * - 左栏 220px：chrome 条「Skills/MCP」+ 列表表面上的 Skills / MCP 页面导航（带计数）
+ * - 主区：h-10 chrome 页头（图标、标题、计数、项目选择器、添加服务器）
+ *   + 内容表面上的搜索工具条与卡片网格
+ * 嵌入模式（会话右侧面板）：锁定单一能力域，只渲染主区。
+ * 记忆已是独立页面（activeView === 'memory'），这里不再提供记忆 Tab。
  */
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, ChevronRight, Search, Plus, Store, FolderOpen, Check, Sparkles, Loader2 } from 'lucide-react'
+import { Blocks, ChevronDown, ChevronRight, Search, Plus, ServerCog, FolderOpen, Check, Sparkles, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -29,19 +29,32 @@ import { McpServerForm } from '@/components/settings/McpServerForm'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
 import { AgentActionHint } from '@/components/agent/AgentActionHint'
 import { queuedTextToParagraphHtml } from '@/lib/agent-message-queue'
-import type { McpServerEntry, SkillMeta } from '@proma/shared'
+import { detectIsMac } from '@/lib/platform'
+import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@proma/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
 import { SkillCard } from './SkillCard'
 import { McpCard } from './McpCard'
 import { SkillDetailView } from './SkillDetailView'
 import { McpDetailView } from './McpDetailView'
 import { ImportSkillDialog } from './ImportSkillDialog'
-import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
+import { BuiltinMcpDetailSheet } from './BuiltinMcpDetailSheet'
+import { CapabilityPageHeader } from './CapabilityPageHeader'
 import { groupSkills } from './skillGrouping'
 import { EMBEDDED_CATALOG_TWO_COLUMN_MIN_WIDTH, IntegrationCatalog } from './IntegrationCatalog'
 import { CredentialDialog } from './CredentialDialog'
 import { OAuthClientSecretDialog } from './OAuthClientSecretDialog'
 import { buildCatalogMcpGuidePrompt, MCP_INTEGRATION_CATALOG, getCatalogServerNames, isCatalogIntegrationVisible, matchesCatalogSearch, type CatalogCliIntegration, type CatalogCliProbeState, type CatalogCredentialIntegration, type CatalogGuidedIntegration, type CatalogMcpIntegration } from './integration-catalog'
+
+type CapabilityPageTab = 'skills' | 'mcp'
+
+/** 主区内容的水平内边距，与页头 chrome 条对齐（商业版 jR）。 */
+const PAGE_GUTTER_CLASS = 'px-5 sm:px-6 xl:px-8'
+
+function getCapabilityPageInfo(tab: CapabilityPageTab, counts: { skills: number; mcps: number }): { title: string; contextLabel: string; searchLabel: string } {
+  return tab === 'mcp'
+    ? { title: 'MCP', contextLabel: `${counts.mcps} 个服务器`, searchLabel: '搜索 MCP 服务器' }
+    : { title: 'Skills', contextLabel: `${counts.skills} 个 Skills`, searchLabel: '搜索 Skills' }
+}
 
 const embeddedMcpSectionContainerQuery = `
   @container (min-width: ${EMBEDDED_CATALOG_TWO_COLUMN_MIN_WIDTH}) {
@@ -159,12 +172,17 @@ export function AgentSkillsView({
 
   const [storedTab, setTab] = useAtom(agentSkillsTabAtom)
   // 右侧组件锁定能力域，避免其内部的总览 Tab 与右侧工作区标签产生两套导航。
-  const tab = embedded && componentTab ? componentTab : storedTab
+  // 记忆已迁出为独立页面；残留的 'memory' 值按 Skills 展示。
+  const tab: CapabilityPageTab = embedded && componentTab
+    ? componentTab
+    : storedTab === 'mcp' ? 'mcp' : 'skills'
+  const isMac = React.useMemo(() => detectIsMac(), [])
   const [search, setSearch] = React.useState('')
   const [selectedSkillSlug, setSelectedSkillSlug] = React.useState<string | null>(null)
   const [selectedSkillWorkspaceSlug, setSelectedSkillWorkspaceSlug] = React.useState<string | null>(null)
   const [showCreateMcp, setShowCreateMcp] = React.useState(false)
   const [selectedMcpName, setSelectedMcpName] = React.useState<string | null>(null)
+  const [selectedBuiltinMcp, setSelectedBuiltinMcp] = React.useState<BuiltinMcpServerSummary | null>(null)
   const [showImport, setShowImport] = React.useState(false)
   const [wsPopoverOpen, setWsPopoverOpen] = React.useState(false)
   const [pendingDeleteSkill, setPendingDeleteSkill] = React.useState<SkillMeta | null>(null)
@@ -210,6 +228,16 @@ export function AgentSkillsView({
       .filter(([name]) => !q || name.toLowerCase().includes(q))
   }, [catalogServerNames, data.mcpConfig, q])
 
+  const builtinMcpServers = React.useMemo(() => {
+    if (!q) return data.builtinMcpServers
+    return data.builtinMcpServers.filter((server) =>
+      server.name.toLowerCase().includes(q) ||
+      server.displayName.toLowerCase().includes(q) ||
+      server.description.toLowerCase().includes(q) ||
+      server.tools.some((tool) => tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q)),
+    )
+  }, [data.builtinMcpServers, q])
+
   const catalogMcps = React.useMemo(() => {
     return MCP_INTEGRATION_CATALOG.filter((integration): integration is CatalogMcpIntegration =>
       isCatalogIntegrationVisible(integration) && integration.kind === 'mcp' && matchesCatalogSearch(integration, q),
@@ -234,12 +262,13 @@ export function AgentSkillsView({
     )
   }, [q])
 
-  // 不含搜索过滤的 MCP 总数（Tab 计数与空态判断用）
+  // 不含搜索过滤的 MCP 总数（导航计数与页头上下文）：工作区服务器 + Proma 内置能力
   const mcpCount = React.useMemo(
-    () => Object.keys(data.mcpConfig.servers ?? {}).length,
-    [data.mcpConfig],
+    () => Object.keys(data.mcpConfig.servers ?? {}).length + data.builtinMcpServers.length,
+    [data.mcpConfig, data.builtinMcpServers],
   )
-  const memoryCount = (data.capabilities?.memory.agentsMd.exists ? 1 : 0) + (data.capabilities?.memory.autoMemory.fileCount ?? 0)
+  const pageInfo = getCapabilityPageInfo(tab, { skills: data.skills.length, mcps: mcpCount })
+  const PageIcon = tab === 'mcp' ? ServerCog : Blocks
 
   const selectedSkill = selectedSkillWorkspaceSlug === data.workspaceSlug
     && data.loadedWorkspaceSlug === data.workspaceSlug
@@ -569,278 +598,282 @@ export function AgentSkillsView({
     )
   }
 
+  const addServerButton = (
+    <button
+      type="button"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => setShowCreateMcp(true)}
+      title="在 MCP 管理界面添加服务器"
+      className="relative inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground shadow-sm transition-[transform,background-color] hover:bg-primary/90 active:scale-[0.96] disabled:cursor-wait disabled:opacity-60 after:absolute after:-inset-1 after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+    >
+      <Plus size={14} /> 添加服务器
+    </button>
+  )
+
   return (
     <div
-      className={cn('flex h-full flex-col overflow-hidden', embedded && 'skills-embedded-container')}
+      className={cn('flex h-full min-h-0 overflow-hidden', embedded ? 'skills-embedded-container bg-content-area' : 'proma-chrome-surface')}
       // Container query keeps the catalog responsive to this resizable SidePanel.
       style={embedded ? { containerType: 'inline-size' } : undefined}
     >
-      {/* 标题栏 + 工作区切换 */}
-      {/* 不加 titlebar-drag-region：与 DropdownMenu 嵌套时 drag/no-drag 会让 Radix 拿不到
-          pointerdown，下拉打不开。窗口拖拽由 AppShell 顶部 0–50px 的全局 drag 层兜底。
-          pt-14 让按钮整体位于全局 drag 层（0–50px, z-50）下方，避免被吃掉点击。 */}
-      <div className={cn('titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center justify-between', embedded ? 'px-4 py-3' : 'px-8 pt-14 pb-4')}>
-        <div className="flex items-center gap-2.5">
-          <Blocks className="size-6 text-foreground/70" />
-          <h1 className={cn('font-semibold text-foreground', embedded ? 'text-lg' : 'text-2xl')}>{embedded ? (tab === 'mcp' ? 'MCP' : 'Skills') : 'Agent 技能'}</h1>
-        </div>
-
-        {!embedded && <Popover open={wsPopoverOpen} onOpenChange={setWsPopoverOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="titlebar-no-drag flex items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 py-1.5 text-[13px] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
-            >
-              <FolderOpen size={14} className="text-foreground/45" />
-              <span className="max-w-[180px] truncate">{data.workspaceName}</span>
-              <LocalProjectBadge
-                projectRootPath={currentWorkspace?.projectRootPath}
-                projectRootStatus={currentWorkspace?.projectRootStatus}
-              />
-              <ChevronDown size={14} className="text-foreground/45" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="max-h-[320px] w-56 overflow-y-auto scrollbar-thin p-1">
-            {workspaces.map((w) => (
+      {/* 左栏：Skills / MCP 页面导航（仅全屏能力中心） */}
+      {!embedded && (
+        <aside className="flex w-[220px] shrink-0 flex-col proma-chrome-surface">
+          <header className={cn('titlebar-drag-region flex h-10 shrink-0 items-center', isMac ? 'px-5 sm:px-6 xl:px-8' : 'px-3')}>
+            <span className="pointer-events-none text-[13px] font-semibold tracking-tight text-[hsl(var(--sidebar-primary-foreground))]">Skills/MCP</span>
+          </header>
+          <nav className="proma-sidebar-list-surface min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-5 scrollbar-thin" aria-label="能力中心页面">
+            {([
+              { value: 'skills' as const, label: 'Skills', icon: Blocks, count: data.skills.length },
+              { value: 'mcp' as const, label: 'MCP', icon: ServerCog, count: mcpCount },
+            ]).map(({ value, label, icon: Icon, count }) => (
               <button
-                key={w.id}
+                key={value}
                 type="button"
-                onClick={() => {
-                  if (w.id !== selectedWorkspaceId) {
-                    selectProject(w.id, { resetView: false })
-                    toast.success(`已切换到项目「${w.name}」`)
-                  }
-                  setWsPopoverOpen(false)
-                }}
+                onClick={() => setTab(value)}
                 className={cn(
-                  'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors',
-                  w.id === selectedWorkspaceId
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-foreground/80 hover:bg-accent/50',
+                  'flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm font-medium transition-[background-color,color,transform] hover:bg-foreground/[0.055] active:scale-[0.98]',
+                  tab === value ? 'bg-foreground/[0.085] text-foreground' : 'text-foreground/65',
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{w.name}</span>
-                <LocalProjectBadge
-                  projectRootPath={w.projectRootPath}
-                  projectRootStatus={w.projectRootStatus}
-                />
-                {w.id === selectedWorkspaceId && <Check size={14} className="shrink-0 text-primary" />}
+                <Icon className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+                <span className="text-[11px] tabular-nums text-foreground/40">{count}</span>
               </button>
             ))}
-          </PopoverContent>
-        </Popover>}
-      </div>
-
-      {embedded && (
-        <div className="titlebar-no-drag mx-auto w-full max-w-6xl shrink-0 px-3 pb-3">
-          <AgentActionHint action={tab === 'skills' ? '创建、整理、更新或删除 Skills' : '查找、配置或移除 MCP'} />
-        </div>
+          </nav>
+        </aside>
       )}
 
-      {/* 工具条 */}
-      <div className={cn('titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center gap-3', embedded ? 'px-3 pb-3' : 'px-8 pb-4')}>
-        {/* 全屏能力中心保留总览切换；右侧组件由顶栏独占一个能力域。 */}
-        {!embedded && <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
-          <div
-            className={cn(
-              'absolute bottom-0.5 top-0.5 w-[calc(33.333%-3px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-              tab === 'skills' && 'translate-x-0',
-              tab === 'mcp' && 'translate-x-full',
-              tab === 'memory' && 'translate-x-[200%]',
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {embedded ? (
+          <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center justify-between px-4 py-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.045] text-foreground/70">
+                <PageIcon className="size-4" />
+              </span>
+              <h1 className="truncate text-lg font-semibold tracking-tight text-foreground">{pageInfo.title}</h1>
+            </div>
+          </div>
+        ) : (
+          <CapabilityPageHeader
+            icon={<PageIcon size={16} />}
+            title={pageInfo.title}
+            subtitle="扩展 Proma 的能力边界"
+            draggable
+            context={<span className="rounded-md bg-foreground/[0.045] px-2 py-1 text-xs text-muted-foreground">{pageInfo.contextLabel}</span>}
+            actions={(
+              <>
+                <Popover open={wsPopoverOpen} onOpenChange={setWsPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="切换能力中心项目"
+                      className="titlebar-no-drag flex h-8 items-center gap-2 rounded-md border border-border/60 bg-content-area px-2.5 text-xs font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
+                    >
+                      <FolderOpen size={14} className="text-foreground/45" />
+                      <span className="max-w-[180px] truncate text-left">{data.workspaceName}</span>
+                      <LocalProjectBadge
+                        projectRootPath={currentWorkspace?.projectRootPath}
+                        projectRootStatus={currentWorkspace?.projectRootStatus}
+                      />
+                      <ChevronDown size={14} className="text-foreground/45" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="max-h-[320px] w-56 overflow-y-auto scrollbar-thin p-1">
+                    {workspaces.map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => {
+                          if (w.id !== selectedWorkspaceId) {
+                            selectProject(w.id, { resetView: false })
+                            toast.success(`已切换到项目「${w.name}」`)
+                          }
+                          setWsPopoverOpen(false)
+                        }}
+                        className={cn(
+                          'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors',
+                          w.id === selectedWorkspaceId
+                            ? 'bg-accent text-accent-foreground'
+                            : 'text-foreground/80 hover:bg-accent/50',
+                        )}
+                      >
+                        <span className="min-w-0 flex-1 truncate text-left">{w.name}</span>
+                        <LocalProjectBadge
+                          projectRootPath={w.projectRootPath}
+                          projectRootStatus={w.projectRootStatus}
+                        />
+                        {w.id === selectedWorkspaceId && <Check size={14} className="shrink-0 text-primary" />}
+                      </button>
+                    ))}
+                  </PopoverContent>
+                </Popover>
+                {tab === 'mcp' && addServerButton}
+              </>
             )}
           />
-          {([
-            { value: 'skills' as const, label: 'Skills', count: data.skills.length },
-            { value: 'mcp' as const, label: 'MCP', count: mcpCount },
-            { value: 'memory' as const, label: '记忆', count: memoryCount },
-          ]).map(({ value, label, count }) => (
-            <button
-              key={value}
-              onClick={() => setTab(value)}
-              className={cn(
-                'relative z-[1] flex min-w-[96px] items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium transition-colors duration-200',
-                tab === value ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {label}
-              <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
-            </button>
-          ))}
-        </div>}
+        )}
 
-        {/* 搜索框 */}
-        <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
-          <Search size={14} className="shrink-0 text-foreground/40" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={tab === 'skills' ? '搜索 Skills...' : tab === 'mcp' ? '搜索 MCP 服务器...' : '搜索记忆文件...'}
-            className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
-          />
-        </div>
+        {embedded && (
+          <div className="titlebar-no-drag mx-auto w-full max-w-6xl shrink-0 px-3 pb-3">
+            <AgentActionHint action={tab === 'skills' ? '创建、整理、更新或删除 Skills' : '查找、配置或移除 MCP'} />
+          </div>
+        )}
 
-        {/* 社区市场（占位） */}
-        {tab === 'skills' && (
-          <Tooltip>
-            <TooltipTrigger asChild>
+        {/* 工具条：搜索 + Skills 操作 */}
+        <div className={cn('titlebar-no-drag flex w-full shrink-0 items-center gap-3', embedded ? 'mx-auto max-w-6xl px-3 pb-3' : cn('bg-content-area pb-4 pt-2', PAGE_GUTTER_CLASS))}>
+          <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
+            <Search size={14} className="shrink-0 text-foreground/40" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label={pageInfo.searchLabel}
+              placeholder={`${pageInfo.searchLabel}...`}
+              className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
+            />
+          </div>
+
+          {tab === 'skills' && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => void handleClassifySkills()}
+                    disabled={classifyingSkills || data.skills.length === 0}
+                    className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {classifyingSkills ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    <span>AI 分类</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">创建 Agent 会话，读取 SKILL.md 内容并补全 group</TooltipContent>
+              </Tooltip>
               <button
                 type="button"
-                disabled
-                className="flex h-8 cursor-not-allowed items-center gap-1.5 rounded-lg border border-dashed border-border/60 px-3 text-[13px] font-medium text-foreground/35"
+                onClick={() => setShowImport(true)}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
               >
-                <Store size={14} />
-                <span>社区市场</span>
+                <Plus size={14} />
+                <span>导入</span>
               </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">即将上线：一键浏览、安装与更新社区 Skills</TooltipContent>
-          </Tooltip>
-        )}
-
-        {/* Skills：从其他工作区导入 */}
-        {tab === 'skills' && (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => void handleClassifySkills()}
-                  disabled={classifyingSkills || data.skills.length === 0}
-                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {classifyingSkills ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  <span>AI 分类</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">创建 Agent 会话，读取 SKILL.md 内容并补全 group</TooltipContent>
-            </Tooltip>
-            <button
-              type="button"
-              onClick={() => setShowImport(true)}
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
-            >
-              <Plus size={14} />
-              <span>导入</span>
-            </button>
-          </>
-        )}
-
-        {/* 新增 MCP */}
-        {tab === 'mcp' && (
-          <button
-            type="button"
-            onClick={() => setShowCreateMcp(true)}
-            title="在 MCP 管理界面添加服务器"
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-60"
-          >
-            <Plus size={14} />
-            <span>添加服务器</span>
-          </button>
-        )}
-      </div>
-
-      {/* 内容 */}
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        <div className={cn('mx-auto w-full max-w-6xl', embedded ? 'px-3 pb-4' : 'px-8 pb-10')}>
-          {data.loading ? (
-            <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
-          ) : tab === 'skills' ? (
-            <SkillsTab
-              customSkills={customSkills}
-              builtinSkills={builtinSkills}
-              embedded={embedded}
-              total={data.skills.length}
-              updateCount={updateCount}
-              updatingSkill={data.updatingSkill}
-              isBuiltin={(slug) => data.defaultSkillSlugs.has(slug)}
-              onOpen={selectSkill}
-              onToggle={data.toggleSkill}
-              onUpdate={data.updateSkill}
-            />
-          ) : tab === 'mcp' ? (
-            <McpTab
-              userEntries={userMcpEntries}
-              catalogMcps={catalogMcps}
-              catalogClis={catalogClis}
-              catalogGuided={catalogGuided}
-              catalogCredentials={catalogCredentials}
-              embedded={embedded}
-              installedMcpNames={new Set(Object.keys(data.mcpConfig.servers ?? {}))}
-              enabledMcpNames={new Set(Object.entries(data.mcpConfig.servers ?? {}).filter(([, entry]) => entry.enabled === true).map(([name]) => name))}
-              // 后台复检期间保留上一次成功的握手证据；只有刷新返回新的失败结果时才降级状态。
-              verifiedMcpNames={new Set(Object.entries(data.mcpConfig.servers ?? {}).filter(([, entry]) => entry.lastTestResult?.success).map(([name]) => name))}
-              // getWorkspaceSkills() 仅返回当前工作区 skills/ 下的 active Skill；不让
-              // 其他工作区或 inactive Skill 误把目录卡标为可用。
-              activeSkillSlugs={new Set(data.skills.filter((skill) => skill.enabled).map((skill) => skill.slug))}
-              connectedCliIds={new Set(data.cliIntegrationStatuses.filter((status) => status.connected && status.enabled).map((status) => status.id))}
-              cliIntegrationProbeState={data.cliIntegrationProbeState}
-              installingCatalogMcpId={installingCatalogMcpId}
-              onOpen={(name) => setSelectedMcpName(name)}
-              onToggle={data.toggleMcp}
-              onRequestDelete={setPendingDeleteMcpName}
-              onAuthorize={authorizeMcp}
-              onInstallCatalogMcp={(integration) => { void installCatalogMcp(integration) }}
-              onGuideCatalogCli={guideCatalogCli}
-              onDisconnectCatalogCli={(integration) => { void disconnectCatalogCli(integration) }}
-              onGuideCatalogIntegration={(integration) => { void guideCatalogIntegration(integration) }}
-              onRequestCredential={setPendingCredentialIntegration}
-            />
-          ) : (
-            <WorkspaceMemoryTab workspaceSlug={data.workspaceSlug} search={search} />
+            </>
           )}
+
+          {embedded && tab === 'mcp' && addServerButton}
         </div>
+
+        {/* 内容 */}
+        <div className={cn('min-h-0 flex-1 overflow-y-auto scrollbar-thin', !embedded && 'bg-content-area')}>
+          <div className={cn('mx-auto w-full max-w-6xl', embedded ? 'px-3 pb-4' : cn('pb-10', PAGE_GUTTER_CLASS))}>
+            {data.loading ? (
+              <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
+            ) : tab === 'skills' ? (
+              <SkillsTab
+                customSkills={customSkills}
+                builtinSkills={builtinSkills}
+                embedded={embedded}
+                total={data.skills.length}
+                updateCount={updateCount}
+                updatingSkill={data.updatingSkill}
+                isBuiltin={(slug) => data.defaultSkillSlugs.has(slug)}
+                onOpen={selectSkill}
+                onToggle={data.toggleSkill}
+                onUpdate={data.updateSkill}
+              />
+            ) : (
+              <McpTab
+                userEntries={userMcpEntries}
+                builtinServers={builtinMcpServers}
+                catalogMcps={catalogMcps}
+                catalogClis={catalogClis}
+                catalogGuided={catalogGuided}
+                catalogCredentials={catalogCredentials}
+                embedded={embedded}
+                installedMcpNames={new Set(Object.keys(data.mcpConfig.servers ?? {}))}
+                enabledMcpNames={new Set(Object.entries(data.mcpConfig.servers ?? {}).filter(([, entry]) => entry.enabled === true).map(([name]) => name))}
+                // 后台复检期间保留上一次成功的握手证据；只有刷新返回新的失败结果时才降级状态。
+                verifiedMcpNames={new Set(Object.entries(data.mcpConfig.servers ?? {}).filter(([, entry]) => entry.lastTestResult?.success).map(([name]) => name))}
+                // getWorkspaceSkills() 仅返回当前工作区 skills/ 下的 active Skill；不让
+                // 其他工作区或 inactive Skill 误把目录卡标为可用。
+                activeSkillSlugs={new Set(data.skills.filter((skill) => skill.enabled).map((skill) => skill.slug))}
+                connectedCliIds={new Set(data.cliIntegrationStatuses.filter((status) => status.connected && status.enabled).map((status) => status.id))}
+                cliIntegrationProbeState={data.cliIntegrationProbeState}
+                installingCatalogMcpId={installingCatalogMcpId}
+                onOpen={(name) => setSelectedMcpName(name)}
+                onOpenBuiltin={setSelectedBuiltinMcp}
+                onToggle={data.toggleMcp}
+                onRequestDelete={setPendingDeleteMcpName}
+                onAuthorize={authorizeMcp}
+                onInstallCatalogMcp={(integration) => { void installCatalogMcp(integration) }}
+                onGuideCatalogCli={guideCatalogCli}
+                onDisconnectCatalogCli={(integration) => { void disconnectCatalogCli(integration) }}
+                onGuideCatalogIntegration={(integration) => { void guideCatalogIntegration(integration) }}
+                onRequestCredential={setPendingCredentialIntegration}
+              />
+            )}
+          </div>
+        </div>
+
+        {skillDeleteDialog}
+
+        {/* MCP 删除确认 */}
+        <ConfirmDialog
+          open={pendingDeleteMcpName !== null}
+          onOpenChange={(open) => { if (!open) setPendingDeleteMcpName(null) }}
+          title={`确认删除 MCP 服务器「${pendingDeleteMcpName}」？`}
+          description="删除后将无法恢复，确定要删除这个 MCP 服务器吗？"
+          confirmLabel="删除"
+          loadingLabel="删除中..."
+          loading={isDeletingMcp}
+          onConfirm={async () => {
+            if (!pendingDeleteMcpName || isDeletingMcp) return
+            setIsDeletingMcp(true)
+            await data.deleteMcp(pendingDeleteMcpName)
+            setIsDeletingMcp(false)
+            setPendingDeleteMcpName(null)
+          }}
+        />
+
+        <CredentialDialog
+          integration={pendingCredentialIntegration}
+          onOpenChange={(open) => { if (!open) setPendingCredentialIntegration(null) }}
+          onSave={connectCredentialIntegration}
+        />
+
+        <OAuthClientSecretDialog
+          serverName={pendingOAuthClientSecret?.name ?? null}
+          onOpenChange={(open) => { if (!open) setPendingOAuthClientSecret(null) }}
+          onSave={async (clientSecret) => {
+            const pending = pendingOAuthClientSecret
+            if (!pending || !pending.entry.url) return
+            await window.electronAPI.saveMcpOAuthClientSecret({
+              workspaceSlug: data.workspaceSlug,
+              serverName: pending.name,
+              serverUrl: pending.entry.url,
+              clientSecret,
+            })
+            savedOAuthClientSecretsRef.current.add(pending.name)
+            // 先关闭秘密输入弹窗，再由同一张 MCP 卡片继续用户显式的浏览器授权。
+            queueMicrotask(() => { void authorizeMcp(pending.name, pending.entry) })
+          }}
+        />
+
+        <ImportSkillDialog
+          open={showImport}
+          onOpenChange={setShowImport}
+          workspaceSlug={data.workspaceSlug}
+          installedSkills={data.skills}
+          onImported={() => bumpCapabilities((v) => v + 1)}
+        />
+
+        <BuiltinMcpDetailSheet
+          open={selectedBuiltinMcp !== null}
+          server={selectedBuiltinMcp}
+          onOpenChange={(open) => { if (!open) setSelectedBuiltinMcp(null) }}
+        />
       </div>
-
-      {skillDeleteDialog}
-
-      {/* MCP 删除确认 */}
-      <ConfirmDialog
-        open={pendingDeleteMcpName !== null}
-        onOpenChange={(open) => { if (!open) setPendingDeleteMcpName(null) }}
-        title={`确认删除 MCP 服务器「${pendingDeleteMcpName}」？`}
-        description="删除后将无法恢复，确定要删除这个 MCP 服务器吗？"
-        confirmLabel="删除"
-        loadingLabel="删除中..."
-        loading={isDeletingMcp}
-        onConfirm={async () => {
-          if (!pendingDeleteMcpName || isDeletingMcp) return
-          setIsDeletingMcp(true)
-          await data.deleteMcp(pendingDeleteMcpName)
-          setIsDeletingMcp(false)
-          setPendingDeleteMcpName(null)
-        }}
-      />
-
-      <CredentialDialog
-        integration={pendingCredentialIntegration}
-        onOpenChange={(open) => { if (!open) setPendingCredentialIntegration(null) }}
-        onSave={connectCredentialIntegration}
-      />
-
-      <OAuthClientSecretDialog
-        serverName={pendingOAuthClientSecret?.name ?? null}
-        onOpenChange={(open) => { if (!open) setPendingOAuthClientSecret(null) }}
-        onSave={async (clientSecret) => {
-          const pending = pendingOAuthClientSecret
-          if (!pending || !pending.entry.url) return
-          await window.electronAPI.saveMcpOAuthClientSecret({
-            workspaceSlug: data.workspaceSlug,
-            serverName: pending.name,
-            serverUrl: pending.entry.url,
-            clientSecret,
-          })
-          savedOAuthClientSecretsRef.current.add(pending.name)
-          // 先关闭秘密输入弹窗，再由同一张 MCP 卡片继续用户显式的浏览器授权。
-          queueMicrotask(() => { void authorizeMcp(pending.name, pending.entry) })
-        }}
-      />
-
-      <ImportSkillDialog
-        open={showImport}
-        onOpenChange={setShowImport}
-        workspaceSlug={data.workspaceSlug}
-        installedSkills={data.skills}
-        onImported={() => bumpCapabilities((v) => v + 1)}
-      />
     </div>
   )
 }
@@ -872,15 +905,21 @@ function SkillsTab({
   onToggle,
   onUpdate,
 }: SkillsTabProps): React.ReactElement {
-  if (total === 0) {
-    return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Proma 帮你联网查找并安装 Skill，或从其他项目导入。" />
-  }
-  if (customSkills.length === 0 && builtinSkills.length === 0) {
-    return <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 Skill" hint="试试更换搜索关键词。" />
-  }
-
   return (
     <div className="flex flex-col gap-8">
+      {/* Proma Coach 由应用内置加载，不在工作区 skills/ 目录中，始终启用 */}
+      <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Proma Coach</div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">每轮任务都会使用的工作指南，负责能力选择、结果验证与项目知识维护。</p>
+        </div>
+        <span className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[11px] text-primary">内置核心 · 始终启用</span>
+      </div>
+      {total === 0 ? (
+        <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无专业 Skill" hint="可以在 Agent 模式下让 Proma 帮你联网查找并安装 Skill，或从其他项目导入。" />
+      ) : customSkills.length === 0 && builtinSkills.length === 0 ? (
+        <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 Skill" hint="试试更换搜索关键词。" />
+      ) : null}
       {updateCount > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-3 py-2 text-[13px] text-blue-600 dark:text-blue-400">
           有 {updateCount} 个 Skill 可更新到来源最新版本
@@ -967,6 +1006,7 @@ function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, onOpe
 
 interface McpTabProps {
   userEntries: Array<[string, McpServerEntry]>
+  builtinServers: BuiltinMcpServerSummary[]
   catalogMcps: CatalogMcpIntegration[]
   catalogClis: CatalogCliIntegration[]
   catalogGuided: CatalogGuidedIntegration[]
@@ -980,6 +1020,7 @@ interface McpTabProps {
   cliIntegrationProbeState: CatalogCliProbeState
   installingCatalogMcpId: string | null
   onOpen: (name: string, entry: McpServerEntry) => void
+  onOpenBuiltin: (server: BuiltinMcpServerSummary) => void
   onToggle: (name: string, enabled: boolean) => void
   onRequestDelete: (name: string) => void
   onAuthorize: (name: string, entry: McpServerEntry) => void
@@ -990,8 +1031,8 @@ interface McpTabProps {
   onRequestCredential: (integration: CatalogCredentialIntegration) => void
 }
 
-function McpTab({ userEntries, catalogMcps, catalogClis, catalogGuided, catalogCredentials, embedded, installedMcpNames, enabledMcpNames, verifiedMcpNames, activeSkillSlugs, connectedCliIds, cliIntegrationProbeState, installingCatalogMcpId, onOpen, onToggle, onRequestDelete, onAuthorize, onInstallCatalogMcp, onGuideCatalogCli, onDisconnectCatalogCli, onGuideCatalogIntegration, onRequestCredential }: McpTabProps): React.ReactElement {
-  if (userEntries.length === 0 && catalogMcps.length === 0 && catalogClis.length === 0 && catalogGuided.length === 0 && catalogCredentials.length === 0) {
+function McpTab({ userEntries, builtinServers, catalogMcps, catalogClis, catalogGuided, catalogCredentials, embedded, installedMcpNames, enabledMcpNames, verifiedMcpNames, activeSkillSlugs, connectedCliIds, cliIntegrationProbeState, installingCatalogMcpId, onOpen, onOpenBuiltin, onToggle, onRequestDelete, onAuthorize, onInstallCatalogMcp, onGuideCatalogCli, onDisconnectCatalogCli, onGuideCatalogIntegration, onRequestCredential }: McpTabProps): React.ReactElement {
+  if (userEntries.length === 0 && builtinServers.length === 0 && catalogMcps.length === 0 && catalogClis.length === 0 && catalogGuided.length === 0 && catalogCredentials.length === 0) {
     return <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 MCP 服务器" hint="试试更换搜索关键词。" />
   }
 
@@ -1019,6 +1060,27 @@ function McpTab({ userEntries, catalogMcps, catalogClis, catalogGuided, catalogC
         </McpSection>
       )}
 
+      {builtinServers.length > 0 && (
+        <McpSection title="Proma 集成能力" count={builtinServers.length} embedded={embedded}>
+          {builtinServers.map((server) => {
+            const status = getBuiltinMcpStatus(server)
+            return (
+              <McpCard
+                key={server.id}
+                name={server.displayName}
+                entry={{ type: 'stdio', command: 'Proma 运行时注入', enabled: server.enabled, isBuiltin: true }}
+                description={server.description}
+                targetLabel={server.availabilityReason ?? 'Proma 运行时注入'}
+                statusLabel={status.label}
+                statusTone={status.tone}
+                readOnly
+                onOpen={() => onOpenBuiltin(server)}
+              />
+            )
+          })}
+        </McpSection>
+      )}
+
       <IntegrationCatalog
         mcps={catalogMcps}
         clis={catalogClis}
@@ -1041,6 +1103,11 @@ function McpTab({ userEntries, catalogMcps, catalogClis, catalogGuided, catalogC
       />
     </div>
   )
+}
+
+function getBuiltinMcpStatus(server: BuiltinMcpServerSummary): { label: string; tone: 'success' | 'warning' | 'muted' } {
+  if (!server.enabled) return { label: '已关闭', tone: 'muted' }
+  return server.available ? { label: '可用', tone: 'success' } : { label: '需配置', tone: 'warning' }
 }
 
 function McpSection({ title, count, children, embedded }: { title: string; count: number; children: React.ReactNode; embedded: boolean }): React.ReactElement {
