@@ -1,8 +1,8 @@
 /**
  * useOpenSession — 统一的"打开/聚焦会话 Tab"操作
  *
- * 封装 openTab + setTabs + setActiveTabId + setAppMode + setCurrentXxxId，
- * 确保所有打开会话的入口都能正确同步 appMode 和 currentSessionId。
+ * 封装 openTab + setTabs + setActiveTabId + setCurrentXxxId，
+ * 确保所有打开会话的入口都能正确同步当前会话。
  */
 
 import * as React from 'react'
@@ -16,10 +16,8 @@ import {
   type TabType,
 } from '@/atoms/tab-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
-import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { automationFormAtom } from '@/atoms/automation-atoms'
-import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   currentAgentSessionIdAtom,
   agentSessionsAtom,
@@ -44,11 +42,8 @@ export function useOpenSession(): OpenSessionFn {
   const store = useStore()
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
-  const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
-  const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
-  const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
@@ -80,11 +75,7 @@ export function useOpenSession(): OpenSessionFn {
       setAutomationForm({ open: false, draft: null })
       setActiveView('conversations')
 
-      if (type === 'chat') {
-        setAppMode('chat')
-        setCurrentConversationId(sessionId)
-      } else if (type === 'agent' || type === 'preview') {
-        setAppMode('agent')
+      if (type === 'agent' || type === 'preview') {
         setCurrentAgentSessionId(sessionId)
 
         // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
@@ -105,12 +96,11 @@ export function useOpenSession(): OpenSessionFn {
         }
       } else {
         // 非会话 Tab（如预览）不创建或选择任何草稿视图。
-        setCurrentConversationId(null)
         setCurrentAgentSessionId(null)
       }
 
       options?.onOpened?.()
     },
-    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation, currentAgentSessionId],
+    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],
   )
 }

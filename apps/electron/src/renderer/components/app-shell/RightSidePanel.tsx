@@ -8,7 +8,6 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { appModeAtom } from '@/atoms/app-mode'
 import {
   currentAgentSessionIdAtom,
   currentSessionSidePanelOpenAtom,
@@ -25,7 +24,6 @@ import { browserFocusRequestMapAtom, browserPanelOpenMapAtom, browserStateMapAto
 import { getPreviewFileId, previewFileMapAtom } from '@/atoms/preview-atoms'
 
 export function RightSidePanel({ width }: { width?: number }): React.ReactElement | null {
-  const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const diffPanelTabMap = useAtomValue(agentDiffPanelTabAtom)
@@ -133,7 +131,7 @@ export function RightSidePanel({ width }: { width?: number }): React.ReactElemen
     pendingBrowserActivationRef.current = null
   }, [browserFocusRequestTabId, browserOpen, browserState?.activeTabId, browserState?.tabs, currentSessionId, setBrowserFocusRequestMap, setDiffPanelTabMap, setSidePanelOpen])
 
-  if (appMode !== 'agent' || !currentSessionId) {
+  if (!currentSessionId) {
     return null
   }
 

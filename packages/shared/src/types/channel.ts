@@ -19,6 +19,8 @@ export type ProviderType =
   | 'kimi-coding'
   /** 仅用于识别并清理存量渠道；不再支持创建或请求。 */
   | 'opencode-go-openai'
+  | 'doubao'
+  | 'ark-coding-plan'
   | 'zhipu'
   | 'zhipu-coding'
   | 'zhipu-coding-team'
@@ -53,6 +55,8 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   'kimi-api': 'https://api.moonshot.cn/anthropic',
   'kimi-coding': 'https://api.kimi.com/coding/v1',
   'opencode-go-openai': '', // 迁移占位；不再提供默认请求地址。
+  doubao: '', // 迁移占位；不再提供默认请求地址。
+  'ark-coding-plan': '', // 迁移占位；不再提供默认请求地址。
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   'zhipu-coding': 'https://open.bigmodel.cn/api/anthropic',
   'zhipu-coding-team': 'https://open.bigmodel.cn/api/anthropic',
@@ -85,6 +89,8 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   'kimi-api': 'Kimi API',
   'kimi-coding': 'Kimi Coding Plan',
   'opencode-go-openai': 'OpenCode Go',
+  doubao: '火山方舟（存量）',
+  'ark-coding-plan': '火山方舟 Coding Plan（存量）',
   zhipu: '智谱 AI',
   'zhipu-coding': '智谱 Coding Plan',
   'zhipu-coding-team': '智谱 Coding Plan 团队版',

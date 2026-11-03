@@ -11,7 +11,6 @@
 
 import { useEffect, useCallback } from 'react'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
-import { appModeAtom } from '@/atoms/app-mode'
 import { settingsOpenAtom, channelFormDirtyAtom, settingsCloseRequestedAtom } from '@/atoms/settings-tab'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import {
@@ -41,14 +40,6 @@ import {
   currentSessionSidePanelOpenAtom,
   isWorkspaceComponentTab,
 } from '@/atoms/agent-atoms'
-import {
-  chatPendingMessageAtom,
-  conversationDraftsAtom,
-  conversationDraftSyncVersionsAtom,
-  conversationsAtom,
-  currentConversationIdAtom,
-  selectedModelAtom,
-} from '@/atoms/chat-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useShortcut } from '@/hooks/useShortcut'
@@ -73,7 +64,6 @@ import {
  * 挂载后从 settings 加载自定义配置，并注册所有应用级快捷键。
  */
 export function GlobalShortcuts(): null {
-  const [appMode, setAppMode] = useAtom(appModeAtom)
   const [settingsOpen, setSettingsOpen] = useAtom(settingsOpenAtom)
   const channelFormDirty = useAtomValue(channelFormDirtyAtom)
   const setSettingsCloseRequested = useSetAtom(settingsCloseRequestedAtom)
@@ -83,7 +73,7 @@ export function GlobalShortcuts(): null {
   const setShortcutOverrides = useSetAtom(shortcutOverridesAtom)
   const shortcutOverrides = useAtomValue(shortcutOverridesAtom)
   const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
-  const { createChat, createAgent } = useCreateSession()
+  const { createAgent } = useCreateSession()
 
   // Tab 管理（用于关闭标签页）
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -180,16 +170,12 @@ export function GlobalShortcuts(): null {
     useCallback(() => setSearchOpen(true), [setSearchOpen]),
   )
 
-  // Cmd+N → 新建对话/会话（根据当前模式）
+  // Cmd+N → 新建 Agent 会话
   useShortcut(
     'new-session',
     useCallback(() => {
-      if (appMode === 'agent') {
-        createAgent({ draft: true })
-      } else {
-        createChat({ draft: true })
-      }
-    }, [appMode, createAgent, createChat]),
+      createAgent({ draft: true })
+    }, [createAgent]),
   )
 
   // Cmd+B → 切换侧边栏
@@ -198,15 +184,6 @@ export function GlobalShortcuts(): null {
     useCallback(
       () => setSidebarCollapsed(!sidebarCollapsed),
       [sidebarCollapsed, setSidebarCollapsed],
-    ),
-  )
-
-  // Cmd+Shift+M → 切换模式
-  useShortcut(
-    'toggle-mode',
-    useCallback(
-      () => setAppMode(appMode === 'chat' ? 'agent' : 'chat'),
-      [appMode, setAppMode],
     ),
   )
 
@@ -262,11 +239,9 @@ export function GlobalShortcuts(): null {
   useEffect(() => {
     const cleanup = window.electronAPI.onQuickTaskOpenSession(async (data) => {
       try {
-        // 切换到对应模式
-        store.set(appModeAtom, data.mode)
         store.set(activeViewAtom, 'conversations')
 
-        if (data.mode === 'agent') {
+        {
           // Agent 模式：创建会话 + 保存附件到 session 目录
           const channelId = store.get(agentChannelIdAtom) || undefined
           const modelId = store.get(agentModelIdAtom) || undefined
@@ -345,56 +320,6 @@ export function GlobalShortcuts(): null {
             message: fileReferences + data.text,
             ...(additionalDirectories.size > 0 && { additionalDirectories: Array.from(additionalDirectories) }),
           })
-        } else {
-          // Chat 模式：创建对话 + 保存附件到磁盘
-          const chatModel = store.get(selectedModelAtom)
-          const meta = await window.electronAPI.createConversation(
-            undefined,
-            chatModel?.modelId,
-            chatModel?.channelId,
-          )
-          // 更新 atom 状态
-          store.set(conversationsAtom, (prev) => [meta, ...prev])
-          store.set(currentConversationIdAtom, meta.id)
-
-          // 处理附件：保存到磁盘，收集 FileAttachment[]
-          const savedAttachments: import('@proma/shared').FileAttachment[] = []
-          if (data.files && data.files.length > 0) {
-            for (const file of data.files) {
-              if (!file.base64) {
-                console.warn('[快速任务] Chat 附件缺少 base64，已跳过:', file.filename)
-                continue
-              }
-              try {
-                const result = await window.electronAPI.saveAttachment({
-                  conversationId: meta.id,
-                  filename: file.filename,
-                  mediaType: file.mediaType,
-                  data: file.base64,
-                })
-                savedAttachments.push(result.attachment)
-              } catch (error) {
-                console.error('[快速任务] 保存 Chat 附件失败:', error)
-              }
-            }
-          }
-
-          // 打开新标签页
-          const currentTabs = store.get(tabsAtom)
-          const tabResult = openTab(currentTabs, {
-            type: 'chat',
-            sessionId: meta.id,
-            title: data.text.slice(0, 30),
-          })
-          store.set(tabsAtom, tabResult.tabs)
-          store.set(activeTabIdAtom, tabResult.activeTabId)
-
-          // 设置待发送消息（含已保存的附件）
-          store.set(chatPendingMessageAtom, {
-            conversationId: meta.id,
-            message: data.text,
-            attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
-          })
         }
       } catch (error) {
         console.error('[快速任务] 创建会话失败:', error)
@@ -445,11 +370,7 @@ export function GlobalShortcuts(): null {
       const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
       const activeTab = tabs.find((tab) => tab.id === activeTabId)
-      const currentMode = store.get(appModeAtom)
-      const fallbackTarget =
-        currentMode === 'agent'
-          ? { type: 'agent' as const, sessionId: store.get(currentAgentSessionIdAtom) }
-          : { type: 'chat' as const, sessionId: store.get(currentConversationIdAtom) }
+      const fallbackTarget = { type: 'agent' as const, sessionId: store.get(currentAgentSessionIdAtom) }
       const target = activeTab ?? fallbackTarget
 
       if (!target.sessionId) {
@@ -461,7 +382,6 @@ export function GlobalShortcuts(): null {
 
       if (target.type === 'agent' || target.type === 'preview') {
         const sessionId = target.sessionId
-        store.set(appModeAtom, 'agent')
         store.set(currentAgentSessionIdAtom, sessionId)
         store.set(agentSessionDraftsAtom, (prev) => {
           const map = new Map(prev)
@@ -477,26 +397,6 @@ export function GlobalShortcuts(): null {
         store.set(agentSessionDraftSyncVersionsAtom, (prev) => {
           const map = new Map(prev)
           map.set(sessionId, (map.get(sessionId) ?? 0) + 1)
-          return map
-        })
-        window.dispatchEvent(new CustomEvent('proma:focus-input'))
-        acknowledgeDelivery(true)
-        return
-      }
-
-      if (target.type === 'chat') {
-        const conversationId = target.sessionId
-        store.set(appModeAtom, 'chat')
-        store.set(currentConversationIdAtom, conversationId)
-        store.set(conversationDraftsAtom, (prev) => {
-          const map = new Map(prev)
-          const current = map.get(conversationId) ?? ''
-          map.set(conversationId, current ? `${current}\n${trimmed}` : trimmed)
-          return map
-        })
-        store.set(conversationDraftSyncVersionsAtom, (prev) => {
-          const map = new Map(prev)
-          map.set(conversationId, (map.get(conversationId) ?? 0) + 1)
           return map
         })
         window.dispatchEvent(new CustomEvent('proma:focus-input'))
@@ -523,7 +423,6 @@ export function GlobalShortcuts(): null {
         if (!session) return
 
         store.set(agentSessionsAtom, sessions)
-        store.set(appModeAtom, 'agent')
         store.set(activeViewAtom, 'conversations')
         store.set(currentAgentSessionIdAtom, session.id)
 
@@ -547,20 +446,15 @@ export function GlobalShortcuts(): null {
       }
     })
 
-    const cleanupCreate = window.electronAPI.onTrayCreateSession(async (data) => {
-      store.set(appModeAtom, data.mode)
+    const cleanupCreate = window.electronAPI.onTrayCreateSession(async () => {
       store.set(activeViewAtom, 'conversations')
-      if (data.mode === 'agent') {
-        await createAgent()
-      } else {
-        await createChat()
-      }
+      await createAgent()
     })
 
     return () => {
       cleanupOpen()
       cleanupCreate()
     }
-  }, [store, createAgent, createChat])
+  }, [store, createAgent])
   return null
 }

@@ -65,11 +65,10 @@ import {
   sendDesktopNotification,
   playNotificationSoundForType,
 } from '@/atoms/notifications'
-import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/channel-atoms'
 import {
   getPreviewContentRefreshKey,
   previewContentRefreshVersionAtom,
@@ -673,7 +672,6 @@ export function useGlobalAgentListeners(): void {
       const result = openTab(tabs, { type: 'agent', sessionId, title: sessionTitle })
       store.set(tabsAtom, result.tabs)
       store.set(activeTabIdAtom, result.activeTabId)
-      store.set(appModeAtom, 'agent')
       store.set(currentAgentSessionIdAtom, sessionId)
       const sessions = store.get(agentSessionsAtom)
       const session = sessions.find((s) => s.id === sessionId)
@@ -710,7 +708,7 @@ export function useGlobalAgentListeners(): void {
         })
 
         // 外部来源（飞书/钉钉/微信/bridge）唤起的 run 不抢占前台：
-        // 不打开新 Tab、不切换激活 Tab、不切换 appMode/当前会话/当前工作区。
+        // 不打开新 Tab、不切换激活 Tab、不切换当前会话/当前工作区。
         // 只更新驱动左侧边栏列表与状态指示条所需的状态，让用户自行决定是否切过去。
         // 若该会话恰好是用户当前正在查看的会话，这里不动 Tab/激活，流式内容会通过
         // agentStreamingStatesAtom 自然刷新，用户视角无任何跳动。

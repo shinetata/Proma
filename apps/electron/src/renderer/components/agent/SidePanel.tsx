@@ -27,7 +27,6 @@ import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAn
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import type { RightWorkspaceTabDragState, WorkspacePanelTab } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
-import { ChatView } from '@/components/chat/ChatView'
 import { AgentView } from '@/components/agent/AgentView'
 import { VaultView } from '@/components/vault/VaultView'
 import { OBSIDIAN_NAME, ObsidianIcon } from '@/components/obsidian/obsidian-brand'
@@ -88,7 +87,6 @@ import { PlanningView } from '@/components/planning/PlanningView'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { memoryFileNavigationAtom, workspaceMemoryChangesAtom } from '@/atoms/memory-change-atoms'
-import { agentSideChatMapAtom } from '@/atoms/chat-atoms'
 import {
   browserPanelMinimizedMapAtom,
   browserPanelOpenMapAtom,
@@ -853,9 +851,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   basePathsRef.current = [sessionPath, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
   const hasSessionAttachedItems = attachedDirs.length > 0 || attachedFiles.length > 0
   const hasWorkspaceAttachedItems = wsAttachedDirs.length > 0 || wsAttachedFiles.length > 0
-  const sideChatMap = useAtomValue(agentSideChatMapAtom)
-  const setSideChatMap = useSetAtom(agentSideChatMapAtom)
-  const sideChatConversationId = sideChatMap.get(sessionId) ?? null
   const sideTemporaryAgentMap = useAtomValue(agentSideTemporaryAgentMapAtom)
   const setSideTemporaryAgentMap = useSetAtom(agentSideTemporaryAgentMapAtom)
   const sideTemporaryAgents = sideTemporaryAgentMap.get(sessionId) ?? []
@@ -902,10 +897,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const setMemoryNavigationRequest = useSetAtom(memoryFileNavigationAtom)
   const latestMemoryChange = workspaceSlug ? memoryChangesMap.get(workspaceSlug)?.[0] : undefined
   const lastActivatedMemoryChangeRef = React.useRef<string | null>(null)
-  const effectiveActiveTab: AgentSidePanelTab = activeTab === 'chat' && !sideChatConversationId
-    ? 'files'
+  const effectiveActiveTab: AgentSidePanelTab =
     // `temporary-agent` 是旧的单分支内存状态；新状态使用 exploration:<sessionId>。
-    : activeTab === 'temporary-agent' || (activeExplorationSessionId !== null && !activeExplorationBranch) || (activeTab === 'delegation' && !selectedDelegationSession) || (activeTerminalId !== null && !terminalTabs.some((terminal) => terminal.terminalId === activeTerminalId))
+    activeTab === 'temporary-agent' || (activeExplorationSessionId !== null && !activeExplorationBranch) || (activeTab === 'delegation' && !selectedDelegationSession) || (activeTerminalId !== null && !terminalTabs.some((terminal) => terminal.terminalId === activeTerminalId))
       ? 'files'
       : isWorkspaceComponentTab(activeTab) && (!workspaceSlug || !workspaceComponentTabs.includes(activeTab) || !isWorkspaceComponentEnabled(activeTab))
         ? 'files'
@@ -984,16 +978,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     })
     if (getPreviewIdFromSidePanelTab(activeTab) === previewId) returnToPreviousTabAfterClose(getPreviewSidePanelTab(previewId))
   }, [activeTab, previewFiles, returnToPreviousTabAfterClose, sessionId, setPreviewContentRefreshVersion, setPreviewFileMap, setPreviewFilesMap, setPreviewOpenMap, setPreviewResolvedPaths])
-
-  const handleCloseChatTab = React.useCallback(() => {
-    setSideChatMap((prev) => {
-      if (!prev.has(sessionId)) return prev
-      const next = new Map(prev)
-      next.delete(sessionId)
-      return next
-    })
-    if (activeTab === 'chat') returnToPreviousTabAfterClose('chat')
-  }, [activeTab, returnToPreviousTabAfterClose, sessionId, setSideChatMap])
 
   const handleCloseExplorationTab = React.useCallback((branchSessionId: string) => {
     setSideTemporaryAgentMap((prev) => {
@@ -1161,8 +1145,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       const explorationSessionId = getExplorationSessionIdFromSidePanelTab(tab)
       if (explorationSessionId && sideTemporaryAgents.some((branch) => branch.sessionId === explorationSessionId)) {
         rememberStopGenerationTarget({ kind: 'agent', sessionId: explorationSessionId })
-      } else if (tab === 'chat' && sideChatConversationId) {
-        rememberStopGenerationTarget({ kind: 'chat', sessionId: sideChatConversationId })
       }
     }
 
@@ -1186,7 +1168,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     if (queue.sessionId !== sessionId) return
     queue.desiredTabId = browserTabId
     flushBrowserTabSelection()
-  }, [flushBrowserTabSelection, markDelegationSessionViewed, onTabChange, previewFiles, sessionId, setPreviewFileMap, sideChatConversationId, sideDelegationSessionId, sideTemporaryAgents, split, updateSplit])
+  }, [flushBrowserTabSelection, markDelegationSessionViewed, onTabChange, previewFiles, sessionId, setPreviewFileMap, sideDelegationSessionId, sideTemporaryAgents, split, updateSplit])
 
   // Agent/浏览器等外部事件仍只更新兼容 activeTab；分屏时把新目标落到当前焦点 Pane。
   React.useEffect(() => {
@@ -1308,7 +1290,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       icon: <SquareTerminal className="size-3.5" />,
       closable: true,
     })),
-    ...(sideChatConversationId ? [{ id: 'chat' as const, label: '问答', icon: <MessageCircle className="size-3.5" />, closable: true }] : []),
     ...sideTemporaryAgents.map((branch) => ({
       id: getExplorationSidePanelTab(branch.sessionId),
       label: sessions.find((item) => item.id === branch.sessionId)?.title || '探索分支',
@@ -1330,7 +1311,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       closable: true,
       activity: showBrowserActivity && activeBrowserTabId !== tab.tabId && browserState.activeTabId === tab.tabId,
     })) ?? []),
-  ], [activeBrowserTabId, browserState, previewFiles, selectedDelegationSession, selectedDelegationStatus, sessions, showBrowserActivity, sideChatConversationId, sideTemporaryAgents, terminalTabs, workspaceComponentTabs])
+  ], [activeBrowserTabId, browserState, previewFiles, selectedDelegationSession, selectedDelegationStatus, sessions, showBrowserActivity, sideTemporaryAgents, terminalTabs, workspaceComponentTabs])
   workspaceTabsRef.current = workspaceTabs
 
   React.useEffect(() => {
@@ -1375,13 +1356,12 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     }
     const previewId = getPreviewIdFromSidePanelTab(tab)
     if (previewId) { handleClosePreviewTab(previewId); return }
-    if (tab === 'chat') { handleCloseChatTab(); return }
     const explorationSessionId = getExplorationSessionIdFromSidePanelTab(tab)
     if (explorationSessionId) { handleCloseExplorationTab(explorationSessionId); return }
     if (tab === 'delegation') { handleCloseDelegationTab(); return }
     const browserTabId = getBrowserTabIdFromSidePanelTab(tab)
     if (browserTabId) void handleCloseBrowserTab(browserTabId)
-  }, [exitSplitInsteadOfClosingBoundTab, handleCloseBrowserTab, handleCloseChatTab, handleCloseDelegationTab, handleCloseExplorationTab, handleClosePreviewTab, returnToPreviousTabAfterClose, sessionId, setTerminalTabsMap, setWorkspaceComponentTabs])
+  }, [exitSplitInsteadOfClosingBoundTab, handleCloseBrowserTab, handleCloseDelegationTab, handleCloseExplorationTab, handleClosePreviewTab, returnToPreviousTabAfterClose, sessionId, setTerminalTabsMap, setWorkspaceComponentTabs])
 
   React.useEffect(() => {
     const handleCloseActiveWorkspaceTab = (event: Event) => {
@@ -1597,14 +1577,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
         )
       ) : (
         <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">浏览器标签已关闭</div>
-      )
-    ) : paneTab === 'chat' ? (
-      sideChatConversationId ? (
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <ChatView conversationId={sideChatConversationId} />
-        </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">暂无问答会话</div>
       )
     ) : paneExplorationBranch ? (
       <SideAgentSessionContent contentKey={`exploration:${paneExplorationBranch.sessionId}`}>

@@ -11,11 +11,11 @@ import { useAtom, useAtomValue } from 'jotai'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AlertTriangle, Bot, Loader2, MessageSquare } from 'lucide-react'
-import { UserAvatar } from '@/components/chat/UserAvatar'
+import { UserAvatar } from '@/components/common/UserAvatar'
 import { tabMinimapCacheAtom, type TabMinimapItem } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/channel-atoms'
 import { cn } from '@/lib/utils'
 import type {
   ChatMessage,
@@ -398,9 +398,7 @@ function SessionMiniMapPopoverContent({
 
     const load = async (): Promise<void> => {
       try {
-        const nextItems = target.type === 'chat'
-          ? buildChatMinimapItems(await window.electronAPI.getConversationMessages(target.sessionId), userProfile.avatar)
-          : buildAgentMinimapItems(await window.electronAPI.getAgentSessionSDKMessages(target.sessionId), userProfile.avatar)
+        const nextItems = buildAgentMinimapItems(await window.electronAPI.getAgentSessionSDKMessages(target.sessionId), userProfile.avatar)
         if (cancelled) return
         setItems(nextItems)
         setCache((prev) => {

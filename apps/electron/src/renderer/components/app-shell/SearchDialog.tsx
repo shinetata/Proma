@@ -5,7 +5,7 @@
  * - 手动触发搜索（点击搜索按钮 / 在输入框按 Enter）
  * - 标题匹配 + 消息内容匹配统一渲染，匹配文字高亮
  * - 键盘导航（上下箭头选择 + Enter 打开结果 + Esc 关闭）
- * - 同时搜索 Chat 和 Agent 模式
+ * - 搜索 Agent 会话标题与消息
  *
  * 为什么手动触发：随着用户历史对话变多，自动搜索每次按键都会扫描全量 JSONL，
  * 主进程被 IO 阻塞导致整体卡顿。改成手动触发后只在用户确认意图时执行一次。
@@ -17,11 +17,11 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Search, X, MessageSquare, Bot, Archive, Loader2 } from 'lucide-react'
+import { Search, X, Bot, Archive, Loader2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogPortal, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
-import { conversationsAtom, channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/channel-atoms'
 import {
   agentSessionsAtom,
   agentWorkspacesAtom,
@@ -29,7 +29,6 @@ import {
   agentPendingPromptAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
-import { appModeAtom } from '@/atoms/app-mode'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { sessionHoverPreviewEnabledAtom } from '@/atoms/ui-preferences'
@@ -47,7 +46,7 @@ import { findBestSearchMatch } from '@proma/shared'
 interface TitleResult {
   id: string
   title: string
-  type: 'chat' | 'agent'
+  type: 'agent'
   archived?: boolean
   updatedAt: number
 }
@@ -56,7 +55,7 @@ interface TitleResult {
 interface ContentResult {
   id: string
   title: string
-  type: 'chat' | 'agent'
+  type: 'agent'
   messageId: string
   snippet: string
   matchStart: number
@@ -110,11 +109,7 @@ function HighlightSnippet({ snippet, matchStart, matchLength }: {
 }
 
 function SearchResultIcon({ result }: { result: SearchResult }): React.ReactElement {
-  return result.type === 'chat' ? (
-    <MessageSquare size={14} className="flex-shrink-0 text-foreground/40" />
-  ) : (
-    <Bot size={14} className="flex-shrink-0 text-blue-500/70" />
-  )
+  return <Bot size={14} className="flex-shrink-0 text-blue-500/70" />
 }
 
 interface SearchResultRowProps {
@@ -205,12 +200,10 @@ function SearchResultRow({
 
 export function SearchDialog(): React.ReactElement {
   const [open, setOpen] = useAtom(searchDialogOpenAtom)
-  const conversations = useAtomValue(conversationsAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const sessionHoverPreviewEnabled = useAtomValue(sessionHoverPreviewEnabledAtom)
   const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
   const channels = useAtomValue(channelsAtom)
-  const appMode = useAtomValue(appModeAtom)
   const currentAgentChannelId = useAtomValue(agentChannelIdAtom)
   const setAgentPendingPrompt = useSetAtom(agentPendingPromptAtom)
   const setActiveView = useSetAtom(activeViewAtom)
@@ -289,43 +282,20 @@ export function SearchDialog(): React.ReactElement {
     setLoading(true)
     setSelectedIndex(0)
 
-    const isChatMode = appMode === 'chat'
-    const isAgentMode = appMode === 'agent'
     const matchesTitle = (title: string): boolean => findBestSearchMatch(title, q) !== null
-    const titles: TitleResult[] = (isChatMode
-      ? conversations
-        .filter((c) => matchesTitle(c.title))
-        .map((c) => ({ id: c.id, title: c.title, type: 'chat' as const, archived: c.archived, updatedAt: c.updatedAt }))
-      : isAgentMode
-        ? agentSessions
-          .filter((s) => matchesTitle(s.title))
-          .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, updatedAt: s.updatedAt }))
-        : [])
+    const titles: TitleResult[] = agentSessions
+      .filter((s) => matchesTitle(s.title))
+      .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, updatedAt: s.updatedAt }))
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20)
 
     setTitleResults(titles)
 
     try {
-      const [chatResults, agentResults] = await Promise.all([
-        isChatMode ? window.electronAPI.searchConversationMessages(q) : Promise.resolve([]),
-        isAgentMode ? window.electronAPI.searchAgentSessionMessages(q) : Promise.resolve([]),
-      ])
+      const agentResults = await window.electronAPI.searchAgentSessionMessages(q)
       if (token !== searchTokenRef.current) return
 
       const titleIds = new Set(titles.map((t) => t.id))
-      const chatContent: ContentResult[] = (chatResults as MessageSearchResult[])
-        .filter((r) => !titleIds.has(r.conversationId))
-        .map((r) => ({
-          id: r.conversationId,
-          title: r.conversationTitle,
-          type: 'chat' as const,
-          messageId: r.messageId,
-          snippet: r.snippet,
-          matchStart: r.matchStart,
-          matchLength: r.matchLength,
-          archived: r.archived,
-        }))
       const agentContent: ContentResult[] = (agentResults as AgentMessageSearchResult[])
         .filter((r) => !titleIds.has(r.sessionId))
         .map((r) => ({
@@ -339,14 +309,14 @@ export function SearchDialog(): React.ReactElement {
           archived: r.archived,
         }))
 
-      setContentResults([...chatContent, ...agentContent])
+      setContentResults(agentContent)
     } catch (error) {
       console.error('[搜索] 内容搜索失败:', error)
       if (token === searchTokenRef.current) setContentResults([])
     } finally {
       if (token === searchTokenRef.current) setLoading(false)
     }
-  }, [query, conversations, agentSessions, appMode])
+  }, [query, agentSessions])
 
   const handleAgentSearch = React.useCallback(async () => {
     const q = query.trim()
@@ -390,16 +360,10 @@ export function SearchDialog(): React.ReactElement {
     setOpen(false)
     setActiveView('conversations')
 
-    if (result.type === 'chat') {
-      const conv = conversations.find((c) => c.id === result.id)
-      const title = conv?.title ?? result.title
-      openSession('chat', result.id, title)
-    } else {
-      const session = agentSessions.find((s) => s.id === result.id)
-      const title = session?.title ?? result.title
-      openSession('agent', result.id, title)
-    }
-  }, [setOpen, setActiveView, openSession, conversations, agentSessions])
+    const session = agentSessions.find((s) => s.id === result.id)
+    const title = session?.title ?? result.title
+    openSession('agent', result.id, title)
+  }, [setOpen, setActiveView, openSession, agentSessions])
 
   /**
    * Enter 键语义：
