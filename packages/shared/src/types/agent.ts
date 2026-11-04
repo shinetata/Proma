@@ -78,8 +78,8 @@ export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' |
 
 // Model-specific reasoning profiles and level normalization live in reasoning-profile.ts.
 
-/** 支持 ChatGPT Codex Fast Mode（priority service tier）的模型。 */
-export const CODEX_FAST_MODE_MODEL_IDS = [
+/** Proma 官方渠道中按 OpenAI reasoning 协议处理的模型 ID。 */
+export const PROMA_OFFICIAL_OPENAI_REASONING_MODEL_IDS = [
   'gpt-5.4',
   'gpt-5.5',
   'gpt-5.6-sol',
@@ -88,6 +88,22 @@ export const CODEX_FAST_MODE_MODEL_IDS = [
   'gpt-6-astra',
   'gpt-6-sol',
   'gpt-6-luna',
+  'gpt-6.1-terra',
+] as const
+
+/** 模型是否属于 Proma 官方渠道的 OpenAI reasoning 模型。 */
+export function isPromaOfficialOpenAIReasoningModel(modelId: string | undefined): boolean {
+  return isGpt6AstraFamily(modelId)
+    || isGpt6SolFamily(modelId)
+    || isGpt6LunaFamily(modelId)
+    || modelId?.trim().toLowerCase() === 'gpt-6.1-terra-1'
+    || (modelId !== undefined && (PROMA_OFFICIAL_OPENAI_REASONING_MODEL_IDS as readonly string[]).includes(modelId.toLowerCase()))
+}
+
+/** 支持 ChatGPT Codex Fast Mode（priority service tier）的模型。 */
+export const CODEX_FAST_MODE_MODEL_IDS = [
+  ...PROMA_OFFICIAL_OPENAI_REASONING_MODEL_IDS,
+  'gpt-6.1-sol',
 ] as const
 
 /** 模型 ID 是否可通过 ChatGPT Codex OAuth 使用 Fast Mode。 */

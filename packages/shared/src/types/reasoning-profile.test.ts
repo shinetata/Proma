@@ -91,3 +91,42 @@ describe('DeepSeek 旧 ID 行为回归保护', () => {
     }
   })
 })
+
+describe('GPT-6.1 Terra / Sol reasoning profile', () => {
+  test('Given gpt-6.1-terra When openai-completions Then 命中 Terra 档位', () => {
+    const profile = resolveReasoningProfile({ modelId: 'gpt-6.1-terra', transport: 'openai-completions' })
+    expect(profile?.id).toBe('openai-reasoning-terra')
+    expect(profile?.levels).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(profile?.defaultLevel).toBe('low')
+    expect(profile?.encodings['openai-completions']?.kind).toBe('openai-reasoning-effort')
+    expect(profile?.encodings['openai-completions']?.effortMap).toMatchObject({ off: 'low', max: 'max' })
+  })
+
+  test('Given terra-1 / 大小写与空白 When 解析 Then 归一后仍命中', () => {
+    expect(
+      resolveReasoningProfile({ modelId: ' GPT-6.1-Terra-1 ', transport: 'openai-completions' })?.id,
+    ).toBe('openai-reasoning-terra')
+    expect(
+      resolveReasoningProfile({ modelId: 'gpt-6.1-terra', transport: 'openai-responses' })?.id,
+    ).toBe('openai-reasoning-terra')
+  })
+
+  test('Given Terra When off 或 minimal Then 归一为 low', () => {
+    const profile = resolveReasoningProfile({ modelId: 'gpt-6.1-terra', transport: 'openai-completions' })!
+    expect(profile.normalize('off')).toBe('low')
+    expect(profile.normalize('minimal')).toBe('low')
+    expect(profile.normalize('max')).toBe('max')
+  })
+
+  test('Given gpt-6.1-sol When openai-completions Then 走 Sol/Luna 档位并允许关闭', () => {
+    const profile = resolveReasoningProfile({ modelId: 'gpt-6.1-sol', transport: 'openai-completions' })
+    expect(profile?.id).toBe('openai-reasoning-sol-luna')
+    expect(profile?.levels).toContain('off')
+  })
+
+  test('Given 相近 ID When 解析 Then 不误伤', () => {
+    for (const id of ['gpt-6.1-terra-preview', 'gpt-61-terra', 'gpt-6.1-terrax']) {
+      expect(resolveReasoningProfile({ modelId: id, transport: 'openai-completions' })).toBeUndefined()
+    }
+  })
+})

@@ -8,7 +8,7 @@
  */
 
 import { getGeminiModelCapability } from './gemini-model-capabilities'
-import { isGpt6AstraFamily, isGpt6LunaFamily, isGpt6SolFamily } from './model-family'
+import { isGpt61SolFamily, isGpt6AstraFamily, isGpt6LunaFamily, isGpt6SolFamily } from './model-family'
 
 /** 默认上下文窗口（无法识别模型时使用） */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
@@ -30,6 +30,8 @@ export const CODEX_GPT_6_CONTEXT_WINDOW = 372_000
  * provider catalog 决定，避免把不同 SKU 误写成同一窗口。
  */
 export function inferCodexAlignedGPT5ContextWindow(modelId: string | undefined): number | undefined {
+  // GPT-6.1 Sol 的窗口由 Pi catalog 决定（500K），不套用 GPT-6 的 372K 基线。
+  if (isGpt61SolFamily(modelId)) return undefined
   if (isGpt6AstraFamily(modelId) || isGpt6SolFamily(modelId) || isGpt6LunaFamily(modelId)) {
     return CODEX_GPT_6_CONTEXT_WINDOW
   }

@@ -32,6 +32,7 @@ export {
 export {
   isGpt6AstraFamily,
   isGpt6SolFamily,
+  isGpt61SolFamily,
   isGpt6LunaFamily,
 } from './model-family'
 export { calculateContextUsageRatio } from './context-usage'

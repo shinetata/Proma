@@ -366,7 +366,29 @@ function applyPiModelCapabilityOverrides(model: PiCatalogModel | undefined): PiC
   return { ...model, input, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) }
 }
 
+/** Pi catalog 尚未收录的 Codex 模型；注册前先补齐完整条目。 */
+const CODEX_MODEL_FALLBACKS: readonly PiCatalogModelPatch[] = [
+  {
+    id: 'gpt-6.1-terra',
+    name: 'GPT-6.1 Terra',
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    baseUrl: CODEX_BASE_URL,
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: ZERO_MODEL_COST,
+    contextWindow: 500_000,
+    maxTokens: CODEX_MAX_TOKENS,
+  },
+]
+
 const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
+  {
+    // catalog 尚无 Terra 条目（由 CODEX_MODEL_FALLBACKS 补齐）；这里只覆盖思考档位与计费。
+    id: 'gpt-6.1-terra',
+    thinkingLevelMap: compilePiReasoningCapabilities('openai-responses', 'gpt-6.1-terra')?.thinkingLevelMap,
+    cost: ZERO_MODEL_COST,
+  },
   {
     id: 'gpt-6-astra',
     name: 'GPT-6 Astra',
@@ -391,6 +413,13 @@ const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
     input: ['text', 'image'],
     cost: ZERO_MODEL_COST,
     contextWindow: CODEX_GPT_6_CONTEXT_WINDOW,
+    maxTokens: CODEX_MAX_TOKENS,
+  },
+  {
+    // 保留订阅计费与思考参数策略；上下文窗口完全由 Pi catalog 决定（500K）。
+    id: 'gpt-6.1-sol',
+    thinkingLevelMap: compilePiReasoningCapabilities('openai-responses', 'gpt-6.1-sol')?.thinkingLevelMap,
+    cost: ZERO_MODEL_COST,
     maxTokens: CODEX_MAX_TOKENS,
   },
   {
@@ -800,7 +829,14 @@ function createCodexAstraFamilyModel(
 }
 
 function mergeCodexModels(models: readonly PiCatalogModel[]): PiCatalogModel[] {
-  const merged = models.map((model) => ({ ...model }))
+  const nativeIds = new Set(models.map((model) => model.id))
+  const merged: PiCatalogModel[] = models.map((model) => ({ ...model }))
+  // catalog 缺条目的模型先补齐，再统一应用 patch，避免自定义渠道回落到通用默认值。
+  for (const fallback of CODEX_MODEL_FALLBACKS) {
+    if (nativeIds.has(fallback.id) || !isCompleteCatalogModel(fallback)) continue
+    merged.push(fallback)
+    nativeIds.add(fallback.id)
+  }
   const indexById = new Map(merged.map((model, index) => [model.id, index]))
   for (const patch of CODEX_MODEL_PATCHES) {
     const existingIndex = indexById.get(patch.id)

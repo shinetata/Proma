@@ -50,7 +50,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'deepseek-v4.1-flash' | 'deepseek-v4.1-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-sol-luna'
+  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'deepseek-v4.1-flash' | 'deepseek-v4.1-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-terra' | 'openai-reasoning-sol-luna'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -374,6 +374,12 @@ const OPENAI_ASTRA_PROFILE: ReasoningProfile = {
   },
 }
 
+/** GPT-6.1 Terra 与 Astra 使用同一套档位，仅区分 profile 身份。 */
+const OPENAI_TERRA_PROFILE: ReasoningProfile = {
+  ...OPENAI_ASTRA_PROFILE,
+  id: 'openai-reasoning-terra',
+}
+
 /** GPT-6 Sol/Luna allow disabling reasoning and default to medium effort. */
 const OPENAI_SOL_LUNA_PROFILE: ReasoningProfile = {
   id: 'openai-reasoning-sol-luna',
@@ -396,17 +402,22 @@ export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   OPENAI_STANDARD_PROFILE,
   OPENAI_MAX_PROFILE,
   OPENAI_ASTRA_PROFILE,
+  OPENAI_TERRA_PROFILE,
   OPENAI_SOL_LUNA_PROFILE,
 ]
 
 /** 仅按模型 ID 匹配，再以实际 transport 确认该模型是否有已验证的协议 encoding。 */
 export function resolveReasoningProfile(input: ResolveReasoningProfileInput): ReasoningProfile | undefined {
-  const modelId = input.modelId?.toLowerCase()
+  const modelId = input.modelId?.trim().toLowerCase().replace(/\[1m\]$/, '')
   if (!modelId) return undefined
 
   const isOpenAITransport = input.transport === 'openai-completions' || input.transport === 'openai-responses'
   const isOpenAIReasoningModel = !modelId.endsWith('-chat-latest')
     && (modelId.startsWith('gpt-5') || /^(o1|o3|o4)(?:-|$)/.test(modelId))
+  // GPT-6.1 Terra 是 Responses 协议模型；自定义渠道走 openai-completions 时仍需独立 profile。
+  if (modelId === 'gpt-6.1-terra' || modelId === 'gpt-6.1-terra-1') {
+    return OPENAI_TERRA_PROFILE.encodings[input.transport] ? OPENAI_TERRA_PROFILE : undefined
+  }
   if (isGpt6AstraFamily(modelId)) {
     return OPENAI_ASTRA_PROFILE.encodings[input.transport] ? OPENAI_ASTRA_PROFILE : undefined
   }
