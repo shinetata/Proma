@@ -441,6 +441,7 @@ import { slackBridgeManager } from './lib/slack-bridge-manager'
 import { buildSlackManifest } from './lib/slack/manifest'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
+import { applyAppBundleIcon, getBundledResourcesDir, resolveAppIconPath } from './lib/app-icon'
 
 /** 已知编辑器应用名称白名单（macOS） */
 const KNOWN_EDITORS = [
@@ -772,14 +773,6 @@ async function ensurePathAllowedWithWorktree(filePath: string, options?: FileAcc
  * - channel:*: 渠道管理相关
  * - chat:*: 对话管理 + 消息发送 + 流式事件
  */
-/**
- * 打包内置资源目录
- * dev: __dirname/resources（build:resources 阶段拷贝）
- * prod: process.resourcesPath（electron-builder extraResources 产物）
- */
-function getBundledResourcesDir(): string {
-  return app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
-}
 
 /**
  * 默认 App 探测结果按文件后缀缓存，避免反复 spawn Swift / 注册表查询。
@@ -1331,17 +1324,6 @@ function isFailureCacheFresh(key: string): boolean {
 function cacheNull(key: string): null {
   defaultAppFailureCache.set(key, Date.now())
   return null
-}
-
-/**
- * 解析应用图标变体的文件路径
- */
-export function resolveAppIconPath(variantId: string): string | null {
-  const resourcesDir = getBundledResourcesDir()
-  if (!variantId || variantId === 'default') {
-    return join(resourcesDir, 'icon.png')
-  }
-  return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
 }
 
 function releaseDirectoryWatcherIfUnreferenced(dirPath: string): void {
@@ -2197,13 +2179,20 @@ export function registerIpcHandlers(): void {
           return false
         }
 
-        // macOS: 设置 Dock 图标
+        // macOS: 设置 Dock 图标（仅当前运行期生效）
         if (process.platform === 'darwin' && app.dock) {
           app.dock.setIcon(iconPath)
         }
 
         // 持久化到设置
         await updateSettings({ appIconVariant: variantId })
+
+        // 写入 App bundle：退出后 Dock / Finder / Launchpad 仍显示所选样式
+        const bundleResult = await applyAppBundleIcon(variantId, iconPath)
+        if (!bundleResult.applied && bundleResult.reason && bundleResult.reason !== 'already-applied') {
+          console.warn(`[图标] bundle 图标未更新: ${bundleResult.reason}`)
+        }
+
         console.log(`[图标] 已切换到: ${variantId}`)
         return true
       } catch (error) {

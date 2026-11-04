@@ -297,7 +297,7 @@ function AppIconPicker(): React.ReactElement {
   return (
     <SettingsSection
       title="应用图标"
-      description="自定义 Dock 栏中的应用图标样式"
+      description="自定义 Dock 栏、Finder 与启动台中的应用图标样式，退出应用后依然生效"
     >
       <SettingsCard divided={false}>
         <div className="px-4 py-3">

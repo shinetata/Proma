@@ -84,6 +84,7 @@ import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray, getTray, setTrayFlash } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
+import { resolveAppIconPath, syncAppBundleIconWithSettings } from './lib/app-icon'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents } from './lib/agent-service'
 import { stopAllTerminals } from './lib/terminal-service'
@@ -755,13 +756,15 @@ async function bootstrap(): Promise<void> {
   // 如果用户有保存的图标偏好则使用，否则用默认图标
   if (process.platform === 'darwin' && app.dock) {
     await app.dock.show()
-    const { resolveAppIconPath } = require('./ipc')
     const settings = getSettings()
     const variantId = settings.appIconVariant
     const dockIconPath = resolveAppIconPath(variantId ?? 'default')
     if (dockIconPath && existsSync(dockIconPath)) {
       app.dock.setIcon(dockIconPath)
     }
+    // 重新打包会重置 bundle 内的 icon.icns，按保存的偏好补写一次，
+    // 保证退出 App 后 Dock / Finder 仍是用户选择的样式
+    void syncAppBundleIconWithSettings(variantId)
   }
 
   // Create main window (will be shown when ready)
