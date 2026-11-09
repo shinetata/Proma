@@ -171,7 +171,7 @@ export function TurnSkillUsageSummary({
   if (activations.length === 0 && !vaultFocus) return null
 
   return (
-    <div className={cn('pl-[46px] mt-3', !showDivider && 'mt-2')}>
+    <div className={cn('mt-3', !showDivider && 'mt-2')}>
       <div className={cn(showDivider && 'border-t-2 border-dashed border-border/60 pt-3')}>
         <div className="flex flex-wrap gap-1.5">
           {vaultFocus && <VaultFocusChip attribution={vaultFocus} />}
