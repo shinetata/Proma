@@ -1,4 +1,4 @@
-import type { AgentSessionMeta } from '@proma/shared'
+import { getAgentSessionActivityAt, type AgentSessionMeta } from '@proma/shared'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import {
   getAgentSessionTreeIndicatorStatus,
@@ -90,7 +90,10 @@ export function sortDelegatedChildSessions(
   const priority = (session: AgentSessionMeta): number => Number(
     agentIndicatorMap && ['blocked', 'running', 'completed'].includes(getDelegatedChildSessionStatus(session, agentIndicatorMap)),
   )
-  return [...sessions].sort((a, b) => priority(b) - priority(a) || b.updatedAt - a.updatedAt)
+  // 同优先级内按最后活跃时间排序：元数据变更不应改变委派子会话的顺序。
+  return [...sessions].sort((a, b) => (
+    priority(b) - priority(a) || getAgentSessionActivityAt(b) - getAgentSessionActivityAt(a)
+  ))
 }
 
 export function buildAgentSessionTrees(
@@ -155,7 +158,7 @@ export function getCollapsedAgentRailTreeStatus(
 
 /**
  * 折叠态 Rail 的可见会话树：排序与上游 Rail 完全一致（当前会话 > blocked >
- * running > pinned > completed > idle，再按更新时间），只是把委派子会话收纳到
+ * running > pinned > completed > idle，再按最后活跃时间），只是把委派子会话收纳到
  * 父条目下，并用会话树聚合状态参与排序。
  *
  * 排序只依赖传入的派生数据，不引入任何中间 state，因此点击后的置顶在同一次

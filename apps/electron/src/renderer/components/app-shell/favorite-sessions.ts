@@ -2,7 +2,7 @@
  * 收藏面板的数据整理 — 复刻商业版 0.21.88（`kM` / `ZPt` / `Hf`）
  */
 
-import type { AgentSessionMeta, AgentWorkspace } from '@proma/shared'
+import { getAgentSessionActivityAt, type AgentSessionMeta, type AgentWorkspace } from '@proma/shared'
 
 export type FavoriteSort = 'collected' | 'updated' | 'project'
 export type FavoriteArchiveFilter = 'active' | 'archived'
@@ -74,8 +74,9 @@ export function listFavoriteSessions({
         const byStarred = getStarredAt(b.session) - getStarredAt(a.session)
         if (byStarred !== 0) return byStarred
       } else {
+        // 「按最新活跃」用活动时间，不看元数据写入时间。
         const delta = sort === 'updated'
-          ? b.session.updatedAt - a.session.updatedAt
+          ? getAgentSessionActivityAt(b.session) - getAgentSessionActivityAt(a.session)
           : getStarredAt(b.session) - getStarredAt(a.session)
         if (delta !== 0) return delta
       }

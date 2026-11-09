@@ -95,3 +95,9 @@ export {
   collectSuccessfulSkillReadActivations,
   collectSkillActivations,
 } from './skill-usage'
+
+export {
+  getAgentSessionActivityAt,
+  compareAgentSessionsByActivityDesc,
+  type AgentSessionTimeFields,
+} from './agent-session-time'

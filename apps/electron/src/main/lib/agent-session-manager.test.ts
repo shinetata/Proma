@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 
@@ -79,6 +79,7 @@ function writeAgentSessionsIndex(sessions: Array<{
   title: string
   workspaceId: string
   createdAt: number
+  lastActivityAt?: number
   updatedAt: number
   agentRuntime?: string
   sdkSessionId?: string
@@ -398,7 +399,7 @@ describe('Agent 会话正文搜索', () => {
 })
 
 describe('Agent 会话引用搜索', () => {
-  test('Given 工作区有超过 20 个会话 When 请求最近 200 条 Then 按更新时间返回 200 条', async () => {
+  test('Given 工作区有超过 20 个会话 When 请求最近 200 条 Then 按最后活跃时间返回 200 条', async () => {
     writeAgentSessionsIndex(createIndexedSessions(220))
 
     const results = await manager.searchAgentSessionReferences({
@@ -605,5 +606,93 @@ describe('Agent 会话删除墓碑', () => {
 
     expect(manager.getAgentSessionMeta(id)).toBeUndefined()
     expect(existsSync(join(tempHome, '.proma', 'agent-sessions', `${id}.jsonl`))).toBe(false)
+  })
+})
+
+describe('Agent 会话活动时间', () => {
+  const readIndexFile = (): { version: number; sessions: Array<Record<string, unknown>> } => {
+    const raw = JSON.parse(readFileSync(join(tempHome, '.proma', 'agent-sessions.json'), 'utf-8'))
+    return raw as { version: number; sessions: Array<Record<string, unknown>> }
+  }
+
+  test('Given 旧索引缺少 lastActivityAt When 读取 Then 以 updatedAt 补齐并写回，重复读取幂等', () => {
+    writeAgentSessionsIndex([
+      { id: 'legacy-activity-a', title: '旧会话 A', workspaceId: 'workspace-a', createdAt: 100, updatedAt: 200 },
+      { id: 'legacy-activity-b', title: '旧会话 B', workspaceId: 'workspace-a', createdAt: 110, updatedAt: 300 },
+    ])
+
+    const firstRead = manager.listAgentSessions()
+    expect(firstRead.map((session) => session.id)).toEqual(['legacy-activity-b', 'legacy-activity-a'])
+    expect(firstRead.map((session) => session.lastActivityAt)).toEqual([300, 200])
+    // 写回的索引按文件原顺序保存，每个会话都以原 updatedAt 补齐活动时间。
+    expect(Object.fromEntries(readIndexFile().sessions.map((session) => [session.id, session.lastActivityAt])))
+      .toEqual({ 'legacy-activity-a': 200, 'legacy-activity-b': 300 })
+    expect(readIndexFile().version).toBe(2)
+
+    // 迁移只补缺失字段：再次读取不再改写文件内容。
+    const afterFirstMigration = readFileSync(join(tempHome, '.proma', 'agent-sessions.json'), 'utf-8')
+    manager.listAgentSessions()
+    expect(readFileSync(join(tempHome, '.proma', 'agent-sessions.json'), 'utf-8')).toBe(afterFirstMigration)
+  })
+
+  test('Given 元数据时间与活动时间不一致 When 列出会话 Then 按活动时间而不是元数据时间排序', () => {
+    writeAgentSessionsIndex([
+      // A 刚被写过元数据（如标记已读），但用户很久没发消息。
+      { id: 'session-activity-old', title: '很久没用的会话', workspaceId: 'workspace-a', createdAt: 100, lastActivityAt: 100, updatedAt: 900 },
+      // B 更早写入元数据，但用户刚刚才发过消息。
+      { id: 'session-activity-new', title: '刚用过的会话', workspaceId: 'workspace-a', createdAt: 100, lastActivityAt: 800, updatedAt: 810 },
+    ])
+
+    expect(manager.listAgentSessions().map((session) => session.id))
+      .toEqual(['session-activity-new', 'session-activity-old'])
+  })
+
+  test('Given 追加真正的用户输入 When 写入消息 Then 抬高 lastActivityAt 与 updatedAt', () => {
+    const id = 'session-user-input-activity'
+    writeAgentSessionsIndex([
+      { id, title: '用户输入会话', workspaceId: 'workspace-a', createdAt: 100, lastActivityAt: 100, updatedAt: 100 },
+    ])
+    writeAgentSessionJsonl(id, [])
+
+    manager.appendSDKMessages(id, [{
+      type: 'user',
+      message: { content: [{ type: 'text', text: '继续做这个任务' }] },
+      parent_tool_use_id: null,
+      uuid: 'user-1',
+    } as never])
+
+    const session = manager.getAgentSessionMeta(id)!
+    const lastActivityAt = session.lastActivityAt ?? 0
+    expect(lastActivityAt).toBeGreaterThan(100)
+    expect(session.updatedAt).toBe(lastActivityAt)
+  })
+
+  test('Given 追加 tool_result 形式的 user 消息 When 写入消息 Then 不抬高 lastActivityAt', () => {
+    const id = 'session-tool-result-activity'
+    writeAgentSessionsIndex([
+      { id, title: '工具结果会话', workspaceId: 'workspace-a', createdAt: 100, lastActivityAt: 100, updatedAt: 100 },
+    ])
+    writeAgentSessionJsonl(id, [])
+
+    manager.appendSDKMessages(id, [{
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: '命令输出' }] },
+      parent_tool_use_id: null,
+      uuid: 'user-tool-result',
+    } as never])
+
+    expect(manager.getAgentSessionMeta(id)).toMatchObject({ lastActivityAt: 100, updatedAt: 100 })
+  })
+
+  test('Given 元数据变更 When 改标题或标记已读 Then 只抬 updatedAt，不动 lastActivityAt', () => {
+    const id = 'session-metadata-only-change'
+    writeAgentSessionsIndex([
+      { id, title: '元数据会话', workspaceId: 'workspace-a', createdAt: 100, lastActivityAt: 100, updatedAt: 100 },
+    ])
+
+    const renamed = manager.updateAgentSessionMeta(id, { title: '改过标题' })
+
+    expect(renamed.lastActivityAt).toBe(100)
+    expect(renamed.updatedAt).toBeGreaterThan(100)
   })
 })

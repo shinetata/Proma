@@ -23,11 +23,7 @@ import { AgentHeader } from './AgentHeader'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { SkillMentionNamesProvider } from './SkillMentionNamesProvider'
 import { ContextUsageBadge } from './ContextUsageBadge'
-import { PermissionBanner } from './PermissionBanner'
-import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
-import { ExitPlanModeBanner } from './ExitPlanModeBanner'
-import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/model-selector/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/common/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
@@ -48,7 +44,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { Slider } from '@/components/ui/slider'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -104,14 +99,10 @@ import {
   agentThinkingAtom,
   agentEffortAtom,
   stoppedByUserSessionsAtom,
-  agentPlanModeSessionsAtom,
-  agentPermissionModeMapAtom,
   agentDefaultPermissionModeAtom,
   sessionPersistedPermissionModeAtom,
   agentSessionPathMapAtom,
   allPendingAskUserRequestsAtom,
-  allPendingPermissionRequestsAtom,
-  allPendingExitPlanRequestsAtom,
   agentDiffPanelTabAtom,
   agentSidePanelOpenAtomFamily,
   agentSideTemporaryAgentMapAtom,
@@ -301,56 +292,28 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-// ===== 思考模式 Hover Popover =====
+// ===== 思考模式开关（仅模型不支持推理档位时回退） =====
 
-const OPENAI_THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
-const OPENAI_STANDARD_THINKING_LEVELS = OPENAI_THINKING_LEVELS.slice(0, -1)
-type OpenAIThinkingLevel = AgentThinkingLevel
-const OPENAI_THINKING_LABELS: Record<OpenAIThinkingLevel, string> = {
-  off: '关闭',
-  minimal: '最小',
-  low: '低',
-  medium: '中',
-  high: '高',
-  xhigh: '极高',
-  max: '最大',
-}
-
-function normalizeOpenAIThinkingLevel(
-  level: AgentThinkingLevel | undefined,
-  levels: readonly OpenAIThinkingLevel[],
-): OpenAIThinkingLevel {
-  if (level === 'minimal') return 'low'
-  // max 会话设置在切到非 GPT-5.6 时由主进程降级为 xhigh；UI 同步展示有效档位。
-  if (level === 'max' && !levels.includes('max')) return 'xhigh'
-  return levels.includes(level as OpenAIThinkingLevel) ? level as OpenAIThinkingLevel : 'off'
-}
-
-interface CodexThinkingConfig {
-  thinkingLevel: AgentThinkingLevel
-  levels: readonly OpenAIThinkingLevel[]
-  onThinkingLevelChange: (level: AgentThinkingLevel) => void
-}
+/** 缺乏推理能力时的固定档位集合，与共享层的 OpenAI 标准档位一致。 */
+const OPENAI_STANDARD_THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly AgentThinkingLevel[]
 
 interface AgentThinkingPopoverProps {
   agentThinking: import('@proma/shared').ThinkingConfig | undefined
   onToggle: () => void
-  codexConfig?: CodexThinkingConfig
 }
 
-function AgentThinkingPopover({ agentThinking, onToggle, codexConfig }: AgentThinkingPopoverProps): React.ReactElement {
+/**
+ * 兼容旧会话的「思考模式」开关。
+ *
+ * 支持推理档位的模型不再走这里：档位已并入模型选择器的「推理深度」子视图，
+ * 避免同一个工具栏出现两个入口。因此本组件只保留 Switch 分支，
+ * 由 AgentView 在模型缺乏推理能力时才挂到工具栏上。
+ */
+function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverProps): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const popoverReceivedFocusRef = React.useRef(false)
-  const isCodex = Boolean(codexConfig)
-  const thinkingLevels = codexConfig?.levels ?? OPENAI_STANDARD_THINKING_LEVELS
-  const normalizedLevel = normalizeOpenAIThinkingLevel(
-    codexConfig?.thinkingLevel,
-    thinkingLevels,
-  )
-  const supportsThinkingToggle = thinkingLevels.includes('off')
-  const isEnabled = isCodex ? !supportsThinkingToggle || normalizedLevel !== 'off' : agentThinking?.type === 'adaptive'
-  const sliderPosition = thinkingLevels.indexOf(normalizedLevel)
+  const isEnabled = agentThinking?.type === 'adaptive'
 
   const handleMouseEnter = React.useCallback(() => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
@@ -367,15 +330,6 @@ function AgentThinkingPopover({ agentThinking, onToggle, codexConfig }: AgentThi
     }
   }, [])
 
-  const handleButtonClick = (): void => {
-    if (codexConfig) {
-      if (!supportsThinkingToggle) return
-      codexConfig.onThinkingLevelChange(isEnabled ? 'off' : 'high')
-      return
-    }
-    onToggle()
-  }
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -384,7 +338,7 @@ function AgentThinkingPopover({ agentThinking, onToggle, codexConfig }: AgentThi
           variant="ghost"
           size="icon"
           className={cn(inputToolbarButtonClass, isEnabled && inputToolbarActiveButtonClass)}
-          onClick={handleButtonClick}
+          onClick={onToggle}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
@@ -408,38 +362,14 @@ function AgentThinkingPopover({ agentThinking, onToggle, codexConfig }: AgentThi
         }}
       >
         <div className="flex flex-col gap-3">
-          {codexConfig ? (
-            <>
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-xs font-medium text-foreground/80">思考深度</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {OPENAI_THINKING_LABELS[normalizedLevel]}
-                  </span>
-                </div>
-                <Slider
-                  value={[sliderPosition]}
-                  onValueChange={([position]) => codexConfig.onThinkingLevelChange(thinkingLevels[position!]!)}
-                  min={0}
-                  max={thinkingLevels.length - 1}
-                  step={1}
-                  aria-label="思考深度"
-                />
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  {thinkingLevels.map((level) => <span key={level}>{OPENAI_THINKING_LABELS[level]}</span>)}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-xs text-foreground/70">思考模式</span>
-              <Switch
-                checked={isEnabled}
-                onCheckedChange={onToggle}
-                className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-              />
-            </div>
-          )}
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-xs text-foreground/70">思考模式</span>
+            <Switch
+              checked={isEnabled}
+              onCheckedChange={onToggle}
+              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+            />
+          </div>
         </div>
       </PopoverContent>
     </Popover>
@@ -569,13 +499,10 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
   const streamErrors = useAtomValue(agentStreamErrorsAtom)
   const agentError = streamErrors.get(sessionId) ?? null
-  const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
-  const isPlanMode = planModeSessions.has(sessionId)
-  const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)
-  const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
   const persistedPermissionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
-  const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
-  const isPermissionPlanMode = permissionMode === 'plan'
+  // 权限模式已无用户入口：运行时只读取会话持久化的历史值，缺失时回落到默认值。
+  const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
+  const permissionMode = persistedPermissionMode ?? defaultPermissionMode
   const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
   const openPreview = useOpenPreview()
@@ -1988,6 +1915,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
     const previousSessionMeta = sessionMeta
     const nextEnabled = !codexFastModeEnabled
+    // 只更新元数据写入时间（并发保护用），不动 lastActivityAt：切换快速模式不是用户活动，
+    // 不应该让会话在按活跃度排序的侧栏里跳到顶部。
     setAgentSessions((prev) => prev.map((item) => (
       item.id === sessionId ? { ...item, codexFastMode: nextEnabled, updatedAt: Date.now() } : item
     )))
@@ -2007,6 +1936,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
     const reasoningLevelSwitchDeferred = streaming || backgroundWaiting
     const previousSessionMeta = sessionMeta
+    // 同上：推理档位是会话元数据，改它不算一次用户活动。
     setAgentSessions((prev) => prev.map((item) => (
       item.id === sessionId ? { ...item, reasoningLevel: thinkingLevel, updatedAt: Date.now() } : item
     )))
@@ -2030,6 +1960,24 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       toast.error('思考深度切换失败', { description: getErrorMessage(error) })
     }
   }, [backgroundWaiting, isSessionThinkingAvailable, sessionId, sessionMeta, setAgentSessions, streaming])
+
+  /**
+   * 交给模型选择器展示的推理档位。
+   *
+   * 仅在模型具备推理能力时提供；对象本身用 memo 稳定引用，避免流式重渲染时
+   * 模型选择器内的档位选项与焦点 effect 反复重算。
+   */
+  const modelSelectorThinking = React.useMemo(() => (
+    isSessionThinkingAvailable
+      ? {
+          level: openAIThinkingLevel,
+          levels: openAIThinkingLevels,
+          // 会话元数据未就绪时无法写回档位，先禁用单选组。
+          disabled: !sessionMeta,
+          onChange: (level: AgentThinkingLevel): void => { void updateReasoningLevel(level) },
+        }
+      : undefined
+  ), [isSessionThinkingAvailable, openAIThinkingLevel, openAIThinkingLevels, sessionMeta, updateReasoningLevel])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -2670,13 +2618,9 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   }, [])
 
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
-  const allPermissionRequests = useAtomValue(allPendingPermissionRequestsAtom)
-  const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
-  const hasBannerOverlay =
-    (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
-    (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
-  const hasBlockingRequests = hasBannerOverlay || (allPermissionRequests.get(sessionId)?.length ?? 0) > 0
-  const canSendQueuedNow = messagesLoaded && (streaming || !messagesRefreshing) && !!agentChannelId && hasAvailableModel && !hasBlockingRequests && !isStopping
+  // 权限/计划审批横幅已下线，输入区只由 AskUser 问答横幅接管。
+  const hasBannerOverlay = (allAskUserRequests.get(sessionId)?.length ?? 0) > 0
+  const canSendQueuedNow = messagesLoaded && (streaming || !messagesRefreshing) && !!agentChannelId && hasAvailableModel && !hasBannerOverlay && !isStopping
   const queuedSendInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
 
@@ -2824,8 +2768,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const canSend = !isStopping && messagesLoaded && (streaming || !messagesRefreshing) && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
-    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
-    {
+    // 支持推理档位的模型由模型选择器的「推理深度」承担，这里只保留旧会话的思考模式开关。
+    ...(isSessionThinkingAvailable ? [] : [{
       key: 'thinking',
       node: (
         <AgentThinkingPopover
@@ -2837,14 +2781,9 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
             setAgentThinking(next)
             window.electronAPI.updateSettings({ agentThinking: next })
           }}
-          codexConfig={isSessionThinkingAvailable ? {
-            thinkingLevel: openAIThinkingLevel,
-            levels: openAIThinkingLevels,
-            onThinkingLevelChange: (level) => { void updateReasoningLevel(level) },
-          } : undefined}
         />
       ),
-    },
+    }]),
     { key: 'speech', node: <SpeechButton className={inputToolbarButtonClass} voiceInputId={agentVoiceInputId} /> },
     {
       key: 'attach-content',
@@ -2882,9 +2821,6 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     planQuotaChannelId,
     planQuotaChannelUpdatedAt,
     isSessionThinkingAvailable,
-    openAIThinkingLevel,
-    openAIThinkingLevels,
-    updateReasoningLevel,
     backgroundWaiting,
     sessionId,
     agentThinking,
@@ -2945,6 +2881,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       <div className="flex min-w-0 items-center gap-1">
         <ModelSelector
           externalSelectedModel={externalSelectedModel}
+          thinking={modelSelectorThinking}
           codexSpeed={isCodexFastModeAvailable ? {
             speed: codexFastModeEnabled ? 'fast' : 'standard',
             speeds: ['standard', 'fast'],
@@ -3016,15 +2953,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
           historyQuoteNavigation={historyQuoteNavigation}
         />
 
-        {/* 权限请求横幅 */}
-        <PermissionBanner sessionId={sessionId} />
-
         {/* AskUserQuestion 交互式问答横幅 */}
         <AskUserBanner sessionId={sessionId} />
-
-
-        {/* ExitPlanMode 计划审批横幅 */}
-        <ExitPlanModeBanner sessionId={sessionId} />
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
@@ -3051,14 +2981,12 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
-              (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
               isDragOver && 'border-[2px] border-dashed border-primary bg-primary/[0.03]'
             )}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
-            {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
             {isLegacyTranscript && (
               <div className="flex items-center justify-between gap-3 px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
                 <span>这是已退役 Claude runtime 的只读历史会话；原对话可查看，但不能继续、分叉或回退。</span>

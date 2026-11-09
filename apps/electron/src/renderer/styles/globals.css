@@ -1523,23 +1523,6 @@ body {
     0 0 8px hsl(100 42% 58% / 0.25) !important;
 }
 
-/* ===== 计划模式：输入框定位上下文 ===== */
-.plan-mode-border {
-  position: relative;
-}
-/* 深色主题 plan 虚线颜色加亮 */
-.theme-ocean-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(210 30% 50% / 0.7);
-}
-.theme-forest-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(145 25% 45% / 0.7);
-}
-
-/* CRT 终端：Plan Mode 虚线 */
-.theme-terminal-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(var(--ring) / 0.7);
-}
-
 /* ===== prose inline code：移除 Tailwind Typography 默认的前后反引号伪元素 ===== */
 .prose code::before,
 .prose code::after {

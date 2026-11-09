@@ -44,10 +44,11 @@ import type {
   AgentActiveWorktree,
   SessionWorkbenchLayout,
 } from '@proma/shared'
-import { migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
+import { migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult, compareAgentSessionsByActivityDesc, getAgentSessionActivityAt } from '@proma/shared'
 import { getConversationMessages } from './legacy-chat-store'
-// 旧格式 → SDKMessage 的转换逻辑下沉到 @proma/session-core 作为唯一真源，避免主进程与渲染层各存一份。
-import { convertLegacyMessage } from '@proma/session-core'
+// 旧格式 → SDKMessage 的转换与「是否为用户输入」判定下沉到 @proma/session-core 作为唯一真源，
+// 避免主进程与渲染层各存一份。
+import { convertLegacyMessage, isUserInputMessage } from '@proma/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
 
@@ -217,6 +218,23 @@ function migrateRetiredClaudeRuntime(index: AgentSessionsIndex): boolean {
 }
 
 /**
+ * 旧索引只有 updatedAt：它同时承担「用户活动」与「元数据写入」两种语义。
+ * 引入 lastActivityAt 后，存量会话以当时的 updatedAt 作为活动时间起点。
+ *
+ * 只补缺失字段，已有值绝不覆盖，因此重复读取索引是幂等的。
+ */
+function migrateAgentSessionLastActivityAt(index: AgentSessionsIndex): boolean {
+  let migrated = false
+  for (const session of index.sessions) {
+    if (session.lastActivityAt == null) {
+      session.lastActivityAt = session.updatedAt
+      migrated = true
+    }
+  }
+  return migrated
+}
+
+/**
  * 会话索引的内存缓存。
  *
  * 重度使用后索引可达数 MB（实测 3600 个会话约 6.4MB），单次 JSON.parse 约 11ms。
@@ -256,14 +274,18 @@ function readIndex(): AgentSessionsIndex {
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
   if (data) {
     const permissionModeMigrated = migrateLegacyPermissionMode(data)
+    const activityTimeMigrated = migrateAgentSessionLastActivityAt(data)
     const thinkingDefaultMigrated = migrateLegacyOpenAIThinkingDefault(data)
     const retiredClaudeRuntimeMigrated = migrateRetiredClaudeRuntime(data)
-    if (permissionModeMigrated || thinkingDefaultMigrated || retiredClaudeRuntimeMigrated || data.version < INDEX_VERSION) {
+    if (permissionModeMigrated || activityTimeMigrated || thinkingDefaultMigrated || retiredClaudeRuntimeMigrated || data.version < INDEX_VERSION) {
       data.version = INDEX_VERSION
       // writeIndex 会按写入后的文件状态刷新缓存。
       writeIndex(data)
       if (permissionModeMigrated) {
         console.log('[Agent 会话] 已迁移历史权限模式 auto → bypassPermissions')
+      }
+      if (activityTimeMigrated) {
+        console.log('[Agent 会话] 已为历史会话补齐最后活动时间 lastActivityAt')
       }
       if (thinkingDefaultMigrated) {
         console.log('[Agent 会话] 已将历史 OpenAI 会话的思考深度默认值升级为高')
@@ -298,27 +320,27 @@ function writeIndex(index: AgentSessionsIndex): void {
   }
 }
 
-/** 按最近更新时间排序会话副本，避免修改索引数组本身。 */
-function sortSessionsByUpdatedAtDesc(sessions: AgentSessionMeta[]): AgentSessionMeta[] {
-  return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+/** 按最后活跃时间排序会话副本，避免修改索引数组本身。 */
+function sortSessionsByActivityDesc(sessions: AgentSessionMeta[]): AgentSessionMeta[] {
+  return [...sessions].sort(compareAgentSessionsByActivityDesc)
 }
 
-/** 获取所有会话（按 updatedAt 降序） */
+/** 获取所有会话（按最后活跃时间降序） */
 export function listAgentSessions(): AgentSessionMeta[] {
   const index = readIndex()
-  return sortSessionsByUpdatedAtDesc(index.sessions)
+  return sortSessionsByActivityDesc(index.sessions)
 }
 
 /** 获取未归档会话，供侧栏 active 视图按需读取。 */
 export function listActiveAgentSessions(): AgentSessionMeta[] {
   const index = readIndex()
-  return sortSessionsByUpdatedAtDesc(index.sessions.filter((session) => !session.archived))
+  return sortSessionsByActivityDesc(index.sessions.filter((session) => !session.archived))
 }
 
 /** 获取归档会话，只有用户进入归档视图时才调用。 */
 export function listArchivedAgentSessions(): AgentSessionMeta[] {
   const index = readIndex()
-  return sortSessionsByUpdatedAtDesc(index.sessions.filter((session) => session.archived && !session.isDraft))
+  return sortSessionsByActivityDesc(index.sessions.filter((session) => session.archived && !session.isDraft))
 }
 
 /** 获取归档数量，不把归档会话元数据传到 renderer。 */
@@ -425,6 +447,8 @@ export function createAgentSession(
     // 新会话继承已持久化的全局思考偏好，之后仍可按会话单独调整。
     reasoningLevel: defaultThinkingLevel,
     createdAt: now,
+    // 新会话尚无任何用户输入，但创建本身已是一次用户操作，活动时间与元数据时间同起点。
+    lastActivityAt: now,
     updatedAt: now,
   }
 
@@ -481,7 +505,9 @@ export function appendAgentMessage(id: string, message: AgentMessage): void {
     const line = JSON.stringify(message) + '\n'
     appendFileSync(filePath, line, 'utf-8')
 
-    // 追加消息时更新 updatedAt，若已归档则自动恢复活跃
+    // 追加消息时更新 updatedAt，若已归档则自动恢复活跃。
+    // 该路径仅用于迁移旧 AgentMessage 格式的历史数据：迁移不是新的用户活动，
+    // 因此不抬高 lastActivityAt，保持旧会话在侧栏中的活动顺序不变。
     const index = readIndex()
     const idx = index.sessions.findIndex((s) => s.id === id)
     if (idx !== -1) {
@@ -528,6 +554,46 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
     console.error(`[Agent 会话] 追加 SDKMessage 失败 (${id}):`, error)
     throw new Error('追加 SDKMessage 失败')
   }
+
+  // 只有真正追加了用户输入（而不是 SDK 回传的 tool_result user 消息、合成消息）
+  // 才抬高会话的活动时间。活动索引写入失败不能影响已经落盘的消息。
+  // SDKMessage 联合类型里的兜底分支也带 `type: string`，这里的收窄需要显式断言。
+  if (messages.some((message) => message.type === 'user' && isUserInputMessage(message as SDKUserMessage))) {
+    try {
+      recordAgentSessionActivity(id)
+    } catch (error) {
+      console.warn('[Agent 会话] 消息已保存，活动索引更新失败:', error)
+    }
+  }
+}
+
+/**
+ * 记录一次真实的用户活动
+ *
+ * 只抬高 `lastActivityAt`（侧栏排序依据），并把 `updatedAt` 抬到不早于活动时间；
+ * 同时解除归档，与「有新消息的会话回到活跃列表」的行为保持一致。
+ *
+ * 标记已读、改标题、改推理档位、跑完一轮等都是元数据变更，不应调用本函数。
+ */
+export function recordAgentSessionActivity(id: string): void {
+  if (isAgentSessionDeleting(id)) return
+
+  const index = readIndex()
+  const idx = index.sessions.findIndex((session) => session.id === id)
+  if (idx === -1) return
+
+  const session = index.sessions[idx]!
+  // Date.now() 可能因为系统时间回调而小于已记录时间，用 Math.max 保证单调递增。
+  const lastActivityAt = Math.max(getAgentSessionActivityAt(session), Date.now())
+  const updated: AgentSessionMeta = {
+    ...session,
+    lastActivityAt,
+    updatedAt: Math.max(session.updatedAt, lastActivityAt),
+    archived: false,
+  }
+
+  index.sessions[idx] = updated
+  writeIndex(index)
 }
 
 /**
@@ -607,6 +673,11 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
 
 /**
  * 更新会话元数据
+ *
+ * 这里只写元数据（包括标记已读、改标题、改推理档位等），因此只抬 `updatedAt`：
+ * 它表示「记录被写过」，不代表用户活动。`lastActivityAt` 只能由
+ * `recordAgentSessionActivity` 在真正追加用户输入时抬高，否则会话会因
+ * 元数据变更而在按活跃度排序的列表里无意义地跳动。
  */
 export function updateAgentSessionMeta(
   id: string,
@@ -1218,8 +1289,9 @@ export function updateSDKUserMessageSkillActivations(
 }
 
 /**
- * 自动归档超过指定天数未更新的 Agent 会话
+ * 自动归档超过指定天数没有用户活动的 Agent 会话
  *
+ * 以最后活动时间（而不是元数据写入时间）为判据：元数据变更不代表用户在用它。
  * 置顶会话不会被归档。
  *
  * @param daysThreshold 天数阈值
@@ -1232,7 +1304,7 @@ export function autoArchiveAgentSessions(daysThreshold: number): number {
 
   for (const session of index.sessions) {
     // 草稿没有侧栏入口；自动归档后无法由 Welcome 恢复，会变成不可达记录。
-    if (!session.isDraft && !session.pinned && !session.archived && session.updatedAt < threshold) {
+    if (!session.isDraft && !session.pinned && !session.archived && getAgentSessionActivityAt(session) < threshold) {
       session.archived = true
       count++
     }
@@ -1328,7 +1400,7 @@ export async function searchAgentSessionMessages(query: string): Promise<AgentMe
   const results: AgentMessageSearchResult[] = []
   let matchedSessionCount = 0
 
-  const sortedSessions = [...index.sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  const sortedSessions = [...index.sessions].sort(compareAgentSessionsByActivityDesc)
   for (const session of sortedSessions) {
     if (matchedSessionCount >= MAX_SEARCH_SESSIONS) break
 
@@ -1566,7 +1638,7 @@ function createSessionReferenceSearchResult(
 /**
  * 搜索可引用的 Agent 会话。
  *
- * 指定工作区时仅返回该工作区；省略工作区时跨工作区搜索。两种模式都排除已归档和当前会话；无关键词时返回最近更新的会话。
+ * 指定工作区时仅返回该工作区；省略工作区时跨工作区搜索。两种模式都排除已归档和当前会话；无关键词时返回最近活跃的会话。
  */
 export async function searchAgentSessionReferences(input: AgentSessionReferenceSearchInput): Promise<AgentSessionReferenceSearchResult[]> {
   const workspaceId = input?.workspaceId?.trim()

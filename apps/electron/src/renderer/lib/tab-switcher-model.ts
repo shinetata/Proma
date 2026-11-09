@@ -1,4 +1,4 @@
-import type { AgentSessionMeta, AgentWorkspace } from '@proma/shared'
+import { getAgentSessionActivityAt, type AgentSessionMeta, type AgentWorkspace } from '@proma/shared'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 
 export type SwitchSectionId = 'collaboration' | 'recent'
@@ -8,6 +8,7 @@ export interface SwitchCandidate {
   id: string
   type: SwitchCandidateType
   title: string
+  /** 排序用的最后活跃时间（会话的 lastActivityAt，旧数据回退 updatedAt）。 */
   updatedAt: number
   status: SessionIndicatorStatus
   workspaceId?: string
@@ -58,7 +59,7 @@ export function buildTabSwitcherModel({
       id: session.id,
       type: 'agent',
       title: session.title || '新 Agent 会话',
-      updatedAt: session.updatedAt,
+      updatedAt: getAgentSessionActivityAt(session),
       status,
       workspaceId: session.workspaceId,
       workspaceName: session.workspaceId ? workspaceNameById.get(session.workspaceId) : undefined,

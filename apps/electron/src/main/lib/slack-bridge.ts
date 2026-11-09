@@ -315,9 +315,8 @@ export class SlackBridge {
         channelId: binding.channelIdForModel,
         modelId: binding.modelId,
         workspaceId: binding.workspaceId,
-        // Slack begins every external turn in plan mode. A Block Kit approval is
-        // required before ExitPlanMode can grant this particular run execution.
-        permissionModeOverride: 'plan',
+        // 权限模式与计划模式已下线（对齐商业版 0.22.0）：Slack 外部回合不再先进入
+        // 计划模式等待 Block Kit 审批，而是直接执行工具调用。
       }, {
         source: 'slack',
         onError: (error) => { void this.finalizeRun(binding.sessionId, `⚠️ Proma 运行失败：${error}`) },

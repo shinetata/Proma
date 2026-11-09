@@ -5,6 +5,9 @@
  * - 最后一条非错误 assistant 消息里的正文视为最终输出，排在过程之后单独展示；
  * - 其余 thinking / tool_use 连续片段合并为一个「步骤组」，中间穿插的正文作为过程中的说明；
  * - 过程区顶部汇总为「已思考 N 次、执行 N 次工具、耗时 Xs」。
+ *
+ * 已答的 AskUserQuestion 例外：它从执行过程里摘出，作为 question 分区
+ * 交给「你的回答」卡片（见 collectAssistantTurnBodyEntries）。
  */
 
 import type { SDKAssistantMessage, SDKContentBlock, SDKMessage, SDKResultMessage, SDKThinkingBlock, SDKToolUseBlock } from '@proma/shared'
@@ -31,6 +34,13 @@ export interface AssistantTurnSectionItem {
 export type AssistantTurnSection =
   | { type: 'activity'; items: AssistantTurnSectionItem[] }
   | { type: 'block'; item: AssistantTurnSectionItem; output?: boolean; promotedFromThinking?: boolean }
+  // 已答的 AskUserQuestion：从执行过程里摘出，作为「你的回答」卡片回显
+  | { type: 'question'; item: AssistantTurnSectionItem }
+
+/** 正文区条目：单条正文块，或一组连续问答（合并成一张回显卡片） */
+export type AssistantTurnBodyEntry =
+  | { type: 'block'; item: AssistantTurnSectionItem; sectionIndex: number; promotedFromThinking?: boolean }
+  | { type: 'question'; entries: AssistantTurnSectionItem[]; sectionIndex: number }
 
 export interface AssistantTurnSections {
   items: AssistantTurnSection[]
@@ -82,11 +92,17 @@ export function buildAssistantTurnSections(
     isStreaming = false,
     stoppedByUser = false,
     result,
+    answeredQuestionToolIds,
   }: {
     messages: SDKAssistantMessage[]
     isStreaming?: boolean
     stoppedByUser?: boolean
     result?: SDKResultMessage
+    /**
+     * 已答 AskUserQuestion 的 tool_use id：这些工具块不再进入执行过程，
+     * 而是作为 question 分区交给「你的回答」卡片渲染。
+     */
+    answeredQuestionToolIds?: ReadonlySet<string>
   },
 ): AssistantTurnSections {
   const effectiveResult = result?.isSyntheticCompactionResult ? undefined : result
@@ -143,6 +159,15 @@ export function buildAssistantTurnSections(
   blocks.forEach(({ block }, index) => {
     if (block.type === 'text' && typeof block.text === 'string' && !block.text.trim()) return
     const item = { block, index }
+    if (block.type === 'tool_use') {
+      const toolBlock = block as SDKToolUseBlock
+      if (toolBlock.name === 'AskUserQuestion' && answeredQuestionToolIds?.has(toolBlock.id)) {
+        // 已答问答打断了执行过程：先收束当前步骤组，再单独成卡片
+        flushActivity()
+        processItems.push({ type: 'question', item })
+        return
+      }
+    }
     if (outputIndexes.has(index)) {
       flushActivity()
       outputItems.push(index === promotedIndex
@@ -164,6 +189,39 @@ export function buildAssistantTurnSections(
     outputState: outputIndexes.size ? (interrupted ? 'incomplete' : 'answer') : 'none',
     completedWithoutAnswer: succeeded && !outputIndexes.size,
   }
+}
+
+/**
+ * 归集正文区条目。
+ *
+ * 正文区包含最终输出与「你的回答」卡片；连续相邻的多个已答 AskUserQuestion
+ * 合并成同一张卡片（对应商业版的分组合并）。
+ * 「相邻」按完整分区顺序判断：被过程区正文或其它内容隔开的两次提问各自成卡片，
+ * 与商业版一致。
+ */
+export function collectAssistantTurnBodyEntries(sections: readonly AssistantTurnSection[]): AssistantTurnBodyEntry[] {
+  const entries: AssistantTurnBodyEntry[] = []
+  sections.forEach((section, sectionIndex) => {
+    if (section.type === 'question') {
+      const isAdjacent = sections[sectionIndex - 1]?.type === 'question'
+      const last = entries.at(-1)
+      if (isAdjacent && last && last.type === 'question') {
+        last.entries.push(section.item)
+        return
+      }
+      entries.push({ type: 'question', entries: [section.item], sectionIndex })
+      return
+    }
+    if (section.type === 'block' && section.output) {
+      entries.push({
+        type: 'block',
+        item: section.item,
+        sectionIndex,
+        promotedFromThinking: section.promotedFromThinking,
+      })
+    }
+  })
+  return entries
 }
 
 // ===== 过程摘要文案 =====

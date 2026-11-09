@@ -14,6 +14,7 @@
  */
 
 import {
+  getAgentSessionActivityAt,
   type AgentIslandActivityLine,
   type AgentIslandPillSnapshot,
   type AgentIslandSessionSnapshot,
@@ -172,16 +173,6 @@ function handleAgentEvent(sessionId: string, payload: AgentStreamPayload): void 
 
 function handlePromaEvent(sessionId: string, event: import('@proma/shared').PromaEvent): void {
   switch (event.type) {
-    case 'permission_request': {
-      const session = ensureSession(sessionId)
-      session.phase = 'needs-interaction'
-      session.interactionKind = 'permission'
-      session.detail = '等待权限确认'
-      session.attention = true
-      session.lastActivityAt = Date.now()
-      pushActivity(session, 'status', '需要权限确认')
-      break
-    }
     case 'ask_user_request': {
       const session = ensureSession(sessionId)
       session.phase = 'needs-interaction'
@@ -195,19 +186,7 @@ function handlePromaEvent(sessionId: string, event: import('@proma/shared').Prom
       pushActivity(session, 'status', `提问：${truncate(question, 40)}`)
       break
     }
-    case 'exit_plan_mode_request': {
-      const session = ensureSession(sessionId)
-      session.phase = 'needs-interaction'
-      session.interactionKind = 'plan_review'
-      session.detail = '等待计划审批'
-      session.attention = true
-      session.lastActivityAt = Date.now()
-      pushActivity(session, 'status', '等待计划审批')
-      break
-    }
-    case 'permission_resolved':
-    case 'ask_user_resolved':
-    case 'exit_plan_mode_resolved': {
+    case 'ask_user_resolved': {
       const session = sessions.get(sessionId)
       if (session && session.phase === 'needs-interaction') {
         session.phase = 'running'
@@ -274,11 +253,8 @@ function handlePromaEvent(sessionId: string, event: import('@proma/shared').Prom
       }
       break
     }
-    case 'enter_plan_mode':
-    case 'plan_mode_changed':
     case 'model_resolved':
     case 'context_window':
-    case 'permission_mode_changed':
     case 'automation_graduated': {
       const session = sessions.get(sessionId)
       if (session) session.lastActivityAt = Date.now()
@@ -499,7 +475,8 @@ function buildState(now: number): AgentIslandState {
         activityLines: [],
         attention: false,
         startedAt: session.createdAt,
-        lastActivityAt: session.updatedAt,
+        // 启动台展示「最近会话」：用会话的活动时间，而不是元数据写入时间。
+        lastActivityAt: getAgentSessionActivityAt(session),
       }))
     : []
 
@@ -761,7 +738,7 @@ function schedulePush(throttleMs = PUSH_THROTTLE_MS): void {
 
 function requiresImmediateAgentIslandPush(payload: AgentStreamPayload): boolean {
   if (payload.kind === 'proma_event') {
-    return ['permission_request', 'ask_user_request', 'exit_plan_mode_request', 'run_stopped'].includes(payload.event.type)
+    return ['ask_user_request', 'run_stopped'].includes(payload.event.type)
   }
   if (payload.kind !== 'sdk_message') return false
   const message = payload.message

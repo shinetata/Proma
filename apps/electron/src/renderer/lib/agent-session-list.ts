@@ -1,4 +1,4 @@
-import type { AgentSessionMeta, AgentWorkspace } from '@proma/shared'
+import { compareAgentSessionsByActivityDesc, type AgentSessionMeta, type AgentWorkspace } from '@proma/shared'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 
 interface AgentSessionTreeLike {
@@ -18,11 +18,16 @@ export function getDelegationStatusIconClass(status: SessionIndicatorStatus): st
   return DELEGATION_STATUS_ICON_CLASS[status]
 }
 
-/** 按最近更新时间排序 Agent 会话，保持与主进程 listAgentSessions 一致。 */
-export function sortAgentSessionsByUpdatedAtDesc(
+/**
+ * 按最后活跃时间排序 Agent 会话，保持与主进程 listAgentSessions 一致。
+ *
+ * 活跃时间取 `lastActivityAt`（真正的用户输入）而不是 `updatedAt`（元数据写入时间），
+ * 否则标记已读、改标题一类元数据变更会把会话顶到列表最顶部。
+ */
+export function sortAgentSessionsByActivityDesc(
   sessions: readonly AgentSessionMeta[],
 ): AgentSessionMeta[] {
-  return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  return [...sessions].sort(compareAgentSessionsByActivityDesc)
 }
 
 /** Agent 归档会话的顶层项目分组。 */
@@ -86,7 +91,7 @@ export function groupArchivedAgentSessionsByProject({
       label: workspace.name,
       kind: 'workspace',
       workspace,
-      sessions: sortAgentSessionsByUpdatedAtDesc(workspaceSessions),
+      sessions: sortAgentSessionsByActivityDesc(workspaceSessions),
     })
   }
   if (automationSessions.length > 0) {
@@ -94,7 +99,7 @@ export function groupArchivedAgentSessionsByProject({
       id: ARCHIVED_AUTOMATION_GROUP_ID,
       label: '定时任务',
       kind: 'automation',
-      sessions: sortAgentSessionsByUpdatedAtDesc(automationSessions),
+      sessions: sortAgentSessionsByActivityDesc(automationSessions),
     })
   }
   if (unassignedSessions.length > 0) {
@@ -102,19 +107,19 @@ export function groupArchivedAgentSessionsByProject({
       id: ARCHIVED_UNASSIGNED_GROUP_ID,
       label: '未归属项目',
       kind: 'unassigned',
-      sessions: sortAgentSessionsByUpdatedAtDesc(unassignedSessions),
+      sessions: sortAgentSessionsByActivityDesc(unassignedSessions),
     })
   }
   return groups
 }
 
-/** 用后端返回的新元数据替换本地条目，并按最近更新时间重新排序。 */
+/** 用后端返回的新元数据替换本地条目，并按最后活跃时间重新排序。 */
 export function replaceAgentSessionInFreshnessOrder(
   sessions: readonly AgentSessionMeta[],
   updated: AgentSessionMeta,
 ): AgentSessionMeta[] {
   const others = sessions.filter((session) => session.id !== updated.id)
-  return sortAgentSessionsByUpdatedAtDesc([updated, ...others])
+  return sortAgentSessionsByActivityDesc([updated, ...others])
 }
 
 /**
@@ -124,8 +129,8 @@ export function replaceAgentSessionInFreshnessOrder(
  * 绝不删除其它会话。这避免了用一份可能陈旧的全量快照整体覆盖
  * agentSessionsAtom 时，把刚结束 turn 的父会话等条目意外冲掉的竞态。
  *
- * 若传入条目不携带比本地更新的 updatedAt（例如事件 payload 里没有权威
- * updatedAt），可只传 id + 部分字段，函数会以本地条目为基底浅合并。
+ * 若传入条目不携带比本地更新的时间字段（例如事件 payload 里没有权威
+ * updatedAt / lastActivityAt），可只传 id + 部分字段，函数会以本地条目为基底浅合并。
  */
 export function upsertAgentSession(
   sessions: readonly AgentSessionMeta[],
@@ -136,7 +141,7 @@ export function upsertAgentSession(
     ? { ...existing, ...incoming }
     : incoming
   const others = sessions.filter((session) => session.id !== incoming.id)
-  return sortAgentSessionsByUpdatedAtDesc([merged, ...others])
+  return sortAgentSessionsByActivityDesc([merged, ...others])
 }
 
 /**
@@ -156,7 +161,9 @@ export function upsertAgentSession(
  * - fetched 同 ID 但其 updatedAt 不晚于本地的条目（例如 TITLE_UPDATED 已抵达，
  *   但该 fetch 在标题落盘前已开始）。
  *
- * 这样既能反映真实删除，又能抵御陈旧快照回冲。
+ * 这里的并发保护刻意继续用 `updatedAt` 而不是 `lastActivityAt`：它判定的是
+ * 「哪一份元数据更新」，而标记已读、改标题这类变更只抬 updatedAt，用活跃时间
+ * 比较会让本地的新标题被陈旧快照覆盖。列表展示顺序另由 lastActivityAt 决定。
  */
 export function mergeFetchedAgentSessions(
   prev: readonly AgentSessionMeta[],
@@ -164,7 +171,7 @@ export function mergeFetchedAgentSessions(
 ): AgentSessionMeta[] {
   const previousById = new Map(prev.map((session) => [session.id, session]))
   const fetchedIds = new Set(fetched.map((session) => session.id))
-  // 本次快照所反映的“数据新鲜度水位”：快照里最大的 updatedAt。
+  // 本次快照所反映的“数据新鲜度水位”：快照里最大的 updatedAt（元数据写入时间）。
   // 比它更新的本地条目，说明在该快照生成之后才出现/更新，不能被它判定为删除。
   const snapshotWatermark = fetched.reduce(
     (max, session) => Math.max(max, session.updatedAt),
@@ -184,7 +191,7 @@ export function mergeFetchedAgentSessions(
     return local && local.updatedAt >= session.updatedAt ? local : session
   })
 
-  return sortAgentSessionsByUpdatedAtDesc([...mergedFetched, ...survivingLocalOnly])
+  return sortAgentSessionsByActivityDesc([...mergedFetched, ...survivingLocalOnly])
 }
 
 /** 收集可见会话树里的父/子会话 id，用于判断当前会话是否已显示在侧栏中。 */

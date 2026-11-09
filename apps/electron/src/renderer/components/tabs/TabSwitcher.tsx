@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
-import type { AgentSessionMeta } from '@proma/shared'
+import { getAgentSessionActivityAt, type AgentSessionMeta } from '@proma/shared'
 import { cn } from '@/lib/utils'
 import {
   activeTabIdAtom,
@@ -41,6 +41,7 @@ interface SwitchCandidate {
   id: string
   type: SwitchCandidateType
   title: string
+  /** 排序用的最后活跃时间（会话的 lastActivityAt，旧数据回退 updatedAt）。 */
   updatedAt: number
   status: SessionIndicatorStatus
   workspaceId?: string
@@ -100,7 +101,7 @@ export function TabSwitcher(): ReactElement | null {
         id: session.id,
         type: 'agent',
         title: session.title || '新 Agent 会话',
-        updatedAt: session.updatedAt,
+        updatedAt: getAgentSessionActivityAt(session),
         status,
         workspaceId: session.workspaceId,
         workspaceName: session.workspaceId ? workspaceNameById.get(session.workspaceId) : undefined,
@@ -141,7 +142,7 @@ export function TabSwitcher(): ReactElement | null {
       shouldShowCollaborationSection ? relatedCandidates.map((candidate) => candidate.id) : [],
     )
 
-    // 按 MRU 排序：在 MRU 列表中的按 MRU 顺序，不在的按 updatedAt 追加到末尾
+    // 按 MRU 排序：在 MRU 列表中的按 MRU 顺序，不在的按最后活跃时间追加到末尾
     const mruIndex = new Map(tabMru.map((id, i) => [id, i]))
     const recentCandidates = allCandidates
       .filter((candidate) => !relatedCandidateIds.has(candidate.id))

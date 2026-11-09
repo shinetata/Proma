@@ -146,7 +146,7 @@ import {
   removeDelegatedSessionSelection,
   replaceAgentSessionInFreshnessOrder,
   selectDelegatedSession,
-  sortAgentSessionsByUpdatedAtDesc,
+  sortAgentSessionsByActivityDesc,
 } from '@/lib/agent-session-list'
 import { clearSessionReferenceDragState, getSessionReferenceDragData, insertSessionReferenceMention, isSessionReferenceDrag, setSessionReferenceDragData } from '@/lib/session-reference-drag'
 import {
@@ -173,7 +173,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import type { AgentSessionMeta, AgentWorkspace, WorkspaceCapabilities } from '@proma/shared'
+import { getAgentSessionActivityAt, type AgentSessionMeta, type AgentWorkspace, type WorkspaceCapabilities } from '@proma/shared'
 
 function formatAutomationCount(count: number): string {
   return count > 99 ? '99+' : String(count)
@@ -221,8 +221,9 @@ const ACTIVE_SESSION_STATUS_PRIORITY: Record<SessionIndicatorStatus, number> = {
   idle: 3,
 }
 
-function formatRelativeUpdatedAt(updatedAt: number, now: number): string {
-  const diff = Math.max(0, now - updatedAt)
+/** 相对时间文案；传入的应当是会话的最后活跃时间。 */
+function formatRelativeActivityAt(activityAt: number, now: number): string {
+  const diff = Math.max(0, now - activityAt)
   const minute = 60_000
   const hour = 60 * minute
   const day = 24 * hour
@@ -779,7 +780,7 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
         && !draftSessionIds.has(s.id)
         && !hasPinnedVisibleParent(s, agentSessions)
       )
-      return sortAgentSessionsByUpdatedAtDesc(filtered)
+      return sortAgentSessionsByActivityDesc(filtered)
     },
     [agentSessions, viewMode, draftSessionIds]
   )
@@ -1054,7 +1055,7 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
     const remembered = agentSessions.find((session) => session.id === lastSessionByWorkspaceRef.current.get(workspaceId))
     const target = isEligible(remembered)
       ? remembered
-      : sortAgentSessionsByUpdatedAtDesc(agentSessions.filter(isEligible))[0]
+      : sortAgentSessionsByActivityDesc(agentSessions.filter(isEligible))[0]
     setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, workspaceId))
     if (target) {
       openSession('agent', target.id, target.title, { onOpened: () => setActiveView('conversations') })
@@ -1911,7 +1912,7 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
         sessionsByWorkspaceId.set(workspace.id, [])
       }
 
-      const visibleHistory = sortAgentSessionsByUpdatedAtDesc(
+      const visibleHistory = sortAgentSessionsByActivityDesc(
         agentSessions.filter((session) =>
           !session.archived
           && !session.pinned
@@ -3222,7 +3223,8 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
 // ===== 列表项操作按钮（相对时间 / 更多菜单，商业版 kMt） =====
 
 interface SessionItemActionsProps {
-  updatedAt: number
+  /** 会话的最后活跃时间（lastActivityAt，旧数据回退 updatedAt）。 */
+  activityAt: number
   relativeTimeNow: number
   menuItems: (
     MenuItem: typeof DropdownMenuItem,
@@ -3306,10 +3308,10 @@ function SafeTooltip({ children, content, side = 'top' }: SafeTooltipProps): Rea
 }
 
 /**
- * 列表项右侧默认显示相对更新时间，hover / 聚焦时替换为「更多会话操作」菜单（商业版 kMt）。
+ * 列表项右侧默认显示相对活跃时间，hover / 聚焦时替换为「更多会话操作」菜单（商业版 kMt）。
  */
 function SessionItemActions({
-  updatedAt,
+  activityAt,
   relativeTimeNow,
   menuItems,
   onMenuOpenChange,
@@ -3348,13 +3350,13 @@ function SessionItemActions({
       onClick={(e) => e.stopPropagation()}
     >
       <span
-        title={`最后更新：${new Date(updatedAt).toLocaleString('zh-CN')}`}
+        title={`最后活跃：${new Date(activityAt).toLocaleString('zh-CN')}`}
         className={cn(
           'block whitespace-nowrap text-right text-[12px] leading-[22px] tabular-nums text-foreground/35 transition-opacity duration-100',
           menuOpen ? 'opacity-0' : 'opacity-100 group-hover:opacity-0 group-focus-within:opacity-0',
         )}
       >
-        {formatRelativeUpdatedAt(updatedAt, relativeTimeNow)}
+        {formatRelativeActivityAt(activityAt, relativeTimeNow)}
       </span>
       <div
         className={cn(
@@ -3401,6 +3403,25 @@ const SESSION_ACCENT_INDICATOR_CLASS: Record<SessionLeftAccent, string> = {
   orange: 'bg-orange-500',
   blue: 'bg-blue-500',
   green: 'bg-green-500',
+}
+
+/**
+ * 标题前的运行状态点：只有非 idle 状态才渲染。
+ * 与左侧 accent 并存，accent 表达整行的状态底色，状态点负责在标题行首给出即时可读的指示。
+ */
+const SESSION_STATUS_DOT_CLASS: Record<SessionIndicatorStatus, string> = {
+  idle: 'hidden',
+  running: 'bg-blue-500 animate-pulse',
+  blocked: 'bg-orange-500',
+  completed: 'bg-green-500',
+}
+
+/** 状态点的可访问名称；idle 不渲染，占位为空串。 */
+const SESSION_STATUS_DOT_LABEL: Record<SessionIndicatorStatus, string> = {
+  idle: '',
+  running: '会话运行中',
+  blocked: '需要确认',
+  completed: '已完成',
 }
 
 function getSessionLeftAccent(status: SessionIndicatorStatus): SessionLeftAccent | undefined {
@@ -3646,6 +3667,16 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
     </>
   )
 
+  // 标题行首的运行状态点：idle 不渲染，running 用 animate-pulse 表达进行中
+  const statusDot = indicatorStatus === 'idle' ? null : (
+    <span
+      role="img"
+      aria-label={SESSION_STATUS_DOT_LABEL[indicatorStatus]}
+      title={SESSION_STATUS_DOT_LABEL[indicatorStatus]}
+      className={cn('flex-shrink-0 size-1.5 rounded-full', SESSION_STATUS_DOT_CLASS[indicatorStatus])}
+    />
+  )
+
   const starButton = (
     <SafeTooltip content={session.starred ? '取消收藏' : '收藏会话（不会被自动归档）'} side="top">
       <button
@@ -3725,11 +3756,12 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
             active && leftAccent !== 'orange' && 'bg-foreground/[0.08]',
           )}
         >
-          {leftAccent && (
+          {/* 左侧状态竖条只在 blocked 时上色：running/completed 的配色交给标题前的状态点，避免重复提示 */}
+          {leftAccent === 'orange' && (
             <span
               className={cn(
                 'absolute inset-y-0 left-0 w-[3px] rounded-l-md pointer-events-none',
-                leftAccent ? SESSION_ACCENT_INDICATOR_CLASS[leftAccent] : 'bg-primary',
+                SESSION_ACCENT_INDICATOR_CLASS.orange,
               )}
             />
           )}
@@ -3737,7 +3769,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
             {layout === 'favorite' ? (
               <div className="favorite-session-content">
                 <div className="favorite-session-copy">
-                  <div className={cn('favorite-session-title', active ? 'text-foreground' : 'text-foreground/90')}>{titleNode}</div>
+                  <div className={cn('favorite-session-title', statusDot ? 'gap-1.5' : undefined, active ? 'text-foreground' : 'text-foreground/90')}>{statusDot}{titleNode}</div>
                   {workspaceName && (
                     <div title={workspaceName} className="favorite-session-context truncate text-[length:calc(13px+var(--reading-font-size-offset,0px))] leading-5 text-foreground/60">
                       {workspaceName}
@@ -3751,6 +3783,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                 'flex items-center gap-1.5 truncate text-[length:calc(15px+var(--reading-font-size-offset,0px))] font-medium leading-5',
                 active ? 'text-foreground' : 'text-foreground/90',
               )}>
+                {statusDot}
                 {leadingIcons}
                 {titleNode}
                 {starButton}
@@ -3806,7 +3839,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                 </div>
               )}
               <SessionItemActions
-                updatedAt={session.updatedAt}
+                activityAt={getAgentSessionActivityAt(session)}
                 relativeTimeNow={relativeTimeNow}
                 onMenuOpenChange={setMenuOpen}
                 menuItems={menuItems}
@@ -3931,11 +3964,12 @@ function getVisibleAgentProjectSessions({
       const delta = ACTIVE_SESSION_STATUS_PRIORITY[getSessionTreeStatus(a, agentIndicatorMap)]
         - ACTIVE_SESSION_STATUS_PRIORITY[getSessionTreeStatus(b, agentIndicatorMap)]
       if (delta !== 0) return delta
-      return b.session.updatedAt - a.session.updatedAt
+      // 同一状态内按最后活跃时间排：元数据变更不应改变折叠区的展开顺序。
+      return getAgentSessionActivityAt(b.session) - getAgentSessionActivityAt(a.session)
     })
   const activeIds = collectAgentSessionTreeIds(activeSessions)
   const fillSessions = treeItems
-    .filter((item) => !activeIds.has(item.session.id) && item.session.updatedAt >= recentCutoff)
+    .filter((item) => !activeIds.has(item.session.id) && getAgentSessionActivityAt(item.session) >= recentCutoff)
     .slice(0, PROJECT_SESSION_PREVIEW_LIMIT)
   const collapsedSessions = [...activeSessions, ...fillSessions]
   const collapsedIds = new Set(collapsedSessions.map((item) => item.session.id))

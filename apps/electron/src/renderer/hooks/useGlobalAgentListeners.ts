@@ -17,9 +17,7 @@ import {
   agentSessionMessageQueueAtom,
   agentSessionsAtom,
   agentMessageRefreshAtom,
-  allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
-  allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
   recentlyModifiedPathsAtom,
   RECENTLY_MODIFIED_TTL_MS,
@@ -32,10 +30,7 @@ import {
   agentSessionChannelMapAtom,
   agentModelIdAtom,
   agentChannelIdAtom,
-  agentPermissionModeMapAtom,
-  agentDefaultPermissionModeAtom,
   stoppedByUserSessionsAtom,
-  agentPlanModeSessionsAtom,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -51,6 +46,7 @@ import {
   agentSelectedWorktreeAtom,
   agentNonGitFileChangesAtom,
   agentFileChangesCurrentRunAtom,
+  agentViewedChangeRunAtom,
   agentSidePanelOpenAtomFamily,
   revealChangedWorkspaceComponentAtom,
   agentSideDelegationMapAtom,
@@ -67,7 +63,8 @@ import {
 } from '@/atoms/notifications'
 import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
+import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, isUserPriorityWorkspaceComponentTab } from '@/atoms/agent-atoms'
+import { hasUnviewedRunChanges, shouldAutoRevealChanges } from '@/lib/agent-change-reveal'
 import { channelsAtom } from '@/atoms/channel-atoms'
 import {
   getPreviewContentRefreshKey,
@@ -95,12 +92,10 @@ import {
   markSessionCompletionViewed,
   notifyAgentCompletion,
 } from '@/lib/agent-completion-presence'
-import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { detectIsWindows } from '@/lib/platform'
 import { arePathsEqual, getInactiveSessionFileChangePaths, getSessionFileChangeKind, getOwnedSessionWatcherPaths, removeSessionFileChange, upsertSessionFileChange, type SessionFileChange } from '@/lib/session-file-changes'
 import { rememberStopGenerationTarget } from '@/lib/stop-generation-target'
 import { doesWorkspaceChangeAffectPreview } from '@/components/diff/preview-open-path'
-import { openPreviewInStore } from '@/components/diff/preview-opener'
 import { removeQueuedMessage, createQueuedAgentStreamState, createAgentQueuedMessage } from '@/lib/agent-message-queue'
 import { createAgentStreamEventBatcher } from '@/lib/agent-stream-event-batcher'
 import { getChangedWorkspaceComponentFromSdkMessage, shouldRevealChangedWorkspaceComponentImmediately } from '@/lib/agent-component-activation'
@@ -261,29 +256,15 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
   if (payload.kind === 'proma_event') {
     const evt = payload.event
     switch (evt.type) {
-      case 'permission_request':
-        return [{ type: 'permission_request', request: evt.request }]
-      case 'permission_resolved':
-        return [{ type: 'permission_resolved', requestId: evt.requestId, behavior: evt.behavior }]
       case 'ask_user_request':
         return [{ type: 'ask_user_request', request: evt.request }]
       case 'ask_user_resolved':
         return [{ type: 'ask_user_resolved', requestId: evt.requestId }]
-      case 'exit_plan_mode_request':
-        return [{ type: 'exit_plan_mode_request', request: evt.request }]
-      case 'exit_plan_mode_resolved':
-        return [{ type: 'exit_plan_mode_resolved', requestId: evt.requestId }]
-      case 'enter_plan_mode':
-        return [{ type: 'enter_plan_mode', sessionId: evt.sessionId }]
-      case 'plan_mode_changed':
-        return [{ type: 'plan_mode_changed', active: evt.active, source: evt.source }]
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'context_window':
         // main 进程从 SDK result 拿到的真实 contextWindow，转成 usage_update 让 atom 合并到 streamState
         return [{ type: 'usage_update', usage: { contextWindow: evt.contextWindow } }]
-      case 'permission_mode_changed':
-        return [{ type: 'permission_mode_changed', mode: evt.mode }]
       case 'run_resumed':
         return [{ type: 'run_resumed' }]
       case 'retry': {
@@ -300,6 +281,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
             maxAttempts: evt.maxAttempts,
             delaySeconds: evt.delaySeconds ?? 0,
             reason: evt.reason ?? '',
+            reasonKind: evt.reasonKind,
             scheduledAt: evt.scheduledAt,
             ...retryScope,
           })
@@ -361,14 +343,6 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
           const tb = block as SDKContentBlock & { id: string; name: string; input: Record<string, unknown> }
           const intent = (tb.input._intent as string | undefined)
             ?? (tb.name === 'Bash' ? (tb.input.description as string | undefined) : undefined)
-          const planModeChange = getPlanModeChangeFromToolName(tb.name)
-          if (planModeChange) {
-            events.push({
-              type: 'plan_mode_changed',
-              active: planModeChange.active,
-              source: planModeChange.source,
-            })
-          }
           events.push({
             type: 'tool_start',
             toolName: tb.name,
@@ -727,6 +701,8 @@ export function useGlobalAgentListeners(): void {
           workspaceId: activation.workspaceId,
           modelId: activation.modelId,
           createdAt: event.startedAt,
+          // 新运行开始即一次活动：排序用它，而不是下面只表示元数据写入的 updatedAt。
+          lastActivityAt: event.startedAt,
           updatedAt: event.startedAt,
         }
         const duplicateRunStart = currentStreamState?.runGeneration != null && event.runGeneration != null
@@ -931,64 +907,6 @@ export function useGlobalAgentListeners(): void {
         return next
       })
     }
-
-    const openPlanDocumentPreview = (sessionId: string, planDocument: NonNullable<import('@proma/shared').ExitPlanModeRequest['planDocument']>): void => {
-      const planPreview: PreviewFile = {
-        filePath: planDocument.filePath,
-        previewOnly: true,
-        readOnly: true,
-      }
-      openPreviewInStore(store, sessionId, planPreview)
-      // 同一路径在反馈后重新提交时必须绕过旧内容缓存，确保审批页重读本次哈希对应的文件版本。
-      bumpPreviewContentRefresh(sessionId, planPreview)
-    }
-
-    // pending 快照与实时事件可以乱序抵达。保留有限的已解决 ID，避免迟到快照复活已处理横幅。
-    const resolvedExitPlanRequestIds = new Set<string>()
-    const markExitPlanRequestResolved = (requestId: string): void => {
-      resolvedExitPlanRequestIds.add(requestId)
-      if (resolvedExitPlanRequestIds.size > 256) {
-        const oldest = resolvedExitPlanRequestIds.values().next().value
-        if (oldest) resolvedExitPlanRequestIds.delete(oldest)
-      }
-      store.set(allPendingExitPlanRequestsAtom, (prev) => {
-        let changed = false
-        const next = new Map(prev)
-        for (const [sessionId, requests] of prev) {
-          const remaining = requests.filter((request) => request.requestId !== requestId)
-          if (remaining.length === requests.length) continue
-          changed = true
-          if (remaining.length > 0) next.set(sessionId, remaining)
-          else next.delete(sessionId)
-        }
-        return changed ? next : prev
-      })
-    }
-
-    const queueExitPlanRequest = (request: import('@proma/shared').ExitPlanModeRequest): boolean => {
-      if (resolvedExitPlanRequestIds.has(request.requestId)) return false
-      let inserted = false
-      store.set(allPendingExitPlanRequestsAtom, (prev) => {
-        const current = prev.get(request.sessionId) ?? []
-        if (current.some((item) => item.requestId === request.requestId)) return prev
-        inserted = true
-        const map = new Map(prev)
-        map.set(request.sessionId, [...current, request])
-        return map
-      })
-      return inserted
-    }
-
-    // renderer 重载后，主进程仍保留未决审批；恢复横幅时同步重建只读计划预览。
-    void window.electronAPI.getPendingRequests()
-      .then(({ exitPlans }) => {
-        for (const request of exitPlans) {
-          if (queueExitPlanRequest(request) && request.planDocument) {
-            openPlanDocumentPreview(request.sessionId, request.planDocument)
-          }
-        }
-      })
-      .catch((error) => console.warn('[GlobalAgentListeners] 恢复待处理审批请求失败', error))
 
     const refreshAffectedPreviews = (filePaths: readonly string[]): void => {
       if (filePaths.length === 0) return
@@ -1587,23 +1505,6 @@ export function useGlobalAgentListeners(): void {
               map.set(sessionId, event.suggestion)
               return map
             })
-          } else if (event.type === 'permission_request') {
-            // 权限请求入队（统一通道，不区分当前/后台会话）
-            store.set(allPendingPermissionRequestsAtom, (prev) => {
-              const map = new Map(prev)
-              const current = map.get(sessionId) ?? []
-              map.set(sessionId, [...current, event.request])
-              return map
-            })
-            // 桌面通知（带提示音 + 会话导航）
-            sendBlockingNotification(
-              sessionId,
-              '需要权限确认',
-              event.request.toolName
-                ? `Agent 请求使用工具: ${event.request.toolName}`
-                : 'Agent 需要你的权限确认',
-              'permissionRequest'
-            )
           } else if (event.type === 'ask_user_request') {
             // AskUser 请求入队（统一通道，不区分当前/后台会话）
             store.set(allPendingAskUserRequestsAtom, (prev) => {
@@ -1638,49 +1539,6 @@ export function useGlobalAgentListeners(): void {
               map.delete(event.requestId)
               return map
             })
-          } else if (event.type === 'exit_plan_mode_request') {
-            // 计划文件已由主进程限定在当前会话 plan/ 目录。审批到达时自动以只读 Markdown 打开；
-            // 不切换主会话，因此后台会话不会抢走用户的当前工作。
-            if (queueExitPlanRequest(event.request) && event.request.planDocument) {
-              openPlanDocumentPreview(sessionId, event.request.planDocument)
-            }
-            // 退出 Plan 模式指示状态
-            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) => {
-              if (!prev.has(sessionId)) return prev
-              const next = new Set(prev)
-              next.delete(sessionId)
-              return next
-            })
-            // 桌面通知（带提示音 + 会话导航）
-            sendBlockingNotification(
-              sessionId,
-              'Agent 计划待审批',
-              'Agent 已完成计划，等待你的审批',
-              'exitPlanMode'
-            )
-          } else if (event.type === 'exit_plan_mode_resolved') {
-            markExitPlanRequestResolved(event.requestId)
-          } else if (event.type === 'enter_plan_mode') {
-            // 进入 Plan 模式
-            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) =>
-              updatePlanModeSessionSet(prev, sessionId, true)
-            )
-          } else if (event.type === 'plan_mode_changed') {
-            // 计划阶段变化只影响输入框/横幅状态，不改用户选择的权限模式
-            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) =>
-              updatePlanModeSessionSet(prev, sessionId, event.active)
-            )
-          } else if (event.type === 'permission_mode_changed') {
-            // 权限模式变更（如 Plan 模式退出后切换到完全自动）
-            console.log(`[GlobalAgentListeners] 权限模式变更: ${event.mode}`)
-            store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@proma/shared').PromaPermissionMode>) => {
-              const next = new Map(prev)
-              next.set(sessionId, event.mode)
-              return next
-            })
-            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) =>
-              updatePlanModeSessionSet(prev, sessionId, event.mode === 'plan')
-            )
           } else if (event.type === 'run_resumed') {
             // 后台任务完成自动唤醒：从"空闲可输入"恢复到"运行中"。
             store.set(agentSessionStreamingStateAtomFamily(sessionId), (current) => {
@@ -1773,6 +1631,48 @@ export function useGlobalAgentListeners(): void {
           })
           return map
         })
+
+        // 任务真正结束（非软空闲态）且本轮有用户尚未查看的文件改动时，把右侧切到改动区。
+        // 判定与 revealChangedWorkspaceComponentAtom 一致地克制：用户在读 Skills / 记忆时不抢焦点。
+        // 只处理当前激活会话：后台会话的右侧工作区并不在用户眼前，提前展开并清除未查看标记会掩盖后续提示。
+        if (!backgroundTasksPending && data.sessionId === store.get(currentAgentSessionIdAtom)) {
+          const revealedSessionId = data.sessionId
+          const currentRunId = store.get(agentFileChangesCurrentRunAtom).get(revealedSessionId)
+          const hasUnviewedChanges = hasUnviewedRunChanges({
+            currentRunId,
+            viewedRunId: store.get(agentViewedChangeRunAtom).get(revealedSessionId),
+            gitChangesUnseen: store.get(agentDiffUnseenChangesAtom).get(revealedSessionId),
+            nonGitChanges: store.get(agentNonGitFileChangesAtom).get(revealedSessionId),
+          })
+          const sidePanelOpen = store.get(agentSidePanelOpenAtomFamily(revealedSessionId))
+          const activeTab = store.get(agentDiffPanelTabAtom).get(revealedSessionId)
+          if (currentRunId && shouldAutoRevealChanges({
+            hasUnviewedChanges,
+            sidePanelOpen,
+            preservesUserFocus: isUserPriorityWorkspaceComponentTab(activeTab),
+          })) {
+            store.set(agentSidePanelOpenAtomFamily(revealedSessionId), true)
+            store.set(agentDiffPanelTabAtom, (previous) => {
+              if (previous.get(revealedSessionId) === 'changes') return previous
+              const next = new Map(previous)
+              next.set(revealedSessionId, 'changes')
+              return next
+            })
+            // 自动展开后改动区已在眼前，立即记为已查看，避免下一轮完成前一直提示。
+            store.set(agentViewedChangeRunAtom, (previous) => {
+              if (previous.get(revealedSessionId) === currentRunId) return previous
+              const next = new Map(previous)
+              next.set(revealedSessionId, currentRunId)
+              return next
+            })
+            store.set(agentDiffUnseenChangesAtom, (previous) => {
+              if (previous.get(revealedSessionId) === false) return previous
+              const next = new Map(previous)
+              next.set(revealedSessionId, false)
+              return next
+            })
+          }
+        }
 
         const completionParentSessionId = completionSession?.parentSessionId
         if (data.triggeredBy === 'delegation' || completionSession?.sourceDelegationId) {
@@ -1879,14 +1779,6 @@ export function useGlobalAgentListeners(): void {
             : fallback
           toast.warning(msg, { duration: 8000 })
         }
-
-        // 清除 Plan 模式状态（防止异常退出时残留）
-        store.set(agentPlanModeSessionsAtom, (prev: Set<string>) => {
-          if (!prev.has(data.sessionId)) return prev
-          const next = new Set(prev)
-          next.delete(data.sessionId)
-          return next
-        })
 
         /** 竞态保护：检查该会话是否已有新的流式请求正在运行 */
         const isNewStreamRunning = (): boolean => {
@@ -2010,8 +1902,9 @@ export function useGlobalAgentListeners(): void {
       store.set(tabsAtom, (tabs) => updateTabTitle(tabs, sessionId, title))
       const existing = store.get(agentSessionsAtom).find((session) => session.id === sessionId)
       if (existing) {
-        // 标题写入会更新 updatedAt；本地以当前时刻维持与后端一致的“最近会话”排序，
-        // 不再为一行标题变化传输整个会话索引。
+        // 标题写入会抬后端的 updatedAt；本地同步一个更新的 updatedAt 只为让快照合并的
+        // 并发保护把这条新标题视为最新，不必为一行标题变化传输整个会话索引。
+        // 会话在列表中的位置由 lastActivityAt 决定，这里只改标题不会让它跳位。
         store.set(agentSessionsAtom, (prev) => upsertAgentSession(prev, {
           ...existing,
           title,

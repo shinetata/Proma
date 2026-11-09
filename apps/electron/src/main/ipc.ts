@@ -347,7 +347,13 @@ import {
   removeWorktreeRepo,
   cleanupStaleWorkspaceAttachedPaths,
 } from './lib/agent-workspace-manager'
-import { readGlobalProfile, writeGlobalProfile } from './lib/global-profile-memory'
+import {
+  readGlobalProfile,
+  readGlobalProfileHistory,
+  readGlobalProfileHistoryVersion,
+  restoreGlobalProfileHistory,
+  writeGlobalProfile,
+} from './lib/global-profile-memory'
 import { movePathSafely } from './lib/file-move-service'
 import { subscribeWorkspaceMemoryChanges } from './lib/workspace-memory-change-watcher'
 import { confirmWorkspaceMemoryWindowClose, markWorkspaceMemoryWindowReady } from './lib/workspace-memory-window'
@@ -3335,6 +3341,27 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.WRITE_GLOBAL_PROFILE,
     async (_, workspaceSlug: string, revision: string, content: string) => {
       return writeGlobalProfile(getAgentMemoryContext(workspaceSlug), revision, content)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_GLOBAL_PROFILE_HISTORY,
+    async (_, workspaceSlug: string, limit?: number) => {
+      return readGlobalProfileHistory(getAgentMemoryContext(workspaceSlug), limit)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_GLOBAL_PROFILE_HISTORY_VERSION,
+    async (_, workspaceSlug: string, revision: string) => {
+      return readGlobalProfileHistoryVersion(getAgentMemoryContext(workspaceSlug), revision)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RESTORE_GLOBAL_PROFILE_HISTORY,
+    async (_, workspaceSlug: string, revision: string, expectedRevision: string) => {
+      return restoreGlobalProfileHistory(getAgentMemoryContext(workspaceSlug), revision, expectedRevision)
     },
   )
 

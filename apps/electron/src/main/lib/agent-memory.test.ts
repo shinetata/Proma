@@ -15,13 +15,18 @@ import {
   ensureMemoryFiles,
   hasMemoryAssociation,
   linkProjectMemory,
+  listMemoryHistory,
   memoryAssociation,
+  memoryHistoryDirectory,
   memoryPaths,
   memoryRevision,
   pendingMemoryMigrations,
   readMemoryFile,
+  readMemoryHistoryVersion,
   readMemoryReview,
+  restoreMemoryVersion,
   updateMemory,
+  updateMemoryEntries,
   withMemoryLock,
   type AgentMemoryContext,
 } from './agent-memory'
@@ -99,6 +104,30 @@ describe('预算、历史与复查', () => {
     expect(readMemoryReview(ctx, reviewed).checkedAt).toBeGreaterThan(0)
   })
 
+  test('内容变化时写入历史元信息，内容不变不产生新元信息', () => {
+    const ctx = createContext()
+    ensureMemoryFiles(ctx)
+    const path = memoryPaths(ctx).index
+    const first = readMemoryFile(path)
+    const updated = updateMemory(ctx, 'MEMORY.md', first.revision, '# 项目记忆索引\n\n主题 A\n', '写入主题 A')
+
+    const metaPath = join(memoryHistoryDirectory(ctx, path), `${updated.revision}.json`)
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as {
+      revision: string
+      savedAt: number
+      summary: string
+      chars: number
+    }
+    expect(meta.revision).toBe(updated.revision)
+    expect(meta.summary).toBe('写入主题 A')
+    expect(meta.chars).toBe((updated.content ?? '').length)
+    expect(meta.savedAt).toBeGreaterThan(0)
+
+    // 内容不变时只刷新复查记录，元信息时间不变。
+    updateMemory(ctx, 'MEMORY.md', updated.revision, updated.content ?? '', '复查未修改')
+    expect((JSON.parse(readFileSync(metaPath, 'utf8')) as { savedAt: number }).savedAt).toBe(meta.savedAt)
+  })
+
   test('复查周期为 7 天，且记录只对同一 revision 生效', () => {
     const ctx = createContext()
     ensureMemoryFiles(ctx)
@@ -154,5 +183,111 @@ describe('归档与项目关联', () => {
     expect(pendingMemoryMigrations(ctx)).toHaveLength(1)
     expect(() => ensureMemoryFiles(ctx)).toThrow('有未完成的画像迁移')
     rmSync(ctx.globalDir, { recursive: true, force: true })
+  })
+})
+
+describe('单条条目操作', () => {
+  const CONTENT = '# 全局用户画像\n\n- 甲\n- 乙\n'
+
+  function seed(): { ctx: AgentMemoryContext; path: string; revision: string } {
+    const ctx = createContext()
+    ensureMemoryFiles(ctx)
+    const path = memoryPaths(ctx).profile
+    const first = readMemoryFile(path)
+    const written = updateMemory(ctx, 'global-profile', first.revision, CONTENT, '初始画像')
+    return { ctx, path, revision: written.revision }
+  }
+
+  test('add / update / remove 只动目标条目并回报 changes', () => {
+    const { ctx, path, revision } = seed()
+    const result = updateMemoryEntries(
+      ctx,
+      'global-profile',
+      revision,
+      [
+        { op: 'add', entry: '丙', after: '- 甲' },
+        { op: 'update', match: '- 乙', entry: '乙改' },
+      ],
+      '补充与修正',
+    )
+    expect(result.changes).toEqual([
+      { op: 'add', entry: '- 丙' },
+      { op: 'update', entry: '- 乙改' },
+    ])
+    expect(result.skipped).toEqual([])
+    expect(result.content).toBe('# 全局用户画像\n\n- 甲\n- 丙\n- 乙改\n')
+    expect(readMemoryFile(path).content).toBe(result.content)
+    // 未命中与重复只进 skipped，不写盘。
+    const skipped = updateMemoryEntries(
+      ctx,
+      'global-profile',
+      result.revision,
+      [
+        { op: 'add', entry: '甲' },
+        { op: 'remove', match: '不存在' },
+      ],
+      '无实际变化',
+    )
+    expect(skipped.changes).toEqual([])
+    expect(skipped.skipped.map((item) => item.reason)).toEqual(['duplicate', 'not-found'])
+    expect(skipped.revision).toBe(result.revision)
+  })
+
+  test('版本不一致时拒绝条目写入', () => {
+    const { ctx, revision } = seed()
+    updateMemory(ctx, 'global-profile', revision, '# 全局用户画像\n\n- 甲改\n', '并发写入')
+    expect(() => updateMemoryEntries(ctx, 'global-profile', revision, [{ op: 'add', entry: '丙' }], '并发条目')).toThrow(
+      '记忆已被其他会话修改',
+    )
+  })
+
+  test('空操作列表报错', () => {
+    const { ctx, revision } = seed()
+    expect(() => updateMemoryEntries(ctx, 'global-profile', revision, [], '空操作')).toThrow('请提供至少一条条目操作')
+  })
+})
+
+describe('历史版本读取与恢复', () => {
+  test('列出历史版本、读取指定版本并恢复', () => {
+    const ctx = createContext()
+    ensureMemoryFiles(ctx)
+    const path = memoryPaths(ctx).profile
+    const first = readMemoryFile(path)
+    const v1 = updateMemory(ctx, 'global-profile', first.revision, '# 全局用户画像\n\n- 旧事实\n', '第一版')
+    const v2 = updateMemory(ctx, 'global-profile', v1.revision, '# 全局用户画像\n\n- 新事实\n', '第二版')
+
+    const history = listMemoryHistory(ctx, 'global-profile')
+    expect(history.some((entry) => entry.revision === v2.revision && entry.current)).toBe(true)
+    const v1Entry = history.find((entry) => entry.revision === v1.revision)
+    expect(v1Entry?.summary).toBe('第一版')
+    expect(v1Entry?.chars).toBe((v1.content ?? '').length)
+    expect(v1Entry?.current).toBe(false)
+
+    expect(readMemoryHistoryVersion(ctx, 'global-profile', v1.revision).content).toBe(v1.content)
+    expect(readMemoryHistoryVersion(ctx, 'global-profile', v2.revision).content).toBe(v2.content)
+
+    const restored = restoreMemoryVersion(ctx, 'global-profile', v1.revision, v2.revision)
+    expect(restored.content).toBe(v1.content)
+    expect(readMemoryFile(path).content).toBe(v1.content)
+    // 恢复本身也写一版历史，被覆盖的内容仍可找回。
+    expect(readMemoryHistoryVersion(ctx, 'global-profile', v2.revision).content).toBe(v2.content)
+  })
+
+  test('恢复时版本标识与并发校验', () => {
+    const ctx = createContext()
+    ensureMemoryFiles(ctx)
+    const path = memoryPaths(ctx).profile
+    const first = readMemoryFile(path)
+    const v1 = updateMemory(ctx, 'global-profile', first.revision, '# 全局用户画像\n\n- 旧事实\n', '第一版')
+    const v2 = updateMemory(ctx, 'global-profile', v1.revision, '# 全局用户画像\n\n- 新事实\n', '第二版')
+
+    expect(() => readMemoryHistoryVersion(ctx, 'global-profile', 'bad-revision')).toThrow('历史版本标识无效')
+    expect(() =>
+      readMemoryHistoryVersion(ctx, 'global-profile', 'a'.repeat(64)),
+    ).toThrow('该历史版本不存在或已被清理')
+    expect(() => restoreMemoryVersion(ctx, 'global-profile', v1.revision, v1.revision)).toThrow(
+      '记忆已被其他会话修改，请刷新后再恢复',
+    )
+    expect(readMemoryFile(path).content).toBe(v2.content)
   })
 })

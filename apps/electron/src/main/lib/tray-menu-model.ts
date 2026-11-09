@@ -1,4 +1,4 @@
-import type { AgentSessionMeta, AgentWorkspace } from '@proma/shared'
+import { compareAgentSessionsByActivityDesc, type AgentSessionMeta, type AgentWorkspace } from '@proma/shared'
 
 export const TRAY_RECENT_LIMIT = 3
 export const TRAY_MORE_LIMIT = 10
@@ -38,10 +38,12 @@ export function createTrayMenuModel(
   runningSessionIds: Set<string> = new Set(),
 ): TrayMenuModel {
   const workspacesById = new Map(workspaces.map((workspace) => [workspace.id, workspace]))
+  // 托盘「最近会话」按最后活跃时间排序：标记已读、改标题等元数据变更不应让
+  // 旧会话挤掉用户真正刚用过的会话。
   const visibleSessions = sessions
     .filter((session) => !session.archived || runningSessionIds.has(session.id))
     .slice()
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .sort(compareAgentSessionsByActivityDesc)
 
   const runningSessions = visibleSessions
     .filter((session) => runningSessionIds.has(session.id))

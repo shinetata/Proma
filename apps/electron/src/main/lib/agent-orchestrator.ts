@@ -15,7 +15,6 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
@@ -23,7 +22,6 @@ import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, GithubCopilotOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
-  PROMA_PERMISSION_MODE_CONFIG,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -36,7 +34,7 @@ import {
   collectSkillActivations,
   mergeSkillActivations,
 } from '@proma/shared'
-import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
+import type { PromaPermissionMode, AskUserRequest, SDKSystemMessage } from '@proma/shared'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import { getMainRepoRoot } from './git-diff-service'
 import { getPiAssistantErrorDetails, hasPiAssistantTextContent, stripPiAssistantError } from './adapters/pi-message-adapter'
@@ -50,7 +48,7 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, resolveSessionWorkbenchContextDir, isAgentSessionDeleting } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, isAgentSessionDeleting } from './agent-session-manager'
 import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getMcpApiKeyEnvironment, getMcpOAuthHeaders } from './mcp-oauth-service'
@@ -67,9 +65,8 @@ import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { resolvePlanningDeletionPermission } from './planning-permission-policy'
 import { askUserService } from './agent-ask-user-service'
-import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
+import { exitPlanService } from './agent-exit-plan-service'
 import { validateToolInput } from './agent-tool-input-validator'
-import { isSessionPlanMarkdownPath } from './agent-plan-file-policy'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { getAgentVaultRoots, getVaultUserContext } from './vault-service'
@@ -77,7 +74,12 @@ import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { buildAgentRuntimeEnv, type AgentRuntimeEnv } from './agent-runtime-env'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
-import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
+import { resolvePiApi, resolvePiReasoningCapability } from './adapters/pi-model-registry'
+import {
+  armThinkingStripForSession,
+  isClaudeFamilyModelId,
+  isOpaqueUpstream400,
+} from './adapters/pi-thinking-replay'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { browserController } from './browser-controller'
@@ -231,9 +233,6 @@ export class AgentOrchestrator {
   private stoppedBySessions = new Map<string, number>()
   /** 队列启动投影已显示、但运行槽尚未占用时的停止请求。 */
   private stoppedBeforeRunSessions = new Set<string>()
-
-  /** 运行中会话的当前权限模式（支持运行时动态切换） */
-  private sessionPermissionModes = new Map<string, PromaPermissionMode>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
@@ -683,7 +682,7 @@ export class AgentOrchestrator {
     callbacks: SessionCallbacks,
     extensions: { piCustomTools?: ToolDefinition[] } = {},
   ): Promise<void> {
-    const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
+    const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
     // Capture the focus once per turn. Later UI focus changes must not rewrite this reply's attribution.
     const initialVaultFocus = getVaultUserContext(sessionId)
     const streamStartedAt = input.startedAt ?? Date.now()
@@ -942,7 +941,6 @@ export class AgentOrchestrator {
       if (ownsActiveRun) {
         this.activeSessions.delete(sessionId)
         this.activeSessionStartedAt.delete(sessionId)
-        this.sessionPermissionModes.delete(sessionId)
         this.queuedMessageUuids.delete(sessionId)
       }
     }
@@ -1069,9 +1067,7 @@ export class AgentOrchestrator {
       const memoryContext = workspaceSlug
         ? (() => {
             const context = getAgentMemoryContext(workspaceSlug, projectKnowledgeRoot)
-            if ((permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE) === 'plan') {
-              context.allowInstructionMaintenance = false
-            }
+            // 计划模式已下线，不再根据历史 permissionMode 关闭指令维护。
             if (input.triggeredBy === 'automation' || input.triggeredBy === 'delegation') {
               context.allowProfileMigration = false
               context.workspaces = []
@@ -1091,7 +1087,8 @@ export class AgentOrchestrator {
         workspaceSlug,
         agentCwd,
         allowedRoots: browserAllowedRoots,
-        permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE,
+        // 权限模式不再参与运行时判定，传默认值保持字段管线完整。
+        permissionMode: PROMA_DEFAULT_PERMISSION_MODE,
         triggeredBy: input.triggeredBy,
         windowsShellAvailable: process.platform !== 'win32' || runtimeEnv.shellKind != null,
         lastWindowsTerminalProfile: appSettings.lastWindowsTerminalProfile,
@@ -1169,166 +1166,34 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 无 resume，已回填历史上下文（最近 ${MAX_CONTEXT_MESSAGES} 条消息）`)
       }
 
-      // 12. 读取应用设置并确定权限模式
-      // 权限模式只属于当前 session；新会话默认完全自动模式。
-      const initialPermissionMode: PromaPermissionMode = permissionModeOverride
-        ?? PROMA_DEFAULT_PERMISSION_MODE
-      // 注册到 Map，支持运行中动态切换
-      this.sessionPermissionModes.set(sessionId, initialPermissionMode)
-      console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
-
-      const emitPlanModeChanged = (active: boolean, source: 'initial' | 'tool' | 'permission'): void => {
-        this.eventBus.emit(sessionId, {
-          kind: 'proma_event',
-          event: { type: 'plan_mode_changed', sessionId, active, source },
-        })
-      }
-
-      // 当初始模式为 plan 时，通知渲染进程展示计划模式 UI（如「Agent 正在规划」横幅）
-      if (initialPermissionMode === 'plan') {
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
-        emitPlanModeChanged(true, 'initial')
-      }
-
-      /** 读取当前会话的实时权限模式（支持运行中切换） */
-      const getPermissionMode = (): PromaPermissionMode =>
-        this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
-
-      // 计划工件只允许来自当前会话的工作台 plan/ 目录；ExitPlanMode 服务会做 realpath + 哈希复核。
-      const sessionPlanDirectory = (() => {
-        const sessionContextDirectory = resolveSessionWorkbenchContextDir(
-          workspace,
-          sessionId,
-          getSessionWorkbenchLayout(sessionMeta),
-        )
-        return sessionContextDirectory ? join(sessionContextDirectory, 'plan') : undefined
-      })()
-      // 计划目录由 Proma 创建，确保后续路径策略不需要为首次写入放宽符号链接校验。
-      // 运行中切换到 Plan 模式时，也会在首次写入前调用此函数。
-      const ensureSessionPlanDirectory = (): boolean => {
-        if (!sessionPlanDirectory) return false
-        try {
-          mkdirSync(sessionPlanDirectory, { recursive: true })
-          return true
-        } catch (error) {
-          console.warn(`[Agent 编排] 创建计划目录失败: ${sessionPlanDirectory}`, error)
-          return false
-        }
-      }
-      if (initialPermissionMode === 'plan') ensureSessionPlanDirectory()
-
-      // ExitPlanMode 拦截器：plan 模式下走 UI 审批流程
-      const handleExitPlanMode = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<ExitPlanPermissionResult> => {
-        return exitPlanService.handleExitPlanMode(
-          sessionId,
-          toolInput,
-          signal,
-          (request: ExitPlanModeRequest) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
-          },
-          { planDirectory: sessionPlanDirectory },
-        )
-      }
-
-      /**
-       * 判断 Bash 命令是否是只读的（计划模式下安全可执行）
-       * 检测写操作特征：文件重定向、破坏性命令、包管理写操作、git 写操作等
-       */
-      const isBashCommandReadOnly = (command: string): boolean => {
-        // 输出重定向：匹配未被数字或 & 前置的 > 符号（排除 2>/dev/null、&> 等 fd 重定向）
-        if (/(?<![0-9&])>/.test(command)) return false
-        // 破坏性文件操作
-        if (/\b(rm|rmdir)\s/.test(command)) return false
-        if (/\bsed\s+[^|&;]*-i/.test(command)) return false  // sed -i 原地编辑
-        if (/\b(chmod|chown|chattr|truncate)\s/.test(command)) return false
-        if (/\b(mv|cp)\s/.test(command)) return false
-        if (/\b(mkdir|touch|mktemp)\s/.test(command)) return false
-        // 包管理器写操作
-        if (/\b(npm|pnpm|yarn|bun)\s+(install|i\b|add|remove|uninstall|update|upgrade|link|unlink)\b/.test(command)) return false
-        if (/\bpip[23]?\s+(install|uninstall|upgrade)\b/.test(command)) return false
-        if (/\b(apt|apt-get|brew|yum|dnf)\s+(install|remove|purge|uninstall|upgrade)\b/.test(command)) return false
-        // Git 写操作
-        if (/\bgit\s+(commit|push|checkout\s+-[bB]|branch\s+-[mMdD]|merge\b|rebase\b|reset\b|stash\s+(drop|pop)\b|add\b|apply\b|cherry-pick\b)/.test(command)) return false
-        // 进程控制
-        if (/\b(kill|killall|pkill)\s/.test(command)) return false
-        // 脚本执行（具有潜在副作用，如 node script.js / python main.py）
-        if (/\b(node|python[23]?|ruby|perl|php)\s+[^-]/.test(command)) return false
-        return true
-      }
-
-      /**
-       * 判断 PowerShell 命令是否可在计划模式只读执行。
-       * 为避免管道、重定向与别名隐含副作用，仅允许显式的只读 cmdlet，或沿用
-       * Bash 策略验证的 Git / JavaScript 工具链探索命令。
-       */
-      const isPowerShellCommandReadOnly = (command: string): boolean => {
-        const trimmed = command.trim()
-        if (!trimmed || /[;`|<>]/.test(trimmed) || /&&|\|\|/.test(trimmed)) return false
-
-        const [commandName] = trimmed.split(/\s+/, 1)
-        const normalizedName = commandName?.toLowerCase()
-        const readOnlyCmdlets = new Set([
-          'get-childitem', 'get-content', 'get-item', 'get-location', 'get-command', 'get-help',
-          'get-process', 'get-date', 'get-culture', 'get-module', 'measure-object',
-          'resolve-path', 'select-string', 'test-path',
-        ])
-        if (normalizedName && readOnlyCmdlets.has(normalizedName)) return true
-
-        return /^(git|bun|npm|pnpm|yarn)\s/.test(trimmed) && isBashCommandReadOnly(trimmed)
-      }
-
-      // Plan 模式下允许的只读工具（不包含 Write/Edit/Bash 等写操作）
-      const PLAN_MODE_ALLOWED_TOOLS = new Set([
-        'Read', 'Glob', 'Grep',
-        'TodoRead', 'TaskOutput',
-        'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
-        'ListMcpResourcesTool', 'ReadMcpResourceTool',
-      ])
-      const DEFERRED_OR_PROACTIVE_TOOLS = new Set([
-        'REPL', 'Workflow', 'ScheduleWakeup', 'Monitor', 'PushNotification',
-        'CronCreate', 'CronDelete', 'RemoteTrigger',
-      ])
-      // Planning 是本地用户数据：计划模式只允许查询，严禁创建、更新、删除或确认/推迟提醒。
-      const PLAN_MODE_READ_ONLY_PLANNING_TOOLS = new Set([
-        'mcp__planning__list_todos', 'mcp__planning__get_todo',
-        'mcp__planning__list_calendar_events', 'mcp__planning__get_calendar_event',
-        'mcp__planning__list_groups', 'mcp__planning__list_tags',
-        'mcp__planning__list_active_reminders',
-      ])
-      // Pi-native 浏览器工具不是 MCP：必须显式分类，避免被通用 mcp__ 调研放行规则遗漏。
-      const PLAN_MODE_READ_ONLY_BROWSER_TOOLS = new Set(['BrowserObserve', 'BrowserFind', 'BrowserExtract', 'BrowserScreenshot', 'BrowserListTabs', 'BrowserPreviewOpen'])
+      // 12. 权限模式与计划模式已下线
+      // 产品决策：不再向用户暴露权限模式选择，也不再逐次确认工具调用，工具直接执行。
+      // 保留权限模式字段与 canUseTool 管道：底层拦截能力（agent-permission-service、
+      // agent-exit-plan-service、agent-plan-file-policy）完整保留，便于日后恢复确认入口；
+      // 老会话索引里的 permissionMode 仍会被读取，但不再参与运行期判定。
+      const initialPermissionMode: PromaPermissionMode = PROMA_DEFAULT_PERMISSION_MODE
       const runTriggeredBy = input.triggeredBy
 
-      /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
-      let planModeEntered = initialPermissionMode === 'plan'
-
-      const syncPlanModeFromToolUse = (toolName: string): void => {
-        if (toolName === 'EnterPlanMode') {
-          planModeEntered = true
-          emitPlanModeChanged(true, 'tool')
-          return
-        }
-        if (toolName === 'ExitPlanMode' && getPermissionMode() === 'bypassPermissions') {
-          planModeEntered = false
-          emitPlanModeChanged(false, 'tool')
-          return
-        }
-        // auto/plan 下 ExitPlanMode 只是发起退出计划的审批请求。
-        // 真正退出由用户审批结果触发，不能在工具开始时提前清掉计划态。
-      }
-
-      // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
-      const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
-        const currentMode = getPermissionMode()
-
-        // ── 参数校验守卫（所有模式、所有工具，优先于权限检查） ──
+      /**
+       * 工具调用拦截管道
+       *
+       * wrapToolWithPermission 会把每个工具调用交给这里。管道保留，但不再向用户发起逐次确认：
+       * 除参数校验、AskUser 交互与无人值守删除边界外，其余调用一律放行。
+       */
+      const canUseTool = async (
+        toolName: string,
+        input: Record<string, unknown>,
+        options: CanUseToolOptions,
+      ): Promise<PermissionResult> => {
+        // ── 参数校验守卫（先于任何放行判断） ──
         const validationFailure = validateToolInput(toolName, input)
         if (validationFailure) {
-          console.warn(`[Agent 工具验证] 参数缺失: tool=${toolName}, mode=${currentMode}`)
+          console.warn(`[Agent 工具验证] 参数缺失: tool=${toolName}`)
           return validationFailure
         }
 
         // ── Write 大文件 token 截断防护 ──
+        // 这不是用户确认，而是「写入必然被截断」的前置判断，权限模式下线后仍然保留。
         if (toolName === 'Write' && typeof input.content === 'string') {
           const estimatedTokens = estimateTokenCount(input.content)
           if (estimatedTokens > WRITE_CONTENT_TOKEN_THRESHOLD) {
@@ -1344,45 +1209,7 @@ export class AgentOrchestrator {
           }
         }
 
-        // ── EnterPlanMode / ExitPlanMode 处理 ──
-
-        // 完全自动模式：计划进入和退出都透明化，保持 bypassPermissions 的无人值守语义。
-        if (currentMode === 'bypassPermissions' && (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode')) {
-          const active = toolName === 'EnterPlanMode'
-          planModeEntered = active
-          emitPlanModeChanged(active, 'tool')
-          return { behavior: 'allow' as const, updatedInput: input }
-        }
-
-        // ExitPlanMode：plan 模式下必须让用户确认计划。
-        if (toolName === 'ExitPlanMode') {
-          console.log(`[canUseTool] ExitPlanMode: signal.aborted=${options.signal.aborted}, planModeEntered=${planModeEntered}, mode=${currentMode}`)
-          const result = await handleExitPlanMode(input, options.signal)
-          if (result.behavior === 'allow' && 'targetMode' in result && result.targetMode) {
-            // 更新 Map，后续 canUseTool 调用使用新模式
-            this.sessionPermissionModes.set(sessionId, result.targetMode)
-            planModeEntered = false
-            emitPlanModeChanged(false, 'permission')
-            // 同步通知 SDK 侧切换权限模式
-            if (this.adapter.setPermissionMode) {
-              this.adapter.setPermissionMode(sessionId, result.targetMode).catch((err: unknown) => {
-                console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
-              })
-            }
-          }
-          return result
-        }
-
-        // EnterPlanMode：标记进入状态，通知渲染进程
-        if (toolName === 'EnterPlanMode') {
-          ensureSessionPlanDirectory()
-          planModeEntered = true
-          emitPlanModeChanged(true, 'tool')
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
-          return { behavior: 'allow' as const, updatedInput: input }
-        }
-
-        // AskUserQuestion：始终走交互式问答流程，不受权限模式影响
+        // AskUserQuestion：交互式问答与权限无关，始终走问答流程。
         if (toolName === 'AskUserQuestion') {
           return askUserService.handleAskUserQuestion(
             sessionId, input, options.signal,
@@ -1392,109 +1219,13 @@ export class AgentOrchestrator {
           )
         }
 
-        // 选择 file input 后，站点可能自动把本地文件上传到第三方；即使路径已在会话授权目录内，
-        // 仍需逐次确认该外发边界，不能被通用 Browser 放行规则覆盖。
-        if (toolName === 'BrowserUpload') {
-          if (currentMode === 'plan') return { behavior: 'deny' as const, message: '计划模式下不能选择网页上传文件，请在计划获批后执行。' }
-          return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
-          })
-        }
-
-        // 终端元数据与已缓冲的输出可在计划阶段只读检查；创建、执行、打断或关闭 PTY 都属于可见的本地副作用。
-        if (toolName === 'TerminalList' || toolName === 'TerminalRead') return { behavior: 'allow' as const, updatedInput: input }
-        if (toolName.startsWith('Terminal') && currentMode === 'plan') {
-          return { behavior: 'deny' as const, message: '计划模式下不能创建或操作本地终端，请在计划获批后执行。' }
-        }
-
-        // 所有 Pi 会话均可使用受管浏览器。主进程仍隔离网页来源并默认拒绝网页权限；下载和弹窗留在受管浏览器内，
-        // 页面内容始终视为不可信输入。计划模式仅允许只读浏览器操作。
-        if (toolName.startsWith('Browser')) {
-          if (currentMode === 'plan') {
-            return PLAN_MODE_READ_ONLY_BROWSER_TOOLS.has(toolName)
-              ? { behavior: 'allow' as const, updatedInput: input }
-              : { behavior: 'deny' as const, message: '计划模式下只能观察受管浏览器，请在计划获批后再进行网页交互。' }
-          }
-          return { behavior: 'allow' as const, updatedInput: input }
-        }
-
-        const planningDeletionPermission = resolvePlanningDeletionPermission(
-          toolName,
-          currentMode,
-          runTriggeredBy,
-        )
-        if (planningDeletionPermission === 'deny-unattended') {
+        // 定时任务与协作子 Agent 不能删除本地规划数据，必须由用户主会话发起。
+        if (resolvePlanningDeletionPermission(toolName, runTriggeredBy) === 'deny-unattended') {
           return { behavior: 'deny' as const, message: '定时任务和协作子 Agent 不能删除本地规划数据，请由用户主会话发起并确认。' }
         }
-        if (planningDeletionPermission === 'allow') {
-          return { behavior: 'allow' as const, updatedInput: input }
-        }
-        if (planningDeletionPermission === 'require-single-approval') {
-          return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
-          })
-        }
 
-        // Pi 的原生 PowerShell 尚未具备 Proma Bash 等价的命令级安全分类和白名单。
-        // 在需确认的权限模式中，每条命令都必须显示并单次确认；bypassPermissions
-        // 则遵从其既有语义，允许用户显式跳过所有工具确认。
-        if (toolName === 'PowerShell' && currentMode !== 'bypassPermissions') {
-          if (currentMode === 'plan') {
-            const command = typeof input.command === 'string' ? input.command : ''
-            return isPowerShellCommandReadOnly(command)
-              ? { behavior: 'allow' as const, updatedInput: input }
-              : { behavior: 'deny' as const, message: '计划模式下只允许只读 PowerShell 探索命令，请在计划审批通过后再执行写操作' }
-          }
-          return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
-          })
-        }
-
-        // ── 普通工具的权限分派 ──
-
-        switch (currentMode) {
-          case 'bypassPermissions':
-            return { behavior: 'allow' as const, updatedInput: input }
-
-          case 'plan': {
-            // Plan 模式：只允许只读工具，以及当前会话 plan/ 目录中的 Markdown 计划文档。
-            if (PLAN_MODE_ALLOWED_TOOLS.has(toolName)) {
-              return { behavior: 'allow' as const, updatedInput: input }
-            }
-            // 计划文档必须位于会话私有 plan/ 目录，避免以 Markdown 名义修改项目或用户文档。
-            if (toolName === 'Write' || toolName === 'Edit') {
-              const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-              if (ensureSessionPlanDirectory() && isSessionPlanMarkdownPath(filePath, sessionPlanDirectory)) {
-                return { behavior: 'allow' as const, updatedInput: input }
-              }
-              return { behavior: 'deny' as const, message: '计划模式下只能在当前会话的 plan/ 目录中写入 Markdown 计划文档，请在计划审批通过后再修改其他文件' }
-            }
-            // Bash 工具：只读命令（find、grep、cat 等）允许执行，写操作拒绝
-            if (toolName === 'Bash') {
-              const command = typeof input.command === 'string' ? input.command : ''
-              if (isBashCommandReadOnly(command)) {
-                return { behavior: 'allow' as const, updatedInput: input }
-              }
-              return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
-            }
-            if (toolName.startsWith('mcp__planning__')) {
-              return PLAN_MODE_READ_ONLY_PLANNING_TOOLS.has(toolName)
-                ? { behavior: 'allow' as const, updatedInput: input }
-                : { behavior: 'deny' as const, message: '计划模式下只能查询任务/日程，不能修改本地规划数据，请在计划审批通过后再执行' }
-            }
-            // 其他 MCP 工具维持既有策略：计划模式下允许调研用 MCP。
-            if (toolName.startsWith('mcp__')) {
-              return { behavior: 'allow' as const, updatedInput: input }
-            }
-            if (DEFERRED_OR_PROACTIVE_TOOLS.has(toolName)) {
-              return { behavior: 'deny' as const, message: '计划模式下不允许启动后台、定时、通知或脚本执行能力，请在计划审批通过后再执行' }
-            }
-            // 其余工具拒绝
-            return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
-          }
-          default:
-            return { behavior: 'allow' as const, updatedInput: input }
-        }
+        // 保留管道，当前产品决策为直接执行（对齐商业版 0.22.0）。
+        return { behavior: 'allow' as const, updatedInput: input }
       }
 
       // 13. 构建 Adapter 查询选项
@@ -1690,6 +1421,10 @@ export class AgentOrchestrator {
 
       // 14. 遍历 Adapter 事件流。Pi adapter 自行处理传输层重试；此处仅允许一次 resume artifact 回退。
       const MAX_QUERY_ATTEMPTS = 2
+      // 历史思考块的 signature 只在 Anthropic Messages 协议下校验，其余协议剥离会白丢推理内容。
+      const piModelApiProtocol = resolvePiApi(channel.provider)
+      // 整次 run 只允许一次「剥离历史思考块」兜底重试，避免与网关反复对抗、把重试预算耗光。
+      let thinkingStripRetryUsed = false
       const queryStartedAt = Date.now()
       // 运行期标记只随 EventBus 的浅拷贝发送到 renderer，绝不污染待持久化的 SDKMessage。
       // renderer 据此拒绝旧 run 的迟到消息，避免其覆盖当前任务进度。
@@ -1810,20 +1545,6 @@ export class AgentOrchestrator {
               visibleRunMessageCount += 1
             }
 
-
-            // SDK 权限模式可能在 canUseTool 前直接批准工具（如 bypassPermissions）。
-            // 因此计划阶段状态要从实际 tool_use 流里同步，不能只依赖权限回调。
-            if (msg.type === 'assistant') {
-              const assistantMsg = msg as SDKAssistantMessage
-              if (!assistantMsg.isReplay) {
-                for (const block of assistantMsg.message.content) {
-                  if (block.type === 'tool_use' && 'name' in block && typeof block.name === 'string') {
-                    syncPlanModeFromToolUse(block.name)
-                  }
-                }
-              }
-            }
-
             // 检测 assistant 消息中的 SDK 错误
             if (msg.type === 'assistant' && !isPartialMessage) {
               const assistantMsg = msg as SDKAssistantMessage
@@ -1835,7 +1556,11 @@ export class AgentOrchestrator {
                 if (isPromptTooLongError(detailedMessage, originalError)) {
                   errorCode = 'prompt_too_long'
                 }
-                const typedError = mapAgentErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError)
+                // 开源版没有 Proma Cloud 渠道，402 一律按第三方渠道账单错误处理；
+                // 商业版由 channel.provider === 'proma' 传入 isPromaChannel 区分额度不足。
+                const typedError = mapAgentErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError, {
+                  isPromaChannel: false,
+                })
 
                 // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
                 if (isSessionNotFoundError(detailedMessage, originalError) && wasResuming) {
@@ -1852,6 +1577,8 @@ export class AgentOrchestrator {
                   typedError.code === THINKING_SIGNATURE_ERROR_CODE &&
                   wasResuming
                 ) {
+                  // 回填重跑仍会带着带 signature 的历史思考块，一并开启强制剥离。
+                  armThinkingStripForSession(sessionId)
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
                   this.prepareResumeFallbackRecovery(
@@ -1889,6 +1616,24 @@ export class AgentOrchestrator {
                     true,
                   )
                   shouldRetryFromError = true
+                  break
+                }
+
+                // 上游 400 的诊断文本可能被网关隐去（new-api 类中转会把错误压成
+                // 「upstream http 400」），此时无法按具体错误码分流。按「Claude 家族 +
+                // Anthropic Messages 协议」识别这类隐去诊断的 400，先剥离历史思考块再重试一次，
+                // 而不是直接把 400 抛给用户。
+                if (
+                  !thinkingStripRetryUsed &&
+                  isClaudeFamilyModelId(selectedModelId) &&
+                  piModelApiProtocol === 'anthropic-messages' &&
+                  isOpaqueUpstream400(detailedMessage, originalError) &&
+                  attempt < MAX_QUERY_ATTEMPTS
+                ) {
+                  thinkingStripRetryUsed = true
+                  armThinkingStripForSession(sessionId)
+                  shouldRetryFromError = true
+                  console.warn(`[Agent 编排] 上游 400 诊断被网关隐去，剥离历史思考块后重试: ${sessionId}`)
                   break
                 }
 
@@ -2021,6 +1766,7 @@ export class AgentOrchestrator {
                   break
                 }
                 if (isThinkingSignatureError(resultErrorText)) {
+                  armThinkingStripForSession(sessionId)
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
                   this.prepareResumeFallbackRecovery(
@@ -2083,16 +1829,6 @@ export class AgentOrchestrator {
             return
           }
 
-          // Plan 模式：仅本地会话在规划完成后注入“接受计划”建议。
-          // 外部 Bridge（例如 Slack）已在其所属渠道提供审批交互，不能在桌面输入框留下残留草稿。
-          if (input.triggeredBy !== 'external' && initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.has(sessionId)) {
-            this.eventBus.emit(sessionId, {
-              kind: 'sdk_message',
-              message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
-            })
-            console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
-          }
-
           // 发送完成信号
           completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
 
@@ -2143,6 +1879,8 @@ export class AgentOrchestrator {
             isThinkingSignatureError(rawErrorMessage) &&
             wasResuming
           ) {
+            // 回填重跑仍会带着带 signature 的历史思考块，一并开启强制剥离。
+            armThinkingStripForSession(sessionId)
             existingSdkSessionId = undefined
             capturedSdkSessionId = undefined
             this.prepareResumeFallbackRecovery(
@@ -2157,6 +1895,21 @@ export class AgentOrchestrator {
               true,  // 跨模型签名不兼容是唯一确定永久无效的场景，清除磁盘 sdkSessionId
             )
             continue  // 进入下一次 retry 循环
+          }
+
+          // 上游 400 诊断被网关隐去时同样兜底：按协议特征剥离历史思考块后重试一次。
+          // 与上面 assistant 错误分支共用同一个一次性标记，整次 run 不会重复剥离。
+          if (
+            !thinkingStripRetryUsed &&
+            isClaudeFamilyModelId(selectedModelId) &&
+            piModelApiProtocol === 'anthropic-messages' &&
+            isOpaqueUpstream400(rawErrorMessage) &&
+            attempt < MAX_QUERY_ATTEMPTS
+          ) {
+            thinkingStripRetryUsed = true
+            armThinkingStripForSession(sessionId)
+            console.warn(`[Agent 编排] 上游 400 诊断被网关隐去，剥离历史思考块后重试一次: ${sessionId}`)
+            continue
           }
 
           // 不可重试 — 走原有终止逻辑
@@ -2271,7 +2024,6 @@ export class AgentOrchestrator {
     const runGeneration = this.activeSessions.get(sessionId)
     this.activeSessions.delete(sessionId)
     this.activeSessionStartedAt.delete(sessionId)
-    this.sessionPermissionModes.delete(sessionId)
     browserController.cancelSession(sessionId)
     if (runGeneration != null) {
       this.stoppedBySessions.set(sessionId, runGeneration)
@@ -2318,23 +2070,13 @@ export class AgentOrchestrator {
   }
 
   /**
-   * 运行中动态切换会话的权限模式
+   * 切换会话权限模式（保留方法签名）
    *
-   * 同时更新 Proma 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
-   * 典型场景：用户在 Agent 运行中通过 PermissionModeSelector 切换模式。
+   * 权限模式已下线：不再影响运行期判定，也不再广播 plan_mode_changed。
+   * 保留空实现以便 IPC / 自动化 / 未来恢复确认入口时可以直接接回。
    */
-  async updateSessionPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
-    if (!this.activeSessions.has(sessionId)) return
-    this.sessionPermissionModes.set(sessionId, mode)
-    this.eventBus.emit(sessionId, {
-      kind: 'proma_event',
-      event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
-    })
-    // 同步通知 SDK 侧
-    if (this.adapter.setPermissionMode) {
-      await this.adapter.setPermissionMode(sessionId, mode)
-    }
-    console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
+  async updateSessionPermissionMode(_sessionId: string, _mode: PromaPermissionMode): Promise<void> {
+    // 无操作：当前产品决策为工具调用直接执行，见 canUseTool。
   }
 
   // ===== 快照回退 =====
@@ -2381,7 +2123,6 @@ export class AgentOrchestrator {
     this.adapter.dispose()
     this.activeSessions.clear()
     this.activeSessionStartedAt.clear()
-    this.sessionPermissionModes.clear()
     this.stoppedBeforeRunSessions.clear()
     this.queuedMessageUuids.clear()
     this.pendingUserSkillActivations.clear()
@@ -2508,7 +2249,6 @@ export class AgentOrchestrator {
         console.warn(`[Agent 编排] 队列注入失败且消息通道已失效，释放陈旧运行状态: sessionId=${sessionId}`)
         this.activeSessions.delete(sessionId)
         this.activeSessionStartedAt.delete(sessionId)
-        this.sessionPermissionModes.delete(sessionId)
         this.queuedMessageUuids.delete(sessionId)
       }
       throw error

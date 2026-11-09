@@ -627,9 +627,9 @@ export function stopAllAgents(): void {
 
 
 /**
- * 运行中动态切换会话的权限模式
+ * 切换会话权限模式（保留入口，当前为空实现）
  *
- * 同时更新 Proma 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
+ * 权限模式已下线，运行期不再根据模式分流；保留该函数以便 IPC 与未来恢复确认入口。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
   await orchestrator.updateSessionPermissionMode(sessionId, mode)

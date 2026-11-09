@@ -7,6 +7,10 @@
  * - 等待用户选择（批准/拒绝/反馈），返回对应 PermissionResult
  * - 根据用户选择切换权限模式
  *
+ * 当前挂载状态：计划模式与审批 UI 已下线，编排层不再调用 handleExitPlanMode，
+ * ExitPlanMode 工具调用直接执行。本文件保留完整审批能力，仅剩 IPC 与 Slack Bridge
+ * 的响应入口，供日后恢复计划审批时直接接回。
+ *
  * 复用 AskUserService 的 Promise + Map 异步等待模式。
  */
 

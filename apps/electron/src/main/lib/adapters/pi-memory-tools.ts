@@ -14,15 +14,19 @@ import {
   ensureMemoryFiles,
   inspectLegacyProfileLocations,
   linkProjectMemory,
+  listMemoryHistory,
   memoryPaths,
   memoryTarget,
   pendingMemoryMigrations,
   readMemoryFile,
   readMemoryReview,
   updateMemory,
+  updateMemoryEntries,
   withMemoryLock,
   type AgentMemoryContext,
 } from '../agent-memory'
+import type { MemoryEntryOperation } from '../memory-entries'
+import { searchMemory } from '../memory-search'
 import { migrateProfile, resumeProfileMigration, replanProfileMigration, type ProfileMigrationProposal } from '../agent-memory-migration'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
@@ -110,21 +114,90 @@ export function buildMemoryTools(sdk: PiSdk, ctx: AgentMemoryContext): ToolDefin
       name: 'MemoryUpdate',
       label: '更新或核验记忆',
       description:
-        'Version-checked memory update: first MemoryInspect, then submit full content and evidence in summary. For global-profile, write concise core user facts: one short fact per item, at most 100 facts and 5000 UTF-16 code units; merge duplicates, retain necessary scope and sources, and correct outdated facts without guessing. Project-only facts belong to the authorized project. If reconciliation_required, nothing was saved: retain the pending facts, inspect, reconcile to about 4000–4500 characters, retry with the latest revision and verify. Preserve unrelated facts and history; report if unsafe to reconcile. Unchanged content records review; update MEMORY.md when theme routes change. Do not use for profile migration.',
+        'Version-checked memory update. Prefer `operations` to add/update/remove single `- ` entries so unrelated text is preserved; use `content` only for a full rewrite or review pass. For global-profile, write concise core user facts: one short fact per item, at most 100 facts and 5000 UTF-16 code units; merge duplicates, retain necessary scope and sources, and correct outdated facts without guessing. Project-only facts belong to the authorized project. If reconciliation_required, nothing was saved: retain the pending facts, inspect, reconcile to about 4000–4500 characters, retry with the latest revision and verify. Preserve unrelated facts and history; report if unsafe to reconcile. Unchanged content records review; update MEMORY.md when theme routes change. Do not use for profile migration.',
       parameters: Type.Object({
         target: Type.String(),
         revision: revision(),
-        content: content(),
+        content: Type.Optional(content()),
+        // 单条操作：避免整篇重写丢掉无关事实。`content` 与 `operations` 二选一。
+        operations: Type.Optional(
+          Type.Array(
+            Type.Union([
+              Type.Object({
+                op: Type.Literal('add'),
+                entry: Type.String({ minLength: 1, maxLength: 2000 }),
+                after: Type.Optional(Type.String({ maxLength: 500 })),
+              }),
+              Type.Object({
+                op: Type.Literal('update'),
+                match: Type.String({ minLength: 1, maxLength: 500 }),
+                entry: Type.String({ minLength: 1, maxLength: 2000 }),
+              }),
+              Type.Object({
+                op: Type.Literal('remove'),
+                match: Type.String({ minLength: 1, maxLength: 500 }),
+                all: Type.Optional(Type.Boolean()),
+              }),
+            ]),
+            { minItems: 1, maxItems: 50 },
+          ),
+        ),
         summary: Type.String({ minLength: 1, maxLength: 4000 }),
       }),
       async execute(_id, params) {
-        const args = params as { target: string; revision: string; content: string; summary: string }
+        const args = params as {
+          target: string
+          revision: string
+          content?: string
+          operations?: MemoryEntryOperation[]
+          summary: string
+        }
+        if (!args.content?.trim() && !args.operations?.length) {
+          throw new Error('请提供 content 或至少一条条目操作。')
+        }
+        if (args.content?.trim() && args.operations?.length) {
+          throw new Error('content 与 operations 只能二选一：整篇替换或条目操作。')
+        }
+        const entryOperations = args.operations ?? []
+        const fullContent = args.content ?? ''
         try {
-          return textResult(updateMemory(ctx, args.target, args.revision, args.content, args.summary))
+          return textResult(
+            entryOperations.length
+              ? updateMemoryEntries(ctx, args.target, args.revision, entryOperations, args.summary)
+              : updateMemory(ctx, args.target, args.revision, fullContent, args.summary),
+          )
         } catch (error) {
           if (error instanceof ProfileBudgetExceededError) return textResult(reconciliation(error, 'update'))
           throw error
         }
+      },
+    }),
+    sdk.defineTool({
+      name: 'MemorySearch',
+      label: '检索记忆片段',
+      description:
+        'Search the global profile and current project memory/*.md by keywords and return line-level snippets with file, line and score. Use it when the MEMORY.md index is long or you are unsure which topic file holds a fact; read the full file only when the snippet is insufficient. Read-only.',
+      parameters: Type.Object({
+        query: Type.String({ minLength: 1, maxLength: 500 }),
+        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+      }),
+      async execute(_id, params) {
+        const args = params as { query: string; limit?: number }
+        return textResult(searchMemory(ctx, args.query, args.limit))
+      },
+    }),
+    sdk.defineTool({
+      name: 'MemoryHistory',
+      label: '查看记忆历史版本',
+      description:
+        'List saved versions of a memory target (global-profile, MEMORY.md or a memory/*.md theme) with time, write summary and size. Read-only; restoring a version is a user action in the Memory page.',
+      parameters: Type.Object({
+        target: Type.String(),
+        limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
+      }),
+      async execute(_id, params) {
+        const args = params as { target: string; limit?: number }
+        return textResult({ target: args.target, versions: listMemoryHistory(ctx, args.target, args.limit ?? 20) })
       },
     }),
     sdk.defineTool({

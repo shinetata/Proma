@@ -9,7 +9,7 @@
  * - collectUnreadRunCounts / collectAutomationsWithUnread：待查看计数（tst / est）
  */
 
-import type { AgentSessionMeta, Automation, AutomationRun } from '@proma/shared'
+import { getAgentSessionActivityAt, type AgentSessionMeta, type Automation, type AutomationRun } from '@proma/shared'
 import type { AutomationSessionSort } from '@/atoms/automation-atoms'
 
 const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -78,9 +78,9 @@ export function getRunKey(run: AutomationRun): string {
   return `${run.sessionId}:${run.runAt}`
 }
 
-/** 会话活动时间（商业版 xd；Dev 会话元数据没有 lastActivityAt，按 updatedAt 计） */
+/** 会话活动时间（商业版 xd）：取 lastActivityAt，旧数据回退 updatedAt */
 export function getSessionActivityTime(session: AgentSessionMeta): number {
-  return session.updatedAt
+  return getAgentSessionActivityAt(session)
 }
 
 function getAutomationRecency(a: Automation): number {
@@ -139,7 +139,7 @@ export function listAutomationRuns(
     })
   const extra: AutomationRun[] = sessions
     .filter((session) => session.sourceAutomationId === automation.id && !seen.has(session.id))
-    .map((session) => ({ sessionId: session.id, runAt: session.updatedAt || session.createdAt, status: 'success' }))
+    .map((session) => ({ sessionId: session.id, runAt: getAgentSessionActivityAt(session) || session.createdAt, status: 'success' }))
   const sessionById = new Map(sessions.map((session) => [session.id, session]))
   const sortTime = (run: AutomationRun): number => {
     const session = sessionById.get(run.sessionId)

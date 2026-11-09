@@ -44,10 +44,23 @@ function existsCacheKey(filePath: string, bases: string[], sessionId?: string): 
   return `${sessionId ?? ''}\0${filePath}\0${bases.join('\0')}`
 }
 
-function resolveFilePathEntry(filePath: string, bases: string[], sessionId?: string): Promise<FileResolutionCacheEntry> {
+/**
+ * 解析文件路径并写入模块级缓存。
+ *
+ * `bypassCache` 为 true 时跳过缓存读取（用于点击等需要拿到最新结果的场景），
+ * 但请求结束后仍会刷新缓存，避免把过期结果留在缓存里。
+ */
+function resolveFilePathEntry(
+  filePath: string,
+  bases: string[],
+  sessionId?: string,
+  bypassCache = false,
+): Promise<FileResolutionCacheEntry> {
   const key = existsCacheKey(filePath, bases, sessionId)
-  const cached = fileExistsCache.get(key)
-  if (cached) return Promise.resolve(cached)
+  if (!bypassCache) {
+    const cached = fileExistsCache.get(key)
+    if (cached) return Promise.resolve(cached)
+  }
 
   const inFlight = fileResolutionRequests.get(key)
   if (inFlight) return inFlight
@@ -89,7 +102,7 @@ export function FilePathChip({ filePath, basePath, basePaths, sessionId, classNa
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
   const requestGenerationRef = React.useRef(0)
-  const resolutionRequestRef = React.useRef<{ key: string; promise: Promise<void> } | null>(null)
+  const resolutionRequestRef = React.useRef<{ key: string; promise: Promise<FileResolutionCacheEntry | null> } | null>(null)
   const mountedRef = React.useRef(true)
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
   const [resolvedPath, setResolvedPath] = React.useState<string | undefined>()
@@ -110,21 +123,30 @@ export function FilePathChip({ filePath, basePath, basePaths, sessionId, classNa
 
   const getSessionId = React.useCallback(() => sessionId ?? store.get(currentAgentSessionIdAtom) ?? undefined, [sessionId, store])
 
-  const resolveCurrentPath = React.useCallback((): Promise<void> => {
+  /**
+   * 解析当前路径并同步到组件状态，同时把解析结果返回给调用方。
+   *
+   * `bypassCache` 为 true 时强制走一次主进程解析（点击打开预览前使用），
+   * 且不参与 in-flight 去重，避免复用旧代次的结果。
+   * 返回值恒为本次解析结果；只有状态回写受代次守卫约束。
+   */
+  const resolveCurrentPath = React.useCallback((bypassCache = false): Promise<FileResolutionCacheEntry | null> => {
     const resolvedSessionId = getSessionId()
     const key = existsCacheKey(cleanPath, candidateBases, resolvedSessionId)
     const inFlight = resolutionRequestRef.current
-    if (inFlight?.key === key) return inFlight.promise
+    if (!bypassCache && inFlight?.key === key) return inFlight.promise
 
     const generation = ++requestGenerationRef.current
-    let promise: Promise<void>
-    promise = resolveFilePathEntry(cleanPath, candidateBases, resolvedSessionId)
+    let promise: Promise<FileResolutionCacheEntry | null>
+    promise = resolveFilePathEntry(cleanPath, candidateBases, resolvedSessionId, bypassCache)
       .then((entry) => {
-        if (!isAsyncResultCurrent(generation, requestGenerationRef.current, mountedRef.current)) return
-        setFileStatus(entry.exists ? 'resolved' : 'broken')
-        setResolvedPath(entry.resolvedPath)
+        if (isAsyncResultCurrent(generation, requestGenerationRef.current, mountedRef.current)) {
+          setFileStatus(entry.exists ? 'resolved' : 'broken')
+          setResolvedPath(entry.resolvedPath)
+        }
+        return entry
       })
-      .catch(() => { /* IPC 失败时保留当前状态 */ })
+      .catch(() => null)
       .finally(() => {
         if (resolutionRequestRef.current?.promise === promise) {
           resolutionRequestRef.current = null
@@ -141,8 +163,7 @@ export function FilePathChip({ filePath, basePath, basePaths, sessionId, classNa
 
     requestGenerationRef.current += 1
     mountedRef.current = true
-    setFileStatus('idle')
-    setResolvedPath(undefined)
+    // 缓存命中时直接落定状态，不经过 idle 重置，避免流式重渲染期间先回到未解析外观。
     const key = existsCacheKey(cleanPath, candidateBases, getSessionId())
     const cached = fileExistsCache.get(key)
     if (cached) {
@@ -153,6 +174,9 @@ export function FilePathChip({ filePath, basePath, basePaths, sessionId, classNa
         requestGenerationRef.current += 1
       }
     }
+
+    setFileStatus('idle')
+    setResolvedPath(undefined)
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -174,23 +198,29 @@ export function FilePathChip({ filePath, basePath, basePaths, sessionId, classNa
     if (open) void resolveCurrentPath()
   }, [resolveCurrentPath])
 
-  const handleClick = React.useCallback(() => {
+  const handleClick = React.useCallback(async (): Promise<void> => {
     const resolvedSessionId = getSessionId()
     if (!resolvedSessionId) return
 
+    // 点击时强制重新解析：缓存里的路径可能已被移动或删除，直接打开会失败。
+    const entry = await resolveCurrentPath(true)
+    if (!mountedRef.current) return
+    // 解析期间会话可能已切换，切换后不再按旧会话的授权范围打开预览。
+    if (getSessionId() !== resolvedSessionId) return
+
     openPreview(resolvedSessionId, {
-      filePath: cleanPath,
+      filePath: entry?.resolvedPath ?? cleanPath,
       previewOnly: true,
       basePaths: candidateBases.length > 0 ? candidateBases : undefined,
     })
-  }, [getSessionId, openPreview, cleanPath, candidateBases])
+  }, [getSessionId, resolveCurrentPath, openPreview, cleanPath, candidateBases])
 
   const handleShowInFolder = React.useCallback(() => {
     const bases = candidateBases.length > 0 ? candidateBases : undefined
     window.electronAPI.showItemInFolder(cleanPath, bases)
-      .then((ok) => { if (!ok) toast.error(`未找到文件：${filename}`) })
-      .catch(() => toast.error(`未找到文件：${filename}`))
-  }, [cleanPath, candidateBases, filename])
+      .then((ok) => { if (!ok) toast.error(`无法访问文件（不存在或不在当前会话可预览范围内）: ${displayPath}`) })
+      .catch(() => toast.error(`无法访问文件（不存在或不在当前会话可预览范围内）: ${displayPath}`))
+  }, [cleanPath, candidateBases, displayPath])
 
   return (
     <ContextMenu>
@@ -258,15 +288,21 @@ export function ResolvableFilePathChip({ fallback, filePath, basePath, basePaths
   const [resolvedKey, setResolvedKey] = React.useState<string | null>(null)
 
   React.useEffect(() => {
+    // 同步缓存命中路径：命中即落定，不经过 fallback 中间态。
+    // 流式输出期间本组件会随 Markdown 树频繁重建，若每次回到 fallback 再异步回填，
+    // 正文里的路径就会在「原始文本」与「chip」之间逐帧跳变。
+    const cached = fileExistsCache.get(resolutionKey)
+    if (cached != null && cached.exists) {
+      setResolvedKey(resolutionKey)
+      return
+    }
+
     let cancelled = false
-    setResolvedKey(null)
     void resolveFilePathEntry(cleanPath, candidateBases, resolvedSessionId)
       .then((entry) => {
         if (!cancelled && entry.exists) setResolvedKey(resolutionKey)
       })
-      .catch(() => {
-        if (!cancelled) setResolvedKey(null)
-      })
+      .catch(() => { /* 解析失败时保持原状，渲染层继续使用 fallback */ })
     return () => { cancelled = true }
   }, [candidateBases, cleanPath, resolvedSessionId, resolutionKey])
 

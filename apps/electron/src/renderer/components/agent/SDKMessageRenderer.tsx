@@ -17,9 +17,11 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
+import { AskUserAnswerCard } from './AskUserAnswerCard'
+import { collectAnsweredQuestionToolIds } from './ask-user-answers'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
-import { buildAssistantTurnSections, buildProcessSummary, findTrailingResult, type AssistantTurnSection } from './assistant-turn-sections'
+import { buildAssistantTurnSections, buildProcessSummary, collectAssistantTurnBodyEntries, findTrailingResult, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
 import { PROCESS_TIMELINE_CLASS, ProcessMotion, ProcessStepGroup, ProcessSummary, useElapsedSince } from './ProcessTimeline'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
@@ -467,12 +469,19 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
   )
 
+  // 已答 AskUserQuestion 的 tool_use id：这些问答不再当作工具行，改由「你的回答」卡片回显
+  const answeredQuestionToolIds = React.useMemo(
+    () => collectAnsweredQuestionToolIds(allMessages),
+    [allMessages]
+  )
+
   // 将内容块拆分为「执行过程」与「最终输出」（与商业版轮次结构一致）
   const sections = buildAssistantTurnSections(topLevelEntries, {
     messages: turn.assistantMessages.filter((m) => !m.parent_tool_use_id || !agentToolIds.has(m.parent_tool_use_id)),
     isStreaming,
     stoppedByUser,
     result: findTrailingResult(turn.turnMessages),
+    answeredQuestionToolIds,
   })
   const sectionItems = sections.items
   const lastSectionIndex = sectionItems.length - 1
@@ -487,14 +496,25 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   {
     let runIndex = 0
     let textIndex = 0
-    for (const item of sectionItems) sectionKeys.push(item.type === 'activity' ? `run-${runIndex++}` : `text-${textIndex++}`)
+    let questionIndex = 0
+    for (const item of sectionItems) {
+      sectionKeys.push(item.type === 'activity'
+        ? `run-${runIndex++}`
+        : item.type === 'question'
+          ? `question-${questionIndex++}`
+          : `text-${textIndex++}`)
+    }
   }
   const processSections: Array<{ item: AssistantTurnSection; index: number }> = []
-  const outputSections: Array<{ item: AssistantTurnSection; index: number }> = []
   sectionItems.forEach((item, index) => {
-    if (item.type === 'block' && item.output) outputSections.push({ item, index })
-    else processSections.push({ item, index })
+    // 问答卡片属于正文区，不进入执行过程
+    if (item.type === 'question') return
+    if (item.type === 'block' && item.output) return
+    processSections.push({ item, index })
   })
+  // 正文区：最终输出与「你的回答」卡片，连续的问答合并成一张卡片
+  const bodyEntries = collectAssistantTurnBodyEntries(sectionItems)
+  const firstOutputSectionIndex = bodyEntries.find((entry) => entry.type === 'block')?.sectionIndex
 
   // 一旦经历过流式输出，后续的过程/正文切换使用动画；历史消息直接静态渲染
   const hasStreamedRef = React.useRef(false)
@@ -575,20 +595,24 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     )
   }
 
-  const renderSection = (section: AssistantTurnSection, sectionIndex: number): React.ReactNode => {
-    if (section.type === 'block') {
-      const block = topLevelBlocks[section.item.index]
-      if (!block) return null
-      if (section.promotedFromThinking && block.type === 'thinking') {
-        return (
-          <div className="space-y-1.5">
-            <div className="text-xs text-muted-foreground" role="note">模型将本轮结果写在了思考中，已作为正文展示</div>
-            {renderTopLevelBlock({ type: 'text', text: block.thinking }, section.item.index)}
-          </div>
-        )
-      }
-      return renderTopLevelBlock(block, section.item.index)
+  const renderBlockItem = (item: AssistantTurnSectionItem, promotedFromThinking?: boolean): React.ReactNode => {
+    const block = topLevelBlocks[item.index]
+    if (!block) return null
+    if (promotedFromThinking && block.type === 'thinking') {
+      return (
+        <div className="space-y-1.5">
+          <div className="text-xs text-muted-foreground" role="note">模型将本轮结果写在了思考中，已作为正文展示</div>
+          {renderTopLevelBlock({ type: 'text', text: block.thinking }, item.index)}
+        </div>
+      )
     }
+    return renderTopLevelBlock(block, item.index)
+  }
+
+  const renderSection = (section: AssistantTurnSection, sectionIndex: number): React.ReactNode => {
+    // 问答卡片由正文区统一渲染（需要把连续多组合并）
+    if (section.type === 'question') return null
+    if (section.type === 'block') return renderBlockItem(section.item, section.promotedFromThinking)
     return (
       <ProcessStepGroup
         key={sectionKeys[sectionIndex]}
@@ -608,6 +632,9 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
   const shouldAnimateSection = (section: AssistantTurnSection, sectionIndex: number): boolean => (
     hasStreamed && !(sectionIndex === 0 && section.type === 'activity')
+  )
+  const shouldAnimateBodyEntry = (sectionIndex: number): boolean => (
+    hasStreamed && !(sectionIndex === 0 && sectionItems[0]?.type === 'activity')
   )
   const hasProcess = processSections.length > 0
 
@@ -640,14 +667,36 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                 ) : null}
               </ProcessSummary>
             )}
-            {outputSections.map(({ item, index }, outputIndex) => (
-              <ProcessMotion key={`body-${sectionKeys[index]}`} mode="reveal" animate={shouldAnimateSection(item, index)}>
-                {outputIndex === 0 && sections.outputState === 'incomplete' && (
-                  <div className="text-xs text-muted-foreground" role="status">未完成输出</div>
-                )}
-                {renderSection(item, index)}
-              </ProcessMotion>
-            ))}
+            {bodyEntries.map((entry) => {
+              if (entry.type === 'question') {
+                const questionBlocks = entry.entries.flatMap(({ block }) => (
+                  block.type === 'tool_use'
+                    ? [{ toolUseId: (block as SDKToolUseBlock).id, input: (block as SDKToolUseBlock).input }]
+                    : []
+                ))
+                return (
+                  <ProcessMotion
+                    key={`questions-${sectionKeys[entry.sectionIndex]}`}
+                    mode="reveal"
+                    animate={shouldAnimateBodyEntry(entry.sectionIndex)}
+                  >
+                    <AskUserAnswerCard blocks={questionBlocks} allMessages={allMessages} />
+                  </ProcessMotion>
+                )
+              }
+              return (
+                <ProcessMotion
+                  key={`body-${sectionKeys[entry.sectionIndex]}`}
+                  mode="reveal"
+                  animate={shouldAnimateBodyEntry(entry.sectionIndex)}
+                >
+                  {entry.sectionIndex === firstOutputSectionIndex && sections.outputState === 'incomplete' && (
+                    <div className="text-xs text-muted-foreground" role="status">未完成输出</div>
+                  )}
+                  {renderBlockItem(entry.item, entry.promotedFromThinking)}
+                </ProcessMotion>
+              )
+            })}
           </div>
           {sections.completedWithoutAnswer && (
             <div className="text-sm text-muted-foreground">本轮已结束，未提供文字总结。</div>

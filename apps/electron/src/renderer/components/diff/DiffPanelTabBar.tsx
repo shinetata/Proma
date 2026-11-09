@@ -17,7 +17,12 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import {
+  agentDiffUnseenChangesAtom,
+  agentFileChangesCurrentRunAtom,
+  agentViewedChangeRunAtom,
+  currentAgentSessionIdAtom,
+} from '@/atoms/agent-atoms'
 import type { AgentSidePanelTab, SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { groupRightWorkspaceTabs, type RightWorkspacePane } from '@/lib/right-workspace-split'
 import { getDelegationStatusIconClass } from '@/lib/agent-session-list'
@@ -72,7 +77,10 @@ export function DiffPanelTabBar({
 }: DiffPanelTabBarProps): React.ReactElement {
   const unseenMap = useAtomValue(agentDiffUnseenChangesAtom)
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
+  const setViewedChangeRun = useSetAtom(agentViewedChangeRunAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const fileChangesRunMap = useAtomValue(agentFileChangesCurrentRunAtom)
+  const currentFileChangesRunId = fileChangesRunMap.get(currentSessionId ?? '')
   const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
   const [isSplitTabGroupHovered, setIsSplitTabGroupHovered] = React.useState(false)
   const tabListRef = React.useRef<HTMLDivElement>(null)
@@ -204,9 +212,18 @@ export function DiffPanelTabBar({
         next.set(currentSessionId, false)
         return next
       })
+      // 记录用户看到的是哪一轮改动：任务结束后据此判断是否还需要重新提示
+      if (currentFileChangesRunId) {
+        setViewedChangeRun((previous) => {
+          if (previous.get(currentSessionId) === currentFileChangesRunId) return previous
+          const next = new Map(previous)
+          next.set(currentSessionId, currentFileChangesRunId)
+          return next
+        })
+      }
     }
     onTabChange(tab)
-  }, [currentSessionId, onTabChange, setUnseenMap])
+  }, [currentFileChangesRunId, currentSessionId, onTabChange, setUnseenMap, setViewedChangeRun])
 
   const beginTabDrag = React.useCallback((tabId: AgentSidePanelTab, event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || !onTabDragChange || !onTabDrop) return

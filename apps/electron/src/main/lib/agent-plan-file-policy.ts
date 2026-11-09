@@ -1,3 +1,10 @@
+/**
+ * 计划文档路径策略
+ *
+ * 当前挂载状态：计划模式已下线，编排层不再调用本模块，调用点随 ExitPlanMode 审批
+ * 拦截一同下线。保留能力以便日后恢复计划模式（只允许写入会话私有 plan/ 目录）。
+ */
+
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 

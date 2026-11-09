@@ -6,6 +6,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { compareAgentSessionsByActivityDesc } from '@proma/shared'
 import { Check, ChevronDown, PanelRight, Pencil, Split, X } from 'lucide-react'
 import { agentSessionsAtom, agentWorkspacesAtom, agentDiffUnseenChangesAtom, agentSideTemporaryAgentMapAtom, agentDiffPanelTabAtom, currentSessionSidePanelOpenAtom, getExplorationSidePanelTab } from '@/atoms/agent-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
@@ -40,7 +41,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
 
   const explorationBranches = React.useMemo(() => sessions
     .filter((item) => item.explorationParentSessionId === sessionId && item.explorationSourceMessageId)
-    .sort((a, b) => b.updatedAt - a.updatedAt), [sessionId, sessions])
+    .sort(compareAgentSessionsByActivityDesc), [sessionId, sessions])
 
   const reopenExploration = React.useCallback((branch: typeof explorationBranches[number]): void => {
     const sourceMessageId = branch.explorationSourceMessageId

@@ -331,7 +331,7 @@ const RETRY_REASON_TEXT: Record<string, string> = {
 }
 
 function formatRetryStatus(retrying: NonNullable<AgentStreamState['retrying']>, countdown: number): string {
-  const reasonKind = (retrying as { reasonKind?: string }).reasonKind ?? 'unknown'
+  const reasonKind = retrying.reasonKind ?? 'unknown'
   const reason = RETRY_REASON_TEXT[reasonKind] ?? RETRY_REASON_TEXT.unknown
   const attempt = retrying.currentAttempt < 2 || retrying.maxAttempts < 2 ? '' : `（第 ${retrying.currentAttempt}/${retrying.maxAttempts} 次）`
   switch (retrying.phase) {

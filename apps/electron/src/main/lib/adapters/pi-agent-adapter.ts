@@ -68,6 +68,15 @@ import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
+import {
+  applyThinkingReplayPolicy,
+  buildPrefixFingerprint,
+  consumeThinkingStripForSession,
+  createThinkingReplayState,
+  describePrefixDrift,
+  recordPrefixFingerprint,
+  resolveThinkingReplayMode,
+} from './pi-thinking-replay'
 import { sanitizePiMessageImageContent, sanitizeToolResultImageContent } from '../image-content-validation'
 import {
   convertPiMessage,
@@ -83,7 +92,7 @@ import {
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { PendingPromptSkillActivationTracker } from './pi-skill-activation-tracker'
 import { normalizePiToolResultDetails, serializePiToolResultPayload } from './pi-tool-result-json'
-import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
+import { createPiRetryTerminalGate, installPromaRetryClassifier, mapPiNativeRetryEvent } from './pi-retry-control'
 import {
   closePiRequestProxyDispatcher,
   createPiRequestProxyDispatcher,
@@ -1162,6 +1171,91 @@ export function buildWslBashArgs(
   ]
 }
 
+/** 未显式传 `timeout` 时的默认值（秒）。Pi 的 resolveTimeoutMs(undefined) 返回 undefined，等于无超时。 */
+const DEFAULT_BASH_TIMEOUT_SECONDS = 300
+/** 显式 `timeout` 的上限（秒），避免单个命令长期占用会话。 */
+const MAX_BASH_TIMEOUT_SECONDS = 3600
+/** 强杀进程树后等待 close 的兜底时限（毫秒）；超时仍未收到 close 就直接结算。 */
+const KILL_SETTLE_GRACE_MS = 3000
+
+/** 追加到 bash / powershell 工具描述末尾的英文说明（与 Pi 原生描述语言一致）。 */
+const PROMA_BASH_TIMEOUT_NOTE = `\n\nTimeouts: \`timeout\` is in seconds. When omitted it defaults to ${DEFAULT_BASH_TIMEOUT_SECONDS} seconds; explicit values are capped at ${MAX_BASH_TIMEOUT_SECONDS} seconds. Pass a larger value for known long-running commands such as installs and full builds.`
+
+/**
+ * 归一 `timeout` 参数（单位秒）。
+ *
+ * Pi 原生实现只在显式传值时才设超时，未传即无限等待，因此 Proma 侧必须在包装层补默认值。
+ * 非有限数与 ≤0 原样透传：Pi 会对这类值直接报错，这里不擅自改写成默认值，
+ * 以免把调用方显式传入的非法参数静默变成一条「正常」的长命令。
+ */
+export function resolvePromaBashTimeoutSeconds(requested: number | undefined): number | undefined {
+  if (requested === undefined) return DEFAULT_BASH_TIMEOUT_SECONDS
+  if (!Number.isFinite(requested) || requested <= 0) return requested
+  return Math.min(requested, MAX_BASH_TIMEOUT_SECONDS)
+}
+
+/**
+ * 为 shell 工具定义追加超时说明并夹取 `timeout` 参数。
+ *
+ * 用泛型保留原 ToolDefinition 的参数/结果/渲染类型，避免调用方丢失 schema 推导。
+ */
+export function withPromaBashTimeout<TParams extends TSchema, TDetails, TState>(
+  definition: ToolDefinition<TParams, TDetails, TState>,
+): ToolDefinition<TParams, TDetails, TState> {
+  return {
+    ...definition,
+    description: `${definition.description}${PROMA_BASH_TIMEOUT_NOTE}`,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const requested = (params as typeof params & { timeout?: unknown }).timeout
+      return definition.execute(
+        toolCallId,
+        {
+          ...params,
+          timeout: resolvePromaBashTimeoutSeconds(typeof requested === 'number' ? requested : undefined),
+        } as typeof params,
+        signal,
+        onUpdate,
+        ctx,
+      )
+    },
+  }
+}
+
+/**
+ * 终止整棵进程树。
+ *
+ * WSL/Git Bash 场景下真实命令跑在中转进程的子进程里，只对直接子进程发信号会留下孙进程，
+ * 父进程因此永远收不到 close。Windows 用 taskkill /T，POSIX 优先打进程组（Pi 以 detached
+ * 方式 spawn，进程组 id 即 pid）。
+ */
+export function terminateProcessTree(pid: number | undefined): void {
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    try {
+      const killer = spawn(
+        join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
+        ['/F', '/T', '/PID', String(pid)],
+        { stdio: 'ignore', detached: true, windowsHide: true },
+      )
+      // taskkill 不可用时只能放弃：必须消费 error 事件，否则会变成未捕获异常。
+      killer.once('error', () => {})
+      killer.unref()
+    } catch {
+      // 进程可能已退出，忽略
+    }
+    return
+  }
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // 进程已不复存在，忽略
+    }
+  }
+}
+
 function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
   return {
     exec(command, cwd, options) {
@@ -1176,9 +1270,11 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
         let settled = false
         let timedOut = false
         let timeoutHandle: NodeJS.Timeout | undefined
+        let fallbackHandle: NodeJS.Timeout | undefined
 
         const cleanup = (): void => {
           if (timeoutHandle) clearTimeout(timeoutHandle)
+          if (fallbackHandle) clearTimeout(fallbackHandle)
           options.signal?.removeEventListener('abort', onAbort)
         }
         const settle = (fn: () => void): void => {
@@ -1188,10 +1284,19 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
           fn()
         }
         const killChild = (): void => {
-          if (!child.killed) child.kill('SIGTERM')
+          terminateProcessTree(child.pid)
+        }
+        // 超时/中止后只发信号不能保证收到 close（中转进程可能已被 kill，但管道句柄仍被孙进程持有）。
+        // 因此强杀后启动兜底结算，避免调用方永久挂起。
+        const scheduleFallback = (message: string): void => {
+          if (fallbackHandle) return
+          fallbackHandle = setTimeout(() => {
+            settle(() => reject(new Error(message)))
+          }, KILL_SETTLE_GRACE_MS)
         }
         const onAbort = (): void => {
           killChild()
+          scheduleFallback('aborted')
         }
 
         if (options.signal?.aborted) {
@@ -1219,6 +1324,7 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
           timeoutHandle = setTimeout(() => {
             timedOut = true
             killChild()
+            scheduleFallback(`timeout:${options.timeout}`)
           }, options.timeout * 1000)
         }
         options.signal?.addEventListener('abort', onAbort, { once: true })
@@ -1295,10 +1401,11 @@ function buildBuiltinToolDefinitions(
   const definitions = [
     sdk.createReadToolDefinition(cwd),
     ...(shellTool === 'bash'
-      ? [sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(runtimeEnv))]
+      // 包装层负责默认 300 秒与上限 3600 秒；Pi 原生未传 timeout 时等于无超时。
+      ? [withPromaBashTimeout(sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(runtimeEnv)))]
       : []),
     ...(shellTool === 'powershell'
-      ? [sdk.createPowerShellToolDefinition(cwd, createPromaPowerShellToolOptions(runtimeEnv))]
+      ? [withPromaBashTimeout(sdk.createPowerShellToolDefinition(cwd, createPromaPowerShellToolOptions(runtimeEnv)))]
       : []),
     sdk.createEditToolDefinition(cwd),
     sdk.createWriteToolDefinition(cwd),
@@ -1553,15 +1660,28 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         customTools,
       })
       session.agent.toolExecution = 'sequential'
+      // 思考块重放策略：模式在本次建会话时确定且整次 query 不变。
+      // 命中「网关隐去诊断的 400」后编排层会 arm，下一次建会话消费一次即回到默认模式。
+      const thinkingReplay = createThinkingReplayState(
+        consumeThinkingStripForSession(input.sessionId)
+          ? 'none'
+          : (resolveThinkingReplayMode() ?? 'turn'),
+      )
+      // signature 校验只发生在 Anthropic Messages 协议；其他协议剥离会平白丢失推理内容。
+      const thinkingReplaySupported = (session.model?.api ?? model.api) === 'anthropic-messages'
       // Pi session artifact 可以来自旧版本，不能假设其历史 tool_result 已通过当前校验。
       // transformContext 在每个 provider 请求前执行，能隔离 resume 的坏图片而不篡改原 artifact。
       const previousTransformContext = session.agent.transformContext
       session.agent.transformContext = async (messages, signal) => {
         const previous = await previousTransformContext?.(messages, signal) ?? messages
         const sanitized = sanitizePiMessageImageContent(previous)
-        if (!input.memoryContext) return sanitized
+        // 历史思考块必须在发给上游前剥掉，否则上游直接 400；这一步先于记忆刷新，
+        // 确保记忆 system 消息的刷新逻辑与改动前完全一致。
+        const replayApplied = applyThinkingReplayPolicy(sanitized, thinkingReplay, {
+          supported: thinkingReplaySupported,
+        })
         let projectFiles: Array<{ path: string; content: string }> | undefined
-        if (input.projectInstructionRoot) {
+        if (input.memoryContext && input.projectInstructionRoot) {
           try {
             projectFiles = resolveProjectInstructions({ projectRoot: input.projectInstructionRoot })
               .sources.filter((source) => source.content)
@@ -1570,11 +1690,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             console.warn('[Pi SDK] 项目指令重新解析失败，沿用已有内容:', error)
           }
         }
-        return refreshMemorySystemMessages(sanitized, {
-          ctx: input.memoryContext,
-          maintenanceSince: input.memoryMaintenanceSince,
-          projectFiles,
-        })
+        const finalMessages = input.memoryContext
+          ? refreshMemorySystemMessages(replayApplied, {
+              ctx: input.memoryContext,
+              maintenanceSince: input.memoryMaintenanceSince,
+              projectFiles,
+            })
+          : replayApplied
+        // 指纹要对整段对话做 JSON 序列化，只在会打印诊断的 none 模式下计算，
+        // 避免每轮默认路径都为日志付一次全量序列化开销。
+        if (thinkingReplay.mode === 'none') {
+          recordPrefixFingerprint(thinkingReplay, buildPrefixFingerprint(finalMessages))
+          if (thinkingReplay.fingerprints.length >= 2) {
+            console.warn(`[Pi SDK] 思考块重放诊断（none 模式）: ${describePrefixDrift(thinkingReplay)}`)
+          }
+        }
+        return finalMessages
       }
       // Pi 0.86 的 transcript-aware before_agent_start extension 会在下一轮注入动态项目指令。
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
@@ -1612,6 +1743,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       )
       installRuntimeGuardHooks(session, runtimeGuard)
       installCurrentSessionCompactionHooks(session)
+      // Proma 的失败分类要盖在 Pi 自带重试判定之上，否则网关特定错误（额度不足、
+      // 代理返回 HTML 错误页等）会被 Pi 无意义地重试到上限。
+      if (!installPromaRetryClassifier(session)) {
+        console.warn('[Pi SDK] 未找到 _isRetryableError，Proma 网络重试分类未生效；请检查 Pi 版本兼容性')
+      }
       active.session = session
       resolveActiveReady(active, session)
 
@@ -2114,8 +2250,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     // Pi 的公开 SDK 当前只暴露 clearQueue，不支持按消息 UUID 删除。
   }
 
+  /**
+   * 保留方法签名；权限模式已下线，Pi 侧不再需要同步任何模式。
+   */
   async setPermissionMode(_sessionId: string, _mode: string): Promise<void> {
-    // Proma 权限由工具包装层实时读取 sessionPermissionModes，自身无需同步给 Pi。
+    // 空实现（对齐商业版 0.22.0）。
   }
 
   dispose(): void {

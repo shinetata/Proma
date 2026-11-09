@@ -7,6 +7,10 @@
  * - 维护会话级白名单
  * - 工具/命令分类判断
  *
+ * 当前挂载状态：权限模式与逐次确认已下线，编排层不再调用 createCanUseTool /
+ * requestSingleApproval，工具调用直接执行。本文件保留完整能力（含 pending 请求与
+ * 白名单），供 Slack/协作 Bridge 响应已存在的请求，也供日后恢复确认入口时直接接回。
+ *
  * 参考 Craft Agents OSS 的 Promise + Map 异步等待模式。
  */
 

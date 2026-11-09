@@ -519,6 +519,26 @@ export interface TaskUsage {
 }
 
 /**
+ * 自动重试失败原因类别
+ *
+ * 由主进程按错误内容分类，用于驱动重试提示文案与是否值得继续重试的判断。
+ * renderer 只读取该值做展示，不自行解析错误原文。
+ */
+export type RetryReasonKind =
+  /** 请求频率限制 / 服务繁忙 */
+  | 'rate_limited'
+  /** 上游服务持续异常 */
+  | 'service'
+  /** 响应传输中断 */
+  | 'stream_interrupted'
+  /** 上游响应无法解析 */
+  | 'response_malformed'
+  /** 网络连接层失败 */
+  | 'connection'
+  /** 无法归因 */
+  | 'unknown'
+
+/**
  * 重试尝试记录
  *
  * 记录每次重试尝试的详细信息，用于错误诊断和 UI 展示。
@@ -534,6 +554,8 @@ export interface RetryAttempt {
   timestamp: number
   /** 错误原因（简短描述，如"SDK 响应超时"） */
   reason: string
+  /** 错误原因类别（可选以兼容旧 runtime） */
+  reasonKind?: RetryReasonKind
   /** 完整错误消息 */
   errorMessage: string
   /** stderr 输出（可选） */
@@ -599,7 +621,7 @@ export type AgentEvent =
   | { type: 'typed_error'; error: TypedError }
   // 重试机制
   // `retrying` 表示已安排 retry（仍可能正在 backoff），`retry_attempt` 才表示实际开始请求。
-  | { type: 'retrying'; attempt: number; maxAttempts: number; delaySeconds: number; reason: string; scheduledAt?: number; runStartedAt?: number; totalAttempt?: number; maxTotalAttempts?: number }
+  | { type: 'retrying'; attempt: number; maxAttempts: number; delaySeconds: number; reason: string; reasonKind?: RetryReasonKind; scheduledAt?: number; runStartedAt?: number; totalAttempt?: number; maxTotalAttempts?: number }
   | { type: 'retry_attempt'; attemptData: RetryAttempt; runStartedAt?: number; maxAttempts?: number; totalAttempt?: number; maxTotalAttempts?: number }
   | { type: 'retry_cleared'; runStartedAt?: number; attempt?: number; maxAttempts?: number; totalAttempt?: number; maxTotalAttempts?: number }
   | { type: 'retry_failed'; finalAttempt: RetryAttempt; runStartedAt?: number; maxAttempts?: number; totalAttempt?: number; maxTotalAttempts?: number }
@@ -647,7 +669,7 @@ export type PromaEvent =
   | { type: 'exit_plan_mode_resolved'; requestId: string }
   | { type: 'enter_plan_mode'; sessionId: string }
   | { type: 'plan_mode_changed'; sessionId: string; active: boolean; source: AgentPlanModeChangeSource }
-  | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed' | 'cancelled'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; runStartedAt?: number; scheduledAt?: number; totalAttempt?: number; maxTotalAttempts?: number; error?: TypedError }
+  | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed' | 'cancelled'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; reasonKind?: RetryReasonKind; attemptData?: RetryAttempt; runStartedAt?: number; scheduledAt?: number; totalAttempt?: number; maxTotalAttempts?: number; error?: TypedError }
   | { type: 'model_resolved'; model: string }
   | { type: 'context_window'; contextWindow: number }
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
@@ -841,7 +863,19 @@ export interface AgentSessionMeta {
   delegationGoal?: string
   /** 创建时间戳 */
   createdAt: number
-  /** 更新时间戳 */
+  /**
+   * 用户最后一次真正产生活动的时刻（发出用户输入）。
+   *
+   * 侧栏排序、日期分组、托盘「最近会话」等「最近活跃」语义统一使用该字段；
+   * 标记已读、改标题、改推理档位、跑完一轮等元数据写入不会抬高它。
+   * 升级前的旧索引没有该字段，读取处按 `lastActivityAt ?? updatedAt` 兜底。
+   */
+  lastActivityAt?: number
+  /**
+   * 元数据最后写入时间戳。
+   *
+   * 仅表示「这条记录被写过」，不代表用户活动；不要用它判断会话的活跃新鲜度。
+   */
   updatedAt: number
 }
 
@@ -1258,6 +1292,23 @@ export interface GlobalProfileSnapshot {
   legacyCount: number
   pendingCount: number
   migrationIssues: Array<{ path: string; message: string }>
+}
+
+/** 画像历史版本条目 */
+export interface GlobalProfileHistoryEntry {
+  revision: string
+  savedAt?: number
+  /** 写入该版本时的依据，缺失时界面显示字符数。 */
+  summary?: string
+  chars: number
+  /** 是否为当前生效版本 */
+  current: boolean
+}
+
+/** 画像历史版本正文 */
+export interface GlobalProfileHistoryVersion {
+  revision: string
+  content: string
 }
 
 /** 工作区记忆摘要 */
@@ -2032,6 +2083,12 @@ export const AGENT_IPC_CHANNELS = {
   WORKSPACE_MEMORY_FILE_CHANGED: 'agent:workspace-memory-file-changed',
   READ_GLOBAL_PROFILE: 'agent:read-global-profile',
   WRITE_GLOBAL_PROFILE: 'agent:write-global-profile',
+  /** 读取全局画像的历史版本列表 */
+  READ_GLOBAL_PROFILE_HISTORY: 'agent:read-global-profile-history',
+  /** 读取某个历史版本的正文 */
+  READ_GLOBAL_PROFILE_HISTORY_VERSION: 'agent:read-global-profile-history-version',
+  /** 把全局画像恢复到某个历史版本 */
+  RESTORE_GLOBAL_PROFILE_HISTORY: 'agent:restore-global-profile-history',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */

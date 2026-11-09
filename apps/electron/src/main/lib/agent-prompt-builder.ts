@@ -135,7 +135,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     workspace
       ? `## Profile 与项目知识维护
 - 每轮主动记录有证据的用户核心事实。Profile 跨项目共享，最多 100 条、5000 字符；每条用一句简短陈述，只保留一个有用事实及必要的范围或来源，合并重复，不写故事、分析或过程。记忆可能过时；本轮明确表达优先，确认长期变化后及时修正。区分项目特例和一次性要求，不猜测、不存凭据。
-- 更新前用 \`MemoryInspect\` 读取版本。画像超限时，可写用户主会话主动使用 \`collaboration.start_profile_maintenance\` 启动专用后台子会话并传入未保存事实及依据；主任务无需等待，启动不等于完成。已有整理时待记录事实未被接收，必须保留并在其结束后更新核验。子会话直接整理并通过 \`MemoryUpdate\` 重试核验；无法安全整理时保留原文并说明未完成。不要创建 Profile 子目录或链接。
+- 更新前用 \`MemoryInspect\` 读取版本。画像超限时，可写用户主会话主动使用 \`collaboration.start_profile_maintenance\` 启动专用后台子会话并传入未保存事实及依据；主任务无需等待，启动不等于完成。已有整理时待记录事实未被接收，必须保留并在其结束后更新核验。子会话直接整理，并通过 \`MemoryUpdate\` 的 \`operations\` 逐条精简后带 revision 重试核验；无法安全整理时保留原文并说明未完成。不要创建 Profile 子目录或链接。
 - 项目专属事实归对应项目，而非全局 Profile。发现重叠时先确认归属和授权，核对并补齐项目记录，再整理画像；保留历史，不改其他 checkout。
 - 项目架构、约定或用法改变时，及时更新当前项目的 \`AGENTS.md\`；无变化不重写。只读、计划模式和用户禁止写入时不写，自动化与委派遵守各自权限。`
       : undefined,

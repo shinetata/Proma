@@ -1,7 +1,24 @@
-import type { RetryAttempt } from '@proma/shared'
+/**
+ * Pi native retry 生命周期 → Proma UI 重试事件
+ *
+ * Pi 自己会在同一 session 内做退避重试；Proma 需要知道它在重试什么、还要重试几次，
+ * 才能把「正在恢复」的状态展示给用户。这里负责三件事：
+ * 1. `installPromaRetryClassifier` 把 Proma 的失败分类接进 Pi 的重试判定；
+ * 2. 把 Pi 的 auto_retry_* 事件翻成 Proma 的 retry 更新；
+ * 3. 给每次重试附上 `reasonKind`，供 UI 展示具体原因。
+ */
 
-/** 前 N 次 Pi native retry 不通知 UI，与 Claude runtime 的自动恢复体验保持一致。 */
-export const PI_RETRY_VISIBILITY_THRESHOLD = 5
+import type { RetryAttempt, RetryReasonKind } from '@proma/shared'
+import { classifyModelFailure } from '../network/retry-classifier'
+
+/**
+ * 前 N 次 Pi native retry 不通知 UI。
+ *
+ * 取 0 表示从第一次重试开始就展示：重试提示文案已按 reasonKind 说清具体原因
+ * （网络中断 / 服务繁忙 / 传输中断），用户看到的是有信息量的状态而不是无意义的跳动；
+ * 反过来隐藏前几次会让「已经断了」和「还在等」看起来一样。
+ */
+export const PI_RETRY_VISIBILITY_THRESHOLD = 0
 
 /** 将 Pi native retry 与当前 renderer stream 绑定，拒绝迟到事件污染下一轮。 */
 export interface PiRetryEventContext {
@@ -17,11 +34,11 @@ interface PiRetryMetadata {
 }
 
 export type PiRetryUpdate =
-  | ({ status: 'starting'; delaySeconds: number; reason: string; scheduledAt: number } & PiRetryMetadata)
+  | ({ status: 'starting'; delaySeconds: number; reason: string; reasonKind: RetryReasonKind; scheduledAt: number } & PiRetryMetadata)
   | ({ status: 'attempt'; attemptData: RetryAttempt } & PiRetryMetadata)
   | ({ status: 'cleared' } & PiRetryMetadata)
   | ({ status: 'failed'; attemptData: RetryAttempt } & PiRetryMetadata)
-  | ({ status: 'cancelled'; reason: string } & PiRetryMetadata)
+  | ({ status: 'cancelled'; reason: string; reasonKind: RetryReasonKind } & PiRetryMetadata)
 
 type PiNativeRetryDetails = {
   attempt: number
@@ -33,6 +50,22 @@ type PiNativeRetryDetails = {
 type PiNativeRetryEvent =
   | ({ type: 'auto_retry_start' } & PiNativeRetryDetails)
   | ({ type: 'auto_retry_end'; success: boolean; finalError?: string } & PiNativeRetryDetails)
+
+/**
+ * Pi 侧的失败判定入口
+ *
+ * `_isRetryableError` 是 Pi AgentSession 的私有方法（不在 .d.ts 里导出），
+ * 只能在运行时按结构访问；这里用最小接口描述它，避免把 Pi 的内部类型引入本模块。
+ */
+interface PiRetryClassifierTarget {
+  _isRetryableError?: (message: unknown) => boolean
+}
+
+/** 仅取 Pi 错误消息里 Proma 关心的两个字段 */
+interface PiRetryClassifiableMessage {
+  errorMessage?: string
+  stopReason?: string
+}
 
 /**
  * Pi native retry 的终态事件门控。
@@ -62,6 +95,41 @@ export function createPiRetryTerminalGate<T>(): {
   }
 }
 
+/** 对外的失败原因归类，供 UI 与日志使用 */
+export function classifyPiRetryReason(errorMessage?: string): RetryReasonKind {
+  return classifyModelFailure(errorMessage).reasonKind
+}
+
+/**
+ * 把 Proma 的失败分类接进 Pi 的重试判定
+ *
+ * Pi 自己的 `_isRetryableError` 只认它内置的模式库，遇到网关特有错误（例如
+ * 积分不足、订阅额度耗尽、代理拦截返回的 HTML 错误页）会反复重试到上限。
+ * 这里在 Pi 判定之后再叠加一层：仍以 Pi 判定为兜底，但当错误是
+ * `stopReason === 'error'` 且带 `errorMessage` 时，以 Proma 分类为准。
+ *
+ * 返回 false 表示当前 Pi 版本的 session 上没有这个方法，调用方应记录警告；
+ * 此时功能退化为 Pi 原生行为，不影响正常使用。
+ */
+export function installPromaRetryClassifier(session: unknown): boolean {
+  const target = session as PiRetryClassifierTarget | null | undefined
+  const original = target?._isRetryableError
+  if (!target || typeof original !== 'function') return false
+
+  target._isRetryableError = function promaRetryClassifier(this: unknown, message: unknown): boolean {
+    const piRetryable = original.call(this, message)
+    if (!message || typeof message !== 'object') return piRetryable
+
+    const classifiable = message as PiRetryClassifiableMessage
+    const errorMessage = typeof classifiable.errorMessage === 'string' ? classifiable.errorMessage : undefined
+    if (classifiable.stopReason !== 'error' || !errorMessage) return piRetryable
+
+    return classifyModelFailure(errorMessage, piRetryable).retryable
+  }
+
+  return true
+}
+
 function retryMetadata(event: PiNativeRetryDetails, context: PiRetryEventContext): PiRetryMetadata {
   return {
     attempt: event.attempt,
@@ -79,20 +147,21 @@ function retryAttempt(event: PiNativeRetryDetails, timestamp: number, errorMessa
     maxTotalAttempts: event.maxAttempts ?? event.attempt,
     timestamp,
     reason: errorMessage,
+    reasonKind: classifyPiRetryReason(errorMessage),
     errorMessage,
     // 这里记录的是本次 retry 实际开始前已经等待的退避时间。
     delaySeconds: (event.delayMs ?? 0) / 1_000,
   }
 }
 
-/** Pi 0.84 只暴露连续失败段的 attempt；超过前五次才向 UI 展示重试生命周期。 */
+/** Pi 0.84 只暴露连续失败段的 attempt；超过阈值才向 UI 展示重试生命周期。 */
 function shouldExposePiRetry(event: PiNativeRetryDetails): boolean {
   return event.attempt > PI_RETRY_VISIBILITY_THRESHOLD
 }
 
 /**
  * 将 Pi native retry 生命周期转换为 Proma UI 已识别的 retry 事件。
- * 前五次恢复的完整生命周期都会被过滤；若最终未恢复，终态 assistant error 仍会正常展示。
+ * 未超过展示阈值的完整生命周期都会被过滤；若最终未恢复，终态 assistant error 仍会正常展示。
  */
 export function mapPiNativeRetryEvent(
   event: PiNativeRetryEvent,
@@ -104,12 +173,14 @@ export function mapPiNativeRetryEvent(
   const metadata = retryMetadata(event, context)
 
   if (event.type === 'auto_retry_start') {
+    const reason = event.errorMessage ?? '未知错误'
     return [{
       status: 'starting',
       ...metadata,
       scheduledAt: timestamp,
       delaySeconds: (event.delayMs ?? 0) / 1_000,
-      reason: event.errorMessage ?? '未知错误',
+      reason,
+      reasonKind: classifyPiRetryReason(reason),
     }]
   }
 
@@ -118,6 +189,18 @@ export function mapPiNativeRetryEvent(
   }
 
   const error = event.type === 'auto_retry_end' ? event.finalError ?? '未知错误' : 'Retry cancelled'
+
+  // 用户主动停止会把 Pi 的重试流程标记为 cancelled；这不是失败，
+  // 单独上报可以避免 UI 弹出「自动恢复未完成」的终态错误。
+  if (event.type === 'auto_retry_end' && /(?:retry\s+)?cancelled/i.test(error)) {
+    return [{
+      status: 'cancelled',
+      ...metadata,
+      reason: error,
+      reasonKind: classifyPiRetryReason(error),
+    }]
+  }
+
   return [{
     status: 'failed',
     ...metadata,

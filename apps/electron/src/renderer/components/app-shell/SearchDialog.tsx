@@ -40,7 +40,7 @@ import type {
   MessageSearchResult,
   AgentMessageSearchResult,
 } from '@proma/shared'
-import { findBestSearchMatch } from '@proma/shared'
+import { findBestSearchMatch, getAgentSessionActivityAt } from '@proma/shared'
 
 /** 标题搜索结果项 */
 interface TitleResult {
@@ -48,7 +48,8 @@ interface TitleResult {
   title: string
   type: 'agent'
   archived?: boolean
-  updatedAt: number
+  /** 会话最后活跃时间（lastActivityAt，旧数据回退 updatedAt），仅用于排序。 */
+  activityAt: number
 }
 
 /** 内容搜索结果项（统一格式） */
@@ -285,8 +286,9 @@ export function SearchDialog(): React.ReactElement {
     const matchesTitle = (title: string): boolean => findBestSearchMatch(title, q) !== null
     const titles: TitleResult[] = agentSessions
       .filter((s) => matchesTitle(s.title))
-      .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, updatedAt: s.updatedAt }))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      // 标题命中结果按会话最后活跃时间排序：元数据变更不应改变搜索结果的顺序。
+      .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, activityAt: getAgentSessionActivityAt(s) }))
+      .sort((a, b) => b.activityAt - a.activityAt)
       .slice(0, 20)
 
     setTitleResults(titles)

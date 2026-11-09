@@ -54,19 +54,6 @@
 .workspace-launcher {
   container: workspace-launcher / inline-size;
 }
-@container workspace-launcher (min-width: 480px) {
-  .workspace-launcher-tools {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .workspace-launcher-sites {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-@container workspace-launcher (min-width: 320px) and (max-width: 479px) {
-  .workspace-launcher-sites {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
 @container workspace-preview (max-width: 600px) {
   .workspace-preview-body:has(> .workspace-preview-toc) {
     flex-direction: column;

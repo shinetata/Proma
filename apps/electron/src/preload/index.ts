@@ -66,6 +66,8 @@ import type {
   WorkspaceCapabilities,
   WorkspaceMemorySummary,
   GlobalProfileSnapshot,
+  GlobalProfileHistoryEntry,
+  GlobalProfileHistoryVersion,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -749,6 +751,16 @@ export interface ElectronAPI {
   /** 记录用户对 Agent 主动维护两份 AGENTS.md 的明确授权。 */
   readGlobalProfile: (workspaceSlug: string) => Promise<GlobalProfileSnapshot>
   writeGlobalProfile: (workspaceSlug: string, revision: string, content: string) => Promise<GlobalProfileSnapshot>
+  /** 画像历史版本列表；limit 默认 20，主进程限制在 1..50。 */
+  readGlobalProfileHistory: (workspaceSlug: string, limit?: number) => Promise<GlobalProfileHistoryEntry[]>
+  /** 读取某个历史版本正文，用于恢复前预览。 */
+  readGlobalProfileHistoryVersion: (workspaceSlug: string, revision: string) => Promise<GlobalProfileHistoryVersion>
+  /** 恢复到指定历史版本；expectedRevision 是当前版本，不一致会报冲突。 */
+  restoreGlobalProfileHistory: (
+    workspaceSlug: string,
+    revision: string,
+    expectedRevision: string,
+  ) => Promise<GlobalProfileSnapshot>
 
 
   /** renderer 报告当前可见的 Agent 会话，用于提升其流式更新频率。 */
@@ -2044,6 +2056,15 @@ const electronAPI: ElectronAPI = {
   },
   writeGlobalProfile: (workspaceSlug: string, revision: string, content: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_GLOBAL_PROFILE, workspaceSlug, revision, content)
+  },
+  readGlobalProfileHistory: (workspaceSlug: string, limit?: number) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_GLOBAL_PROFILE_HISTORY, workspaceSlug, limit)
+  },
+  readGlobalProfileHistoryVersion: (workspaceSlug: string, revision: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_GLOBAL_PROFILE_HISTORY_VERSION, workspaceSlug, revision)
+  },
+  restoreGlobalProfileHistory: (workspaceSlug: string, revision: string, expectedRevision: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_GLOBAL_PROFILE_HISTORY, workspaceSlug, revision, expectedRevision)
   },
 
   setVisibleAgentStreamSession: (sessionId: string | null) => {

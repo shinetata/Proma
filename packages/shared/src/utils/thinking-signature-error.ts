@@ -1,7 +1,7 @@
 export const THINKING_SIGNATURE_ERROR_CODE = 'thinking_signature_invalid'
 export const THINKING_SIGNATURE_ERROR_TITLE = '思考内容无法继续'
 export const THINKING_SIGNATURE_ERROR_MESSAGE =
-  '这个错误通常是因为中途切换了模型，不同模型的思考标签不互认。可以先切回原来的模型再重试；如果这是很早之前的会话，也可以在新对话中引用当前会话继续。'
+  '当前会话的上下文发生了变化（记忆或项目规则更新、上下文压缩等），历史思考内容与当时的上下文不再匹配，上游拒绝了这段历史。重试会先清理历史思考内容再继续；如需保留完整上下文，也可以在新对话中引用当前会话继续。'
 
 export function isThinkingSignatureError(...messages: Array<string | null | undefined>): boolean {
   // API 错误消息中 signature/thinking 可能被反引号包裹（如 Invalid `signature` in `thinking` block），

@@ -9,9 +9,21 @@
 import * as React from 'react'
 import { atom, useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { FolderOpen, LoaderCircle, RefreshCw, Save, Sparkles } from 'lucide-react'
-import type { GlobalProfileSnapshot } from '@proma/shared'
+import { FolderOpen, History, LoaderCircle, RefreshCw, RotateCcw, Save, Sparkles } from 'lucide-react'
+import type {
+  GlobalProfileHistoryEntry,
+  GlobalProfileHistoryVersion,
+  GlobalProfileSnapshot,
+} from '@proma/shared'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,6 +76,12 @@ interface GlobalProfilePanelProps {
   workspaceSlug: string
 }
 
+/** 选中的历史版本：正文按需读取，附带列表里已有的时间与依据。 */
+interface SelectedHistoryVersion extends GlobalProfileHistoryVersion {
+  savedAt?: number
+  summary?: string
+}
+
 export function GlobalProfilePanel({ workspaceSlug }: GlobalProfilePanelProps): React.ReactElement {
   const [draft, setDraft] = useAtom(globalProfileDraftAtom)
   const [integrationSession, setIntegrationSession] = useAtom(profileIntegrationSessionAtom)
@@ -80,6 +98,11 @@ export function GlobalProfilePanel({ workspaceSlug }: GlobalProfilePanelProps): 
   const [error, setError] = React.useState<string | null>(null)
   const requestIdRef = React.useRef(0)
   const savingRef = React.useRef(false)
+  const [history, setHistory] = React.useState<GlobalProfileHistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = React.useState(false)
+  const [selectedVersion, setSelectedVersion] = React.useState<SelectedHistoryVersion | null>(null)
+  const [restoring, setRestoring] = React.useState(false)
+  const restoringRef = React.useRef(false)
 
   const isDirty = draft.text !== (draft.base?.content ?? '')
   const hasConflict = Boolean(draft.base && draft.latest && draft.base.revision !== draft.latest.revision)
@@ -117,6 +140,60 @@ export function GlobalProfilePanel({ workspaceSlug }: GlobalProfilePanelProps): 
       unsubscribe()
     }
   }, [load])
+
+  /** 历史列表：面板只展示最近 8 个版本，避免把状态区拉得很长。 */
+  const loadHistory = React.useCallback(async (): Promise<void> => {
+    setHistoryLoading(true)
+    try {
+      setHistory(await window.electronAPI.readGlobalProfileHistory(workspaceSlug, 8))
+    } catch {
+      // 历史读取失败不应挡住画像本身；保留上一次列表，不清空。
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [workspaceSlug])
+
+  // 画像版本一变就重新拉历史：保存或恢复后列表要立刻反映新的当前版本。
+  React.useEffect(() => {
+    if (!profile?.revision) return
+    void loadHistory()
+  }, [profile?.revision, loadHistory])
+
+  const openVersion = async (entry: GlobalProfileHistoryEntry): Promise<void> => {
+    try {
+      const version = await window.electronAPI.readGlobalProfileHistoryVersion(workspaceSlug, entry.revision)
+      setSelectedVersion({ ...version, savedAt: entry.savedAt, summary: entry.summary })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '读取历史版本失败')
+    }
+  }
+
+  const restore = async (): Promise<void> => {
+    // 恢复会覆盖当前内容，因此有未保存草稿或版本冲突时先让用户处理。
+    if (!selectedVersion || !profile || isDirty || hasConflict || restoringRef.current) return
+    restoringRef.current = true
+    setRestoring(true)
+    try {
+      const snapshot = await window.electronAPI.restoreGlobalProfileHistory(
+        workspaceSlug,
+        selectedVersion.revision,
+        profile.revision,
+      )
+      setDraft({ base: snapshot, latest: snapshot, text: snapshot.content ?? '' })
+      setSelectedVersion(null)
+      setError(null)
+      toast.success('已恢复该历史版本，原内容仍保留在历史中')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '恢复历史版本失败'
+      setError(message)
+      toast.error(message)
+    } finally {
+      restoringRef.current = false
+      setRestoring(false)
+      void load()
+      void loadHistory()
+    }
+  }
 
   const save = async (): Promise<void> => {
     if (!draft.base || !isDirty || hasConflict || savingRef.current || !draft.text.trim() || profile?.pendingCount) return
@@ -276,6 +353,53 @@ export function GlobalProfilePanel({ workspaceSlug }: GlobalProfilePanelProps): 
               </div>
             )}
             <p className="px-5 py-4 text-sm leading-7 text-muted-foreground">全局画像在所有项目中共享。项目专属偏好可在「当前项目」中补充。</p>
+            <div className="border-t border-border/60 px-3 py-4">
+              <div className="flex items-center justify-between px-2">
+                <h4 className="flex items-center gap-2 text-sm font-semibold">
+                  <History className="size-4 text-muted-foreground" />
+                  历史版本
+                </h4>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={historyLoading}
+                  onClick={() => void loadHistory()}
+                >
+                  刷新
+                </Button>
+              </div>
+              {history.length === 0 && (
+                <p className="px-2 pt-2 text-xs leading-5 text-muted-foreground">
+                  {historyLoading ? '读取历史版本…' : '还没有历史版本。每次写入都会保留上一版。'}
+                </p>
+              )}
+              {history.length > 0 && (
+                <ul className="mt-2 max-h-64 space-y-0.5 overflow-y-auto">
+                  {history.map((entry) => (
+                    <li key={entry.revision}>
+                      <button
+                        type="button"
+                        className="w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.05]"
+                        onClick={() => void openVersion(entry)}
+                      >
+                        <span className="flex items-center gap-2 text-[13px] tabular-nums">
+                          {formatTime(entry.savedAt)}
+                          {entry.current && (
+                            <span className="rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground">
+                              当前
+                            </span>
+                          )}
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                          {entry.summary ?? `${entry.chars} 字符`}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
 
           <SettingsCard divided={false} className="flex min-h-[320px] flex-1 flex-col overflow-hidden border border-border/60 md:min-h-0">
@@ -317,6 +441,38 @@ export function GlobalProfilePanel({ workspaceSlug }: GlobalProfilePanelProps): 
           </SettingsCard>
         </div>
       )}
+
+      <Dialog
+        open={selectedVersion !== null}
+        onOpenChange={(open) => {
+          if (!open && !restoringRef.current) setSelectedVersion(null)
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>历史版本 · {formatTime(selectedVersion?.savedAt)}</DialogTitle>
+            <DialogDescription>
+              {selectedVersion?.summary ?? '未记录写入依据。'}
+              恢复后会用这份内容生成新的当前版本，现有内容仍保留在历史中。
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-[45vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-foreground/[0.02] p-4 font-mono text-xs leading-6">
+            {selectedVersion?.content ?? ''}
+          </pre>
+          <DialogFooter>
+            <Button variant="outline" disabled={restoring} onClick={() => setSelectedVersion(null)}>
+              取消
+            </Button>
+            <Button
+              disabled={restoring || isDirty || hasConflict || !profile || saving}
+              onClick={() => void restore()}
+            >
+              {restoring ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <RotateCcw className="mr-2 size-4" />}
+              {restoring ? '恢复中…' : isDirty || hasConflict ? '请先处理当前草稿' : '恢复此版本'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

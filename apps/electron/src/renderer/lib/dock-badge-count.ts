@@ -7,12 +7,8 @@
 export interface DockBadgeCountInput {
   /** 已完成但尚未查看的 Agent 会话数量 */
   unviewedCompletedCount: number
-  /** 待审批权限请求数量 */
-  pendingPermissionCount: number
   /** 待回答 AskUser 请求数量 */
   pendingAskUserCount: number
-  /** 待审批计划请求数量 */
-  pendingExitPlanCount: number
 }
 
 /** 统计按会话分组的待处理请求数量 */
@@ -29,8 +25,6 @@ export function calculateDockBadgeCount(input: DockBadgeCountInput): number {
   return Math.max(
     0,
     input.unviewedCompletedCount
-      + input.pendingPermissionCount
-      + input.pendingAskUserCount
-      + input.pendingExitPlanCount,
+      + input.pendingAskUserCount,
   )
 }

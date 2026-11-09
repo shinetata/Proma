@@ -11,6 +11,7 @@ import {
   isThinkingSignatureError as matchesThinkingSignatureError,
 } from '@proma/shared'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from './error-patterns'
+import { classifyModelFailure, describeModelFailure, explicitHttpStatus } from './network/retry-classifier'
 
 // Agent 错误消息友好化
 // ============================================================================
@@ -90,11 +91,18 @@ function extractHttpStatusFromErrorText(...messages: string[]): number | null {
   return null
 }
 
+/** 将 Agent 错误映射为 TypedError 的补充信息 */
+export interface MapAgentErrorOptions {
+  /** 当前渠道是否为 Proma Cloud（影响额度不足文案与动作） */
+  isPromaChannel?: boolean
+}
+
 /** 将 Agent 错误映射为 TypedError */
 export function mapAgentErrorToTypedError(
   errorCode: string,
   detailedMessage: string,
   originalError: string,
+  options: MapAgentErrorOptions = {},
 ): TypedError {
   if (isThinkingSignatureError(detailedMessage, originalError)) {
     return {
@@ -192,17 +200,33 @@ export function mapAgentErrorToTypedError(
     },
   }
 
+  // 先给这次失败定性：网络类错误要按具体成因给出标题与可执行动作，
+  // 不能再笼统一句「网络异常 / 上游 API 连接中断」。
+  const failureText = [detailedMessage, originalError].filter(Boolean).join('\n')
+  const failure = classifyModelFailure(failureText)
+  const isNetworkFailureKind = failure.reasonKind === 'connection' || failure.reasonKind === 'stream_interrupted'
+  const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
+    ?? explicitHttpStatus(failureText)
+    ?? null
+
   // 瞬时网络错误（terminated / ECONNRESET / socket hang up 等）：
   // assistant.error 路径下，Pi adapter 常把这类错误标记为 errorType='unknown'，
   // 这里从 detailedMessage / originalError 兜底匹配，归类为可重试的 network_error。
+  // 已有明确 HTTP 状态码时不走这条：那属于上游响应问题，由下面的状态码分支处理。
   const looksLikeNetwork =
     (!errorMap[errorCode]) &&
-    (TRANSIENT_NETWORK_PATTERN.test(detailedMessage ?? '') || TRANSIENT_NETWORK_PATTERN.test(originalError ?? ''))
+    httpStatus == null &&
+    (errorCode === 'network_error' ||
+      (isNetworkFailureKind && failure.retryable) ||
+      TRANSIENT_NETWORK_PATTERN.test(detailedMessage ?? '') ||
+      TRANSIENT_NETWORK_PATTERN.test(originalError ?? ''))
   if (looksLikeNetwork) {
+    // 已经定性出具体网络失败类别时直接用；仅被正则兜底命中的，按笼统的连接中断描述。
+    const copy = describeModelFailure(isNetworkFailureKind ? failure : { ...failure, reasonKind: 'connection' })
     return {
       code: 'network_error',
-      title: '网络异常',
-      message: detailedMessage || '上游 API 连接中断',
+      title: copy.title,
+      message: copy.message,
       actions: [
         { key: 's', label: '设置', action: 'settings' },
         { key: 'r', label: '重试', action: 'retry' },
@@ -234,7 +258,52 @@ export function mapAgentErrorToTypedError(
     }
   }
 
-  const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
+  const mapped = errorMap[errorCode] || {
+    code: 'unknown_error' as ErrorCode,
+    title: '',
+    message: detailedMessage || errorCode,
+    canRetry: false,
+  }
+
+  // “未选择正确渠道/模型”场景：友好化后的文案已固定，无法登录多半是渠道或模型配置有误，
+  // 引导用户直接重新选择模型，而非跳转设置页面
+  const isInvalidChannelOrModel = /请检查是否选择了正确的 Proma 供应渠道和模型/.test(mapped.message)
+
+  const mappedError: TypedError = {
+    code: mapped.code,
+    title: mapped.title,
+    message: detailedMessage || mapped.message,
+    actions: [
+      isInvalidChannelOrModel
+        ? { key: 'm', label: '重新选择模型', action: 'select_model' }
+        : { key: 's', label: '设置', action: 'settings' },
+      ...(mapped.canRetry ? [{ key: 'r', label: '重试', action: 'retry' }] : []),
+      ...(mapped.code === 'prompt_too_long' ? [{ key: 'c', label: '压缩上下文', action: 'compact' }] : []),
+    ],
+    canRetry: mapped.canRetry,
+    retryDelayMs: mapped.canRetry ? 1000 : undefined,
+    originalError,
+  }
+
+  // 402 在 Proma Cloud 与第三方渠道含义不同：前者是账户额度，后者是渠道计费配置。
+  if (httpStatus === 402) {
+    const isPromaChannel = options.isPromaChannel === true
+    return {
+      code: 'billing_error',
+      title: isPromaChannel ? '额度不足' : '渠道账单错误',
+      message: isPromaChannel
+        ? 'Proma Cloud 账户可用额度不足，请充值或升级套餐后重试。'
+        : '当前第三方渠道返回 402 账单错误，请检查该渠道的额度或计费状态，也可切换到 Proma Cloud 重试。',
+      actions: [{
+        key: 's',
+        label: isPromaChannel ? '查看使用额度' : '打开渠道设置',
+        action: isPromaChannel ? 'settings' : 'open_channel_settings',
+      }],
+      canRetry: false,
+      originalError,
+    }
+  }
+
   if (httpStatus != null && (httpStatus === 429 || httpStatus >= 500)) {
     const isRateLimited = httpStatus === 429
     const isUnavailable = httpStatus === 503
@@ -266,30 +335,5 @@ export function mapAgentErrorToTypedError(
     }
   }
 
-  const mapped = errorMap[errorCode] || {
-    code: 'unknown_error' as ErrorCode,
-    title: '',
-    message: detailedMessage || errorCode,
-    canRetry: false,
-  }
-
-  // “未选择正确渠道/模型”场景：友好化后的文案已固定，无法登录多半是渠道或模型配置有误，
-  // 引导用户直接重新选择模型，而非跳转设置页面
-  const isInvalidChannelOrModel = /请检查是否选择了正确的 Proma 供应渠道和模型/.test(mapped.message)
-
-  return {
-    code: mapped.code,
-    title: mapped.title,
-    message: detailedMessage || mapped.message,
-    actions: [
-      isInvalidChannelOrModel
-        ? { key: 'm', label: '重新选择模型', action: 'select_model' }
-        : { key: 's', label: '设置', action: 'settings' },
-      ...(mapped.canRetry ? [{ key: 'r', label: '重试', action: 'retry' }] : []),
-      ...(mapped.code === 'prompt_too_long' ? [{ key: 'c', label: '压缩上下文', action: 'compact' }] : []),
-    ],
-    canRetry: mapped.canRetry,
-    retryDelayMs: mapped.canRetry ? 1000 : undefined,
-    originalError,
-  }
+  return mappedError
 }

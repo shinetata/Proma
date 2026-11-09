@@ -9,8 +9,8 @@ import { atom } from 'jotai'
 import type { Getter } from 'jotai'
 import { atomWithStorage, selectAtom } from 'jotai/utils'
 import { atomFamily } from 'jotai-family'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
-import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, RetryReasonKind, PromaPermissionMode, AskUserRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
+import { PROMA_DEFAULT_PERMISSION_MODE, compareAgentSessionsByActivityDesc } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 import type { SessionFileChange } from '@/lib/session-file-changes'
@@ -77,6 +77,8 @@ export interface AgentRetryState {
   delaySeconds?: number
   /** 当前或最后一次失败原因。 */
   reason?: string
+  /** 失败原因类别；renderer 用它选择具体文案，不解析 errorMessage。 */
+  reasonKind?: RetryReasonKind
 }
 
 /** Agent 会话的流式状态 */
@@ -527,8 +529,8 @@ export const MAX_PERSISTED_AGENT_SIDE_PANEL_LAYOUTS = 50
 
 /**
  * 仅保留最近活动的 Session 布局，防止 localStorage 随历史会话无限增长。
- * 会话元数据可用时按 updatedAt 排序；冷启动尚未加载元数据时按存储顺序兜底。
- * 正在写入的 Session 始终保留，即使其元数据尚未更新。
+ * 会话元数据可用时按最后活跃时间排序（元数据变更不算活动）；冷启动尚未加载
+ * 元数据时按存储顺序兜底。正在写入的 Session 始终保留，即使其元数据尚未更新。
  */
 export function pruneAgentSidePanelLayouts(
   layouts: Record<string, AgentSidePanelLayout>,
@@ -540,7 +542,7 @@ export function pruneAgentSidePanelLayouts(
     ? layoutIds.slice(-MAX_PERSISTED_AGENT_SIDE_PANEL_LAYOUTS)
     : sessions
       .slice()
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort(compareAgentSessionsByActivityDesc)
       .slice(0, MAX_PERSISTED_AGENT_SIDE_PANEL_LAYOUTS)
       .map((session) => session.id)
   const retainedIds = new Set(recentSessionIds)
@@ -934,6 +936,15 @@ export const agentNonGitFileChangesAtom = atom<Map<string, SessionFileChange[]>>
 export const agentFileChangesCurrentRunAtom = atom<Map<string, string>>(new Map())
 
 /**
+ * 用户已经查看过改动的运行轮次：Map<sessionId, runId>。
+ *
+ * 与 [[agentDiffUnseenChangesAtom]] 的会话级布尔互补：布尔只表达「读过没读过」，
+ * 这里记录「读到的是哪一轮」，用来判断任务结束后是否要重新提示并展开改动区。
+ * 用户切到改动页签时写入当前 run ID。
+ */
+export const agentViewedChangeRunAtom = atom<Map<string, string>>(new Map())
+
+/**
  * Diff 数据缓存 — 按 session 隔离，存放上一次 IPC 拉取到的未暂存改动结果。
  *
  * 让 DiffChangesList 切走再切回时能立即拿到旧数据渲染（SWR 模式），
@@ -979,18 +990,22 @@ export const recentlyModifiedPathsAtom = atom<Map<string, Map<string, number>>>(
 /** 最近修改标记的存活时间（毫秒） */
 export const RECENTLY_MODIFIED_TTL_MS = 60_000
 
-// ===== 权限系统 Atoms =====
+// ===== 权限相关 Atoms =====
 
-/** 新会话默认权限模式 */
+/**
+ * 默认权限模式（新会话缺省值）
+ *
+ * 权限模式已不再向用户暴露切换入口；此默认值仍用于缺少持久化值的会话，
+ * 并为将来恢复模式选择保留数据位。
+ */
 export const agentDefaultPermissionModeAtom = atom<PromaPermissionMode>(PROMA_DEFAULT_PERMISSION_MODE)
-
-/** Per-session 权限模式 Map — sessionId → PromaPermissionMode */
-export const agentPermissionModeMapAtom = atom<Map<string, PromaPermissionMode>>(new Map())
 
 /**
  * 按 sessionId 派生该 session 的持久化权限模式。
  * 返回 `undefined`（session 不存在或未设置）或具体的 PromaPermissionMode 字符串，
  * jotai 用 === 比较，只有值真正变化时才通知下游——避免流式中无关字段更新引发 re-render。
+ *
+ * 这是历史数据读取：老会话索引里仍保存 permissionMode 字段。
  */
 export const sessionPersistedPermissionModeAtom = atomFamily((sessionId: string) =>
   atom((get) => {
@@ -1018,32 +1033,6 @@ export const agentMaxBudgetUsdAtom = atom<number | undefined>(undefined)
 
 /** Agent 最大轮次 */
 export const agentMaxTurnsAtom = atom<number | undefined>(undefined)
-
-/** 待处理的权限请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
-export const allPendingPermissionRequestsAtom = atom<Map<string, readonly PermissionRequest[]>>(new Map())
-
-type PermissionRequestsUpdate = readonly PermissionRequest[] | ((prev: readonly PermissionRequest[]) => readonly PermissionRequest[])
-
-/** 当前会话的权限请求队列（派生读写原子） */
-export const pendingPermissionRequestsAtom = atom(
-  (get): readonly PermissionRequest[] => {
-    const currentId = get(currentAgentSessionIdAtom)
-    if (!currentId) return []
-    return get(allPendingPermissionRequestsAtom).get(currentId) ?? []
-  },
-  (get, set, update: PermissionRequestsUpdate) => {
-    const currentId = get(currentAgentSessionIdAtom)
-    if (!currentId) return
-    set(allPendingPermissionRequestsAtom, (prev) => {
-      const map = new Map(prev)
-      const current = map.get(currentId) ?? []
-      const newValue = typeof update === 'function' ? update(current) : update
-      if (newValue.length === 0) map.delete(currentId)
-      else map.set(currentId, newValue)
-      return map
-    })
-  }
-)
 
 /** 待处理的 AskUser 请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
 export const allPendingAskUserRequestsAtom = atom<Map<string, readonly AskUserRequest[]>>(new Map())
@@ -1087,12 +1076,6 @@ export const pendingAskUserRequestsAtom = atom(
     })
   }
 )
-
-/** 待处理的 ExitPlanMode 请求 Map — 以 sessionId 为 key */
-export const allPendingExitPlanRequestsAtom = atom<Map<string, readonly ExitPlanModeRequest[]>>(new Map())
-
-/** 当前处于 Plan 模式的会话 ID 集合 */
-export const agentPlanModeSessionsAtom = atom<Set<string>>(new Set<string>())
 
 export const currentAgentSessionAtom = atom<AgentSessionMeta | null>((get) => {
   const sessions = get(agentSessionsAtom)
@@ -1168,13 +1151,11 @@ function getStableIndicatorMap(entries: Array<[string, SessionIndicatorStatus]>)
   return lastIndicatorMap
 }
 
-/** Dock/Launcher 角标数量：未查看完成会话 + 待处理阻塞请求 */
+/** Dock/Launcher 角标数量：未查看完成会话 + 待回答 AskUser 请求 */
 export const dockBadgeCountAtom = atom<number>((get) => {
   return calculateDockBadgeCount({
     unviewedCompletedCount: get(unviewedCompletedSessionIdsAtom).size,
-    pendingPermissionCount: countPendingRequests(get(allPendingPermissionRequestsAtom)),
     pendingAskUserCount: countPendingRequests(get(allPendingAskUserRequestsAtom)),
-    pendingExitPlanCount: countPendingRequests(get(allPendingExitPlanRequestsAtom)),
   })
 })
 
@@ -1185,9 +1166,7 @@ export const dockBadgeCountAtom = atom<number>((get) => {
 export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((get) => {
   const streamStates = get(agentStreamingStatesAtom)
   const delegatedSessionIds = get(delegatedAgentSessionIdsAtom)
-  const pendingPerms = get(allPendingPermissionRequestsAtom)
   const pendingAskUser = get(allPendingAskUserRequestsAtom)
-  const pendingExitPlan = get(allPendingExitPlanRequestsAtom)
   const unviewedCompleted = get(unviewedCompletedSessionIdsAtom)
   const unviewedDelegatedCompleted = get(unviewedCompletedDelegatedSessionIdsAtom)
 
@@ -1195,9 +1174,7 @@ export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorSta
 
   for (const [id, state] of streamStates) {
     if (!state.running) continue
-    const hasBlock = (pendingPerms.get(id)?.length ?? 0) > 0
-      || (pendingAskUser.get(id)?.length ?? 0) > 0
-      || (pendingExitPlan.get(id)?.length ?? 0) > 0
+    const hasBlock = (pendingAskUser.get(id)?.length ?? 0) > 0
     if (hasBlock) {
       map.set(id, 'blocked')
     } else if (
@@ -1401,6 +1378,7 @@ export function applyAgentEvent(
           scheduledAt: event.scheduledAt ?? Date.now(),
           delaySeconds: event.delaySeconds,
           reason: event.reason,
+          reasonKind: event.reasonKind,
         },
       }
     }
@@ -1427,6 +1405,7 @@ export function applyAgentEvent(
           maxTotalAttempts: event.maxTotalAttempts ?? event.attemptData.maxTotalAttempts ?? previousRetry?.maxTotalAttempts,
           history,
           reason: event.attemptData.reason,
+          reasonKind: event.attemptData.reasonKind ?? previousRetry?.reasonKind,
         },
       }
     }
@@ -1464,6 +1443,7 @@ export function applyAgentEvent(
           maxTotalAttempts: event.maxTotalAttempts ?? event.finalAttempt.maxTotalAttempts ?? previousRetry?.maxTotalAttempts,
           history: upsertRetryAttempt(previousRetry?.history ?? [], event.finalAttempt),
           reason: event.finalAttempt.reason,
+          reasonKind: event.finalAttempt.reasonKind ?? previousRetry?.reasonKind,
         },
       }
     }
@@ -1486,14 +1466,6 @@ export function applyAgentEvent(
         },
       }
     }
-
-    case 'permission_request':
-      // 权限请求事件由 PermissionBanner 处理，不影响流式状态
-      return prev
-
-    case 'permission_resolved':
-      // 权限解决事件由 PermissionBanner 处理，不影响流式状态
-      return prev
 
     case 'ask_user_request':
       // AskUser 请求事件由 AskUserBanner 处理，不影响流式状态

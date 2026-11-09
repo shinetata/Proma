@@ -11,6 +11,7 @@ import { join, relative, isAbsolute, dirname, basename } from 'node:path'
 import { writeJsonFileAtomic } from './safe-file'
 import { resolveMemoryPath, writeMemoryFileAtomic } from './memory-file-path'
 import { inspectProjectMap } from './project-map-review'
+import { applyMemoryEntryOperations, type MemoryEntryChange, type MemoryEntryOperation, type MemoryEntrySkip } from './memory-entries'
 
 /** 记忆文件 7 天复查周期。 */
 export const MEMORY_REVIEW_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
@@ -50,6 +51,23 @@ export interface MemoryFile {
 export interface MemoryReview {
   checkedAt?: number
   reviewDue: boolean
+}
+
+/** 历史版本条目：`savedAt` 与 `summary` 来自同名的 history meta 记录。 */
+export interface MemoryHistoryEntry {
+  revision: string
+  savedAt?: number
+  summary?: string
+  /** 该版本内容的字符数。 */
+  chars: number
+  /** 是否为当前生效版本。 */
+  current: boolean
+}
+
+/** 单条条目操作的写入结果：既回传新版本，也回传实际生效与被跳过的操作。 */
+export interface MemoryEntryUpdateResult extends MemoryFile {
+  changes: MemoryEntryChange[]
+  skipped: MemoryEntrySkip[]
 }
 
 export interface LegacyProfileSource {
@@ -326,6 +344,64 @@ export function readMemoryReview(ctx: AgentMemoryContext, file: MemoryFile, now 
   return { checkedAt, reviewDue: file.modifiedAt !== undefined && now - Math.max(file.modifiedAt, checkedAt ?? 0) > MEMORY_REVIEW_INTERVAL_MS }
 }
 
+/** 历史快照目录：按 `sha256(解析后路径)` 分组，与商业版共用同一批文件。 */
+export function memoryHistoryDirectory(ctx: AgentMemoryContext, path: string): string {
+  return join(ctx.globalDir, 'history', createHash('sha256').update(resolveMemoryPath(path)).digest('hex'))
+}
+
+/** 写入历史版本的元信息：时间、写入依据与字符数，供历史列表展示。 */
+function writeHistoryMeta(
+  ctx: AgentMemoryContext,
+  path: string,
+  file: MemoryFile,
+  summary: string,
+  savedAt: number,
+): void {
+  if (file.content === null) return
+  const directory = memoryHistoryDirectory(ctx, path)
+  assertMemoryPath(directory)
+  mkdirSync(directory, { recursive: true })
+  writeJsonFileAtomic(join(directory, `${file.revision}.json`), {
+    revision: file.revision,
+    savedAt,
+    summary,
+    chars: file.content.length,
+  })
+}
+
+/**
+ * 锁内的统一提交：预算校验 → 写旧版本快照 → 写新内容 → 写复查记录 → 写历史元信息。
+ *
+ * 调用方必须已经持有写锁并做过版本校验；这里不再重复校验 revision。
+ */
+function commitMemoryLocked(
+  ctx: AgentMemoryContext,
+  path: string,
+  before: MemoryFile,
+  content: string,
+  summary: string,
+): MemoryFile {
+  if (before.content !== content && resolveMemoryPath(path) === resolveMemoryPath(memoryPaths(ctx).profile)) {
+    assertProfileBudget(content)
+  }
+  if (before.content !== content) {
+    if (before.content !== null) {
+      writeMemoryText(join(memoryHistoryDirectory(ctx, path), `${before.revision}.md`), before.content)
+    }
+    writeMemoryText(path, content)
+  }
+
+  const after = readMemoryFile(path)
+  const now = Date.now()
+  const recordPath = memoryReviewRecordPath(ctx, path)
+  assertMemoryPath(recordPath)
+  mkdirSync(dirname(recordPath), { recursive: true })
+  writeJsonFileAtomic(resolveMemoryPath(recordPath), { revision: after.revision, checkedAt: now, summary })
+  // 内容不变时只刷新复查记录，不产生新的历史版本。
+  if (before.content !== content) writeHistoryMeta(ctx, path, after, summary, now)
+  return after
+}
+
 /**
  * 版本校验下写入记忆：
  * `revision` 不一致说明别的会话已经改过，必须重新读取后合并。
@@ -343,24 +419,131 @@ export function updateMemory(
     const path = memoryTarget(ctx, target)
     const before = readMemoryFile(path)
     if (before.revision !== revision) throw new Error('记忆已被其他会话修改，请重新读取并合并。')
-    if (before.content !== content && resolveMemoryPath(path) === resolveMemoryPath(memoryPaths(ctx).profile)) {
-      assertProfileBudget(content)
-    }
+    return commitMemoryLocked(ctx, path, before, content, summary)
+  })
+}
 
-    if (before.content !== content) {
-      if (before.content !== null) {
-        const key = createHash('sha256').update(resolveMemoryPath(path)).digest('hex')
-        writeMemoryText(join(ctx.globalDir, 'history', key, `${before.revision}.md`), before.content)
+/**
+ * 按条目增删改记忆：只动命中/插入的 `- ` 行，其余内容原样保留。
+ *
+ * 没有任何条目实际生效时不写盘（避免产生无意义的历史版本），但仍回传 skipped 让调用方知道原因。
+ */
+export function updateMemoryEntries(
+  ctx: AgentMemoryContext,
+  target: string,
+  revision: string,
+  operations: MemoryEntryOperation[],
+  summary: string,
+): MemoryEntryUpdateResult {
+  if (!summary.trim()) throw new Error('请提供实际核验/更新的依据。')
+  if (!operations.length) throw new Error('请提供至少一条条目操作。')
+  return withMemoryLock(ctx, () => {
+    assertNoPendingMemoryMigration(ctx)
+    const path = memoryTarget(ctx, target)
+    const before = readMemoryFile(path)
+    if (before.revision !== revision) throw new Error('记忆已被其他会话修改，请重新读取并合并。')
+
+    const applied = applyMemoryEntryOperations(before.content ?? '', operations)
+    if (!applied.changes.length) return { ...before, changes: [], skipped: applied.skipped }
+    const after = commitMemoryLocked(ctx, path, before, applied.content, summary)
+    return { ...after, changes: applied.changes, skipped: applied.skipped }
+  })
+}
+
+/** 列出当前目标的历史版本，按保存时间倒序；当前版本也会出现在列表里。 */
+export function listMemoryHistory(ctx: AgentMemoryContext, target: string, limit = 20): MemoryHistoryEntry[] {
+  const path = memoryTarget(ctx, target)
+  const current = readMemoryFile(path)
+  const entries: MemoryHistoryEntry[] = []
+  const directory = memoryHistoryDirectory(ctx, path)
+
+  let names: string[] = []
+  try {
+    names = readdirSync(directory)
+  } catch {
+    names = []
+  }
+
+  for (const name of names) {
+    if (!name.endsWith('.md')) continue
+    const revision = name.slice(0, -3)
+    const file = join(directory, name)
+    let content: string
+    try {
+      content = readFileSync(file, 'utf8')
+    } catch {
+      continue
+    }
+    let savedAt: number | undefined
+    let summary: string | undefined
+    try {
+      savedAt = statSync(file).mtimeMs
+      const meta = JSON.parse(readFileSync(join(directory, `${revision}.json`), 'utf8')) as {
+        savedAt?: unknown
+        summary?: unknown
       }
-      writeMemoryText(path, content)
+      if (typeof meta.savedAt === 'number') savedAt = meta.savedAt
+      if (typeof meta.summary === 'string') summary = meta.summary
+    } catch {
+      // meta 缺失或损坏时退回文件 mtime；不影响列出该版本。
     }
+    entries.push({ revision, savedAt, summary, chars: content.length, current: revision === current.revision })
+  }
 
-    const after = readMemoryFile(path)
-    const recordPath = memoryReviewRecordPath(ctx, path)
-    assertMemoryPath(recordPath)
-    mkdirSync(dirname(recordPath), { recursive: true })
-    writeJsonFileAtomic(resolveMemoryPath(recordPath), { revision: after.revision, checkedAt: Date.now(), summary })
-    return after
+  if (current.content !== null && !entries.some((entry) => entry.current)) {
+    let summary: string | undefined
+    try {
+      const meta = JSON.parse(readFileSync(join(directory, `${current.revision}.json`), 'utf8')) as { summary?: unknown }
+      if (typeof meta.summary === 'string') summary = meta.summary
+    } catch {
+      // 当前版本还没有 meta 时只展示时间与字符数。
+    }
+    entries.push({
+      revision: current.revision,
+      savedAt: current.modifiedAt,
+      summary,
+      chars: current.content.length,
+      current: true,
+    })
+  }
+
+  return entries
+    .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0))
+    .slice(0, Math.max(1, Math.min(limit, 50)))
+}
+
+/** 读取指定历史版本的正文；当前版本直接返回当前文件。 */
+export function readMemoryHistoryVersion(ctx: AgentMemoryContext, target: string, revision: string): MemoryFile {
+  if (!/^[a-f0-9]{64}$/.test(revision)) throw new Error('历史版本标识无效。')
+  const path = memoryTarget(ctx, target)
+  const current = readMemoryFile(path)
+  if (current.revision === revision) return current
+  const file = readMemoryFile(join(memoryHistoryDirectory(ctx, path), `${revision}.md`))
+  if (file.content === null) throw new Error('该历史版本不存在或已被清理。')
+  return { ...file, path }
+}
+
+/**
+ * 恢复历史版本：仍然走一次正常写入，因此保留版本校验、预算与锁。
+ *
+ * `expectedRevision` 是调用方看到的当前版本；不一致说明其间有并发修改，先刷新再恢复。
+ */
+export function restoreMemoryVersion(
+  ctx: AgentMemoryContext,
+  target: string,
+  revision: string,
+  expectedRevision: string,
+  summary?: string,
+): MemoryFile {
+  const historical = readMemoryHistoryVersion(ctx, target, revision)
+  const restored = historical.content
+  if (restored === null) throw new Error('该历史版本不存在或已被清理。')
+  return withMemoryLock(ctx, () => {
+    assertNoPendingMemoryMigration(ctx)
+    const path = memoryTarget(ctx, target)
+    const before = readMemoryFile(path)
+    if (before.revision !== expectedRevision) throw new Error('记忆已被其他会话修改，请刷新后再恢复。')
+    return commitMemoryLocked(ctx, path, before, restored, summary?.trim() || '用户从历史版本恢复。')
   })
 }
 
