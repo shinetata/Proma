@@ -1,16 +1,16 @@
 /**
  * assistant-turn-sections — 助手轮次的「执行过程 / 最终输出」分区与过程文案
  *
- * 与商业版 0.21.88 的轮次渲染保持一致：
- * - 最后一条非错误 assistant 消息里的正文视为最终输出，排在过程之后单独展示；
- * - 其余 thinking / tool_use 连续片段合并为一个「步骤组」，中间穿插的正文作为过程中的说明；
- * - 过程区顶部汇总为「已思考 N 次、执行 N 次工具、耗时 Xs」。
- *
- * 已答的 AskUserQuestion 例外：它从执行过程里摘出，作为 question 分区
- * 交给「你的回答」卡片（见 collectAssistantTurnBodyEntries）。
+ * 与商业版 0.22.0 的轮次渲染保持一致：
+ * - 分区保持内容块的原始顺序（最终输出不再整体挪到最后）；
+ * - 最后一条非错误 assistant 消息里的正文视为最终输出；没有正文时，
+ *   最后一段非空文字也归入正文区，保证「最终回复始终独立可见」；
+ * - 已答的 AskUserQuestion 从执行过程里摘出，作为 question 分区
+ *   交给「你的回答」卡片（见 splitTurnBodyAndProcess / groupConsecutiveQuestions）；
+ * - 过程区收拢为轮次顶部的一行摘要（TurnProcessSummary，见 ProcessTimeline.tsx）。
  */
 
-import type { SDKAssistantMessage, SDKContentBlock, SDKMessage, SDKResultMessage, SDKThinkingBlock, SDKToolUseBlock } from '@proma/shared'
+import type { SDKAssistantMessage, SDKContentBlock, SDKMessage, SDKResultMessage, SDKThinkingBlock, SDKToolUseBlock, SDKUserMessage } from '@proma/shared'
 
 function isToolUseBlock(block: SDKContentBlock | undefined): block is SDKToolUseBlock {
   return block?.type === 'tool_use'
@@ -37,10 +37,11 @@ export type AssistantTurnSection =
   // 已答的 AskUserQuestion：从执行过程里摘出，作为「你的回答」卡片回显
   | { type: 'question'; item: AssistantTurnSectionItem }
 
-/** 正文区条目：单条正文块，或一组连续问答（合并成一张回显卡片） */
-export type AssistantTurnBodyEntry =
-  | { type: 'block'; item: AssistantTurnSectionItem; sectionIndex: number; promotedFromThinking?: boolean }
-  | { type: 'question'; entries: AssistantTurnSectionItem[]; sectionIndex: number }
+/** 分区列表条目：分区本身 + 在分区列表中的下标（供渲染层定位动画 key 与活动组） */
+export interface AssistantTurnListEntry {
+  item: AssistantTurnSection
+  itemIndex: number
+}
 
 export interface AssistantTurnSections {
   items: AssistantTurnSection[]
@@ -48,6 +49,8 @@ export interface AssistantTurnSections {
   outputState: 'answer' | 'incomplete' | 'none'
   /** 本轮成功结束但没有任何文字总结 */
   completedWithoutAnswer: boolean
+  /** 本轮以失败/中断收尾（用户停止、消息级错误或 result 异常） */
+  failed: boolean
 }
 
 type LooseAssistantMessage = SDKAssistantMessage & {
@@ -84,7 +87,7 @@ export function findTrailingResult(turnMessages: SDKMessage[]): SDKResultMessage
   return undefined
 }
 
-/** 将轮次内容块拆分为过程片段与最终输出 */
+/** 将轮次内容块拆分为过程片段与最终输出（保持原始顺序） */
 export function buildAssistantTurnSections(
   blocks: AssistantTurnSourceBlock[],
   {
@@ -147,12 +150,11 @@ export function buildAssistantTurnSections(
     if (promotedIndex !== undefined) outputIndexes.add(promotedIndex)
   }
 
-  const processItems: AssistantTurnSection[] = []
-  const outputItems: AssistantTurnSection[] = []
+  const items: AssistantTurnSection[] = []
   let activity: AssistantTurnSectionItem[] = []
   const flushActivity = (): void => {
     if (activity.length === 0) return
-    processItems.push({ type: 'activity', items: activity })
+    items.push({ type: 'activity', items: activity })
     activity = []
   }
 
@@ -164,20 +166,20 @@ export function buildAssistantTurnSections(
       if (toolBlock.name === 'AskUserQuestion' && answeredQuestionToolIds?.has(toolBlock.id)) {
         // 已答问答打断了执行过程：先收束当前步骤组，再单独成卡片
         flushActivity()
-        processItems.push({ type: 'question', item })
+        items.push({ type: 'question', item })
         return
       }
     }
     if (outputIndexes.has(index)) {
       flushActivity()
-      outputItems.push(index === promotedIndex
+      items.push(index === promotedIndex
         ? { type: 'block', item, output: true, promotedFromThinking: true }
         : { type: 'block', item, output: true })
       return
     }
     if (block.type === 'text') {
       flushActivity()
-      processItems.push({ type: 'block', item })
+      items.push({ type: 'block', item })
       return
     }
     activity.push(item)
@@ -185,46 +187,156 @@ export function buildAssistantTurnSections(
   flushActivity()
 
   return {
-    items: [...processItems, ...outputItems],
+    items,
     outputState: outputIndexes.size ? (interrupted ? 'incomplete' : 'answer') : 'none',
     completedWithoutAnswer: succeeded && !outputIndexes.size,
+    failed: interrupted,
   }
 }
 
+// ===== 正文 / 过程拆分 =====
+
 /**
- * 归集正文区条目。
+ * 把分区列表拆成正文区与过程区（对应商业版 aLt）。
  *
- * 正文区包含最终输出与「你的回答」卡片；连续相邻的多个已答 AskUserQuestion
- * 合并成同一张卡片（对应商业版的分组合并）。
- * 「相邻」按完整分区顺序判断：被过程区正文或其它内容隔开的两次提问各自成卡片，
- * 与商业版一致。
+ * - 有最终输出分区时，正文 = 全部 output 分区；
+ * - 没有最终输出时，正文 = 最后一个非空 text 的 block 分区，
+ *   即使本轮最后一条消息没被识别为最终输出，最后一段文字也不会被折进过程；
+ * - question 分区始终归正文；
+ * - 会话中存在任一已答 AskUserQuestion 时（hasAnsweredQuestions），
+ *   非 output 的 text 分区也归正文（0.22.0 行为）；
+ * - 其余归过程。两侧都保留原始顺序。
  */
-export function collectAssistantTurnBodyEntries(sections: readonly AssistantTurnSection[]): AssistantTurnBodyEntry[] {
-  const entries: AssistantTurnBodyEntry[] = []
-  sections.forEach((section, sectionIndex) => {
-    if (section.type === 'question') {
-      const isAdjacent = sections[sectionIndex - 1]?.type === 'question'
-      const last = entries.at(-1)
-      if (isAdjacent && last && last.type === 'question') {
-        last.entries.push(section.item)
-        return
-      }
-      entries.push({ type: 'question', entries: [section.item], sectionIndex })
-      return
-    }
-    if (section.type === 'block' && section.output) {
-      entries.push({
-        type: 'block',
-        item: section.item,
-        sectionIndex,
-        promotedFromThinking: section.promotedFromThinking,
-      })
-    }
-  })
-  return entries
+export function splitTurnBodyAndProcess(
+  sections: readonly AssistantTurnSection[],
+  hasAnsweredQuestions: boolean,
+): { body: AssistantTurnListEntry[]; process: AssistantTurnListEntry[] } {
+  const entries: AssistantTurnListEntry[] = sections.map((item, itemIndex) => ({ item, itemIndex }))
+  const hasOutput = sections.some((section) => section.type === 'block' && !!section.output)
+  const lastTextEntryIndex = hasOutput
+    ? -1
+    : entries.findLast(({ item }) => {
+      if (item.type !== 'block') return false
+      const { block } = item.item
+      return block.type === 'text' && typeof block.text === 'string' && !!block.text.trim()
+    })?.itemIndex ?? -1
+
+  const isBody = (entry: AssistantTurnListEntry): boolean => {
+    const { item } = entry
+    if (item.type === 'question') return true
+    if (item.type !== 'block') return false
+    const isOutput = hasOutput ? !!item.output : entry.itemIndex === lastTextEntryIndex
+    if (isOutput) return true
+    // 存在已答问答时，过程里的说明文字也归正文（与 0.22.0 一致）
+    return hasAnsweredQuestions && !item.output && item.item.block.type === 'text'
+  }
+
+  const body: AssistantTurnListEntry[] = []
+  const process: AssistantTurnListEntry[] = []
+  for (const entry of entries) (isBody(entry) ? body : process).push(entry)
+  return { body, process }
 }
 
-// ===== 过程摘要文案 =====
+// ===== 正文条目分组 =====
+
+export type AssistantTurnBodyGroup =
+  | { kind: 'entry'; entry: AssistantTurnListEntry }
+  | { kind: 'questions'; entries: AssistantTurnListEntry[] }
+
+/**
+ * 对传入列表中相邻的 question 条目合并成一组（对应商业版 lLt）。
+ *
+ * 注意「相邻」按传入列表判断：已完成态传入正文列表（两次提问之间只隔了
+ * 工具步骤时会合并成一张卡片），停止/失败态传入全部分区。
+ */
+export function groupConsecutiveQuestions(entries: readonly AssistantTurnListEntry[]): AssistantTurnBodyGroup[] {
+  const groups: AssistantTurnBodyGroup[] = []
+  for (const entry of entries) {
+    if (entry.item.type !== 'question') {
+      groups.push({ kind: 'entry', entry })
+      continue
+    }
+    const last = groups.at(-1)
+    if (last?.kind === 'questions') {
+      last.entries.push(entry)
+    } else {
+      groups.push({ kind: 'questions', entries: [entry] })
+    }
+  }
+  return groups
+}
+
+// ===== 轮次计时 =====
+
+/** 轮次计时所需的最小结构（AssistantTurn 的输入消息与创建时间） */
+export interface TurnTimingInfo {
+  inputMessage?: SDKUserMessage
+  createdAt?: number
+}
+
+function isInterruptedPreviousUserMessage(message: SDKUserMessage | undefined): boolean {
+  return (message as Record<string, unknown> | undefined)?._promaInterruptedPrevious === true
+}
+
+function getUserMessageCreatedAt(message: SDKUserMessage | undefined): number | undefined {
+  const value = (message as Record<string, unknown> | undefined)?._createdAt
+  return typeof value === 'number' ? value : undefined
+}
+
+/**
+ * 已结束轮次的起算时间（对应商业版 uLt）：
+ * 输入消息带「打断前一轮」标记时取输入消息时间与轮次创建时间中较晚者，
+ * 否则只取轮次创建时间。
+ */
+export function getTurnSettledStartedAt({ inputMessage, createdAt }: TurnTimingInfo): number | undefined {
+  const interruptedInputCreatedAt = isInterruptedPreviousUserMessage(inputMessage)
+    ? getUserMessageCreatedAt(inputMessage)
+    : undefined
+  if (interruptedInputCreatedAt == null) return createdAt
+  if (createdAt == null) return interruptedInputCreatedAt
+  return Math.max(createdAt, interruptedInputCreatedAt)
+}
+
+/**
+ * 运行中轮次的起始时间（对应商业版 fLt）：
+ * 直接取输入消息的 _createdAt，没有再用轮次创建时间。
+ */
+export function getTurnLiveStartedAt({ inputMessage, createdAt }: TurnTimingInfo): number | undefined {
+  return getUserMessageCreatedAt(inputMessage) ?? createdAt
+}
+
+/**
+ * 被打断轮次的耗时（对应商业版 pLt）：
+ * 打断时间 − 起算时间；打断早于起算时间（或缺少时间）时视为无值。
+ */
+export function getTurnInterruptedDurationMs(turn: TurnTimingInfo, interruptedAt: number | null | undefined): number | undefined {
+  if (interruptedAt == null) return undefined
+  const startedAt = getTurnSettledStartedAt(turn)
+  if (startedAt == null || interruptedAt < startedAt) return undefined
+  return interruptedAt - startedAt
+}
+
+/** 完成轮次的耗时文案（对应商业版 X8t） */
+export function formatTurnDuration(ms: number | undefined): string | undefined {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return undefined
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  return `${minutes} 分 ${String(rest).padStart(2, '0')} 秒`
+}
+
+/** 运行中轮次的实时耗时文案（对应商业版 Z8t） */
+export function formatLiveElapsed(ms: number | undefined): string | undefined {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return undefined
+  const totalSeconds = Math.floor(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds} 秒`
+  const minutes = Math.floor(totalSeconds / 60)
+  if (minutes < 60) return `${minutes} 分 ${String(totalSeconds % 60).padStart(2, '0')} 秒`
+  return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`
+}
+
+// ===== 过程步骤文案 =====
 
 export function countProcessBlocks(blocks: SDKContentBlock[]): { thinkingCount: number; toolCount: number; lastTool?: SDKToolUseBlock } {
   let thinkingCount = 0
@@ -239,24 +351,6 @@ export function countProcessBlocks(blocks: SDKContentBlock[]): { thinkingCount: 
     }
   }
   return { thinkingCount, toolCount, lastTool }
-}
-
-export function formatProcessElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
-}
-
-/** 「已思考 N 次、执行 N 次工具、耗时 Xs」 */
-export function buildProcessSummary(blocks: SDKContentBlock[], elapsedMs?: number): string | null {
-  const { thinkingCount, toolCount } = countProcessBlocks(blocks)
-  const parts: string[] = []
-  if (thinkingCount > 0) parts.push(`已思考 ${thinkingCount} 次`)
-  if (toolCount > 0) parts.push(`执行 ${toolCount} 次工具`)
-  if (elapsedMs != null) parts.push(`耗时 ${formatProcessElapsed(elapsedMs)}`)
-  return parts.length > 0 ? parts.join('、') : null
 }
 
 // ===== 工具显示名、引用与状态短语 =====
@@ -300,39 +394,39 @@ export function getToolReference(toolName: string, input: Record<string, unknown
 export type ToolRunStatus = 'running' | 'completed' | 'failed' | 'incomplete'
 
 const TOOL_STATUS_PHRASES: Record<string, { action: string; operation: string; completed: string }> = {
-  TaskCreate: { action: '创建任务', operation: '任务创建', completed: '任务已创建' },
-  TaskUpdate: { action: '更新任务进度', operation: '任务进度更新', completed: '任务进度已更新' },
-  TaskGet: { action: '查看任务详情', operation: '任务详情读取', completed: '任务详情已获取' },
-  TaskList: { action: '查看任务列表', operation: '任务列表读取', completed: '任务列表已获取' },
-  TodoRead: { action: '读取待办事项', operation: '待办事项读取', completed: '待办事项读取完成' },
-  TodoWrite: { action: '更新待办事项', operation: '待办事项更新', completed: '待办事项已更新' },
-  Read: { action: '读取文件', operation: '文件读取', completed: '文件读取完成' },
-  Write: { action: '写入文件', operation: '文件写入', completed: '文件写入完成' },
-  Edit: { action: '编辑文件', operation: '文件编辑', completed: '文件编辑完成' },
+  TaskCreate: { action: '创建任务', operation: '任务创建', completed: '创建了任务' },
+  TaskUpdate: { action: '更新任务进度', operation: '任务进度更新', completed: '更新了任务进度' },
+  TaskGet: { action: '查看任务详情', operation: '任务详情读取', completed: '查看了任务详情' },
+  TaskList: { action: '查看任务列表', operation: '任务列表读取', completed: '查看了任务列表' },
+  TodoRead: { action: '读取待办事项', operation: '待办事项读取', completed: '读取了待办事项' },
+  TodoWrite: { action: '更新待办事项', operation: '待办事项更新', completed: '更新了待办事项' },
+  Read: { action: '读取文件', operation: '文件读取', completed: '读取了文件' },
+  Write: { action: '写入文件', operation: '文件写入', completed: '写入了文件' },
+  Edit: { action: '编辑文件', operation: '文件编辑', completed: '编辑了文件' },
   MultiEdit: { action: '编辑文件', operation: '文件编辑', completed: '文件编辑完成' },
-  Bash: { action: '执行命令', operation: '命令执行', completed: '命令执行结束' },
-  Grep: { action: '搜索内容', operation: '内容搜索', completed: '内容搜索完成' },
-  Glob: { action: '查找文件', operation: '文件查找', completed: '文件查找完成' },
-  WebSearch: { action: '搜索网页', operation: '网页搜索', completed: '网页搜索完成' },
-  WebFetch: { action: '读取网页', operation: '网页读取', completed: '网页读取完成' },
-  EnterPlanMode: { action: '进入计划模式', operation: '进入计划模式', completed: '已进入计划模式' },
-  ExitPlanMode: { action: '提交计划审批', operation: '计划审批', completed: '计划审批已返回' },
-  SelectWorktree: { action: '切换代码工作目录', operation: '代码工作目录切换', completed: '代码工作目录已切换' },
-  CompactContext: { action: '准备压缩上下文', operation: '上下文压缩准备', completed: '已安排上下文压缩' },
-  AskUserQuestion: { action: '等待你的选择', operation: '交互问答', completed: '已收到你的选择' },
-  TerminalExecute: { action: '启动终端命令', operation: '终端命令启动', completed: '终端命令已启动' },
-  TerminalRead: { action: '读取终端输出', operation: '终端输出读取', completed: '终端输出已读取' },
-  TerminalList: { action: '查看终端列表', operation: '终端列表读取', completed: '终端列表已获取' },
+  Bash: { action: '执行命令', operation: '命令执行', completed: '执行了命令' },
+  Grep: { action: '搜索内容', operation: '内容搜索', completed: '搜索了内容' },
+  Glob: { action: '查找文件', operation: '文件查找', completed: '查找了文件' },
+  WebSearch: { action: '搜索网页', operation: '网页搜索', completed: '搜索了网页' },
+  WebFetch: { action: '读取网页', operation: '网页读取', completed: '读取了网页' },
+  EnterPlanMode: { action: '进入计划模式', operation: '进入计划模式', completed: '进入了计划模式' },
+  ExitPlanMode: { action: '提交计划审批', operation: '计划审批', completed: '提交了计划审批' },
+  SelectWorktree: { action: '切换代码工作目录', operation: '代码工作目录切换', completed: '切换了代码工作目录' },
+  CompactContext: { action: '准备压缩上下文', operation: '上下文压缩准备', completed: '安排了上下文压缩' },
+  AskUserQuestion: { action: '等待你的选择', operation: '交互问答', completed: '收到了你的选择' },
+  TerminalExecute: { action: '启动终端命令', operation: '终端命令启动', completed: '启动了终端命令' },
+  TerminalRead: { action: '读取终端输出', operation: '终端输出读取', completed: '读取了终端输出' },
+  TerminalList: { action: '查看终端列表', operation: '终端列表读取', completed: '查看了终端列表' },
 }
 
-/** 工具状态短语，例如「正在读取文件」「文件读取完成」「命令执行失败」 */
+/** 工具状态短语，例如「正在读取文件」「读取了文件」「命令执行失败」 */
 export function getToolStatusLabel(toolName: string, input: Record<string, unknown>, status: ToolRunStatus): string {
   const reference = getToolReference(toolName, input)
   if (reference) {
     const kind = reference.kind === 'skill' ? 'Skill' : 'MCP'
     switch (status) {
       case 'running': return `正在调用 ${kind}`
-      case 'completed': return `已调用 ${kind}`
+      case 'completed': return `调用了 ${kind}`
       case 'failed': return `${kind} 调用失败`
       case 'incomplete': return `${kind} 调用未完成`
     }
@@ -354,16 +448,112 @@ export function getToolStatusLabel(toolName: string, input: Record<string, unkno
   }
 }
 
+// ===== 工具输入摘要 =====
+
+/** 取文本中第一行非空内容 */
+function firstNonEmptyLine(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+/** 取文本中最后一行非空内容 */
+function lastNonEmptyLine(text: string): string {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const trimmed = lines[index]?.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+/** 把用户目录前缀缩写为 ~（对应商业版 vhe） */
+function abbreviateHomePath(text: string): string {
+  return text
+    .replace(/^\/(?:Users|home)\/[^/]+\//, '~/')
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+\\/, '~\\')
+}
+
+/** 各工具的摘要字段优先级（对应商业版 Q8t） */
+const TOOL_INPUT_SUMMARY_FIELDS: Record<string, readonly string[]> = {
+  Bash: ['description', 'command'],
+  TerminalExecute: ['description', 'command'],
+  TerminalRead: ['description', 'terminal_id'],
+  TerminalList: ['description'],
+  Read: ['path', 'file_path'],
+  Write: ['path', 'file_path'],
+  Edit: ['path', 'file_path'],
+  MultiEdit: ['path', 'file_path'],
+  LS: ['path'],
+  Grep: ['pattern', 'path'],
+  Glob: ['pattern', 'path'],
+  WebFetch: ['url'],
+  WebSearch: ['query'],
+  Agent: ['description', 'prompt'],
+  Task: ['description', 'prompt'],
+  Skill: ['skill'],
+  AskUserQuestion: ['question'],
+  SelectWorktree: ['worktreePath', 'path'],
+  CompactContext: ['reason', 'description'],
+  BrowserNavigate: ['url'],
+  BrowserObserve: ['url'],
+  BrowserExecuteJavaScript: ['script'],
+  BrowserFind: ['name', 'role'],
+  BrowserExtract: ['selector'],
+}
+
+/**
+ * 工具输入的单行摘要（对应商业版 G8t）。
+ *
+ * Skill / MCP 引用已有徽标展示，返回 undefined；否则按工具的字段优先级
+ * 取第一个非空字符串，取不到再取 input 中第一个非空字符串值，
+ * 结果取第一行非空文本并把用户目录前缀缩写为 ~。
+ */
+export function getToolInputSummary(toolName: string, input: Record<string, unknown> | undefined): string | undefined {
+  if (!input || getToolReference(toolName, input)) return undefined
+  const fields = TOOL_INPUT_SUMMARY_FIELDS[toolName]
+  if (fields) {
+    for (const field of fields) {
+      const value = input[field]
+      if (typeof value === 'string' && value.trim()) return abbreviateHomePath(firstNonEmptyLine(value))
+    }
+  }
+  for (const value of Object.values(input)) {
+    if (typeof value === 'string' && value.trim()) return abbreviateHomePath(firstNonEmptyLine(value))
+  }
+  return undefined
+}
+
+/** 取最后一段非空 thinking 的完整文本 */
+function findLastThinkingText(blocks: SDKContentBlock[]): string {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]
+    if (!isThinkingBlock(block)) continue
+    const thinking = block.thinking
+    if (typeof thinking === 'string' && thinking.trim()) return thinking
+  }
+  return ''
+}
+
 export interface ProcessStepContent {
   label: string
+  summary?: string
   reference?: ToolReference
   markerTool?: string
-  suffix?: string
 }
 
 export const THINKING_STEP_CONTENT: ProcessStepContent = { label: '正在思考...' }
 
-/** 步骤组折叠行的当前文案：活动中显示最后一步，完成后显示最后一次工具调用的结果 */
+/**
+ * 步骤组折叠行的当前文案（对应商业版 J8t）。
+ *
+ * - 有工具：活动中看最后一个块，非活动取最后一次工具调用，按工具状态给短语与输入摘要；
+ * - 无工具且非活动：「已完成分析」，摘要取最后一段思考的第一行；
+ * - 活动且最后一块是 thinking：空思考「正在思考...」，否则「正在分析」+ 思考最后一行；
+ * - 其余：「正在思考...」。
+ */
 export function getProcessStepContent(
   blocks: SDKContentBlock[],
   isActive: boolean,
@@ -382,11 +572,20 @@ export function getProcessStepContent(
         : isActive ? 'running' : 'incomplete'
     return {
       label: getToolStatusLabel(tool.name, tool.input, status),
+      summary: getToolInputSummary(tool.name, tool.input),
       reference: getToolReference(tool.name, tool.input) ?? undefined,
       markerTool: tool.name,
     }
   }
-  if (!isActive) return { label: '思考完成' }
-  if (isThinkingBlock(last)) return { label: last.thinking?.trim() ? '思考完成' : '正在思考...' }
+  const lastThinking = findLastThinkingText(blocks)
+  if (!isActive) {
+    const summary = lastThinking ? firstNonEmptyLine(lastThinking) : ''
+    return summary ? { label: '已完成分析', summary } : { label: '已完成分析' }
+  }
+  if (isThinkingBlock(last)) {
+    if (!lastThinking.trim()) return THINKING_STEP_CONTENT
+    const summary = lastNonEmptyLine(lastThinking)
+    return summary ? { label: '正在分析', summary } : { label: '正在分析' }
+  }
   return THINKING_STEP_CONTENT
 }

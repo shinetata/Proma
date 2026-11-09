@@ -37,7 +37,7 @@ export function buildLiveGroupSet({
     ))
   // 自主压缩会在同一 stream 内插入 system 压缩状态，并在完成后继续输出。
   // 这时压缩前的 assistant 消息仍属于当前运行的 liveMessages；若仍标为 live，
-  // 它的 ProcessBlockGroup 会一直保持展开。以最近压缩状态为边界，仅让
+  // 它的步骤组行会一直保持展开。以最近压缩状态为边界，仅让
   // 压缩后新产生的消息驱动 live UI，前一段随即进入完成态并自动折叠。
   const latestCompactionIndex = activeLiveMessages.findLastIndex((message) => (
     message.type === 'system'

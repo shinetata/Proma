@@ -2242,12 +2242,7 @@ body {
   padding: 2px 4px !important;
 }
 
-/* 用户消息内容：纯文字，无气泡 */
-.theme-terminal-dark .is-user [class*="bg-primary/10"] {
-  background: transparent !important;
-  border-radius: 0 !important;
-  padding: 2px 4px !important;
-}
+/* 用户消息内容：纯文字，无气泡（0.22.0 起合并到下方 .user-message-bubble 规则组） */
 
 /* AI 消息前缀 — 已移除 */
 
@@ -3378,4 +3373,104 @@ body {
 .memory-project-fullscreen [role=status] {
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* ===== Agent 对话界面重做（对齐商业版 0.22.0） ===== */
+
+/* 用户消息右侧气泡：主色底 + 气泡内 Markdown 配色继承 */
+.user-message-bubble {
+  width: max-content;
+  line-height: 23px;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 1px 2px #00000014;
+}
+.user-message-bubble .agent-prose {
+  color: inherit;
+}
+.user-message-bubble .agent-prose :is(p, li, strong, em, h1, h2, h3, h4, h5, h6, blockquote, td, th) {
+  color: inherit;
+}
+.user-message-bubble .agent-prose :is(p, li, h4, h5, h6) {
+  line-height: 23px;
+}
+.user-message-bubble .agent-prose :is(p, ul, ol):first-child {
+  margin-top: 0;
+}
+.user-message-bubble .agent-prose :is(p, ul, ol):last-child {
+  margin-bottom: 0;
+}
+.user-message-bubble .agent-prose :not(pre)>code,
+.user-message-bubble .agent-inline-code,
+.user-message-bubble [class*="bg-primary/10"] {
+  background-color: hsl(var(--primary-foreground) / .16);
+  border-color: hsl(var(--primary-foreground) / .28);
+  color: inherit;
+}
+.user-message-bubble .agent-prose blockquote {
+  border-left-color: hsl(var(--primary-foreground) / .35);
+}
+.user-message-bubble .agent-prose a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.user-message-bubble .agent-prose :is(hr, th, td) {
+  border-color: hsl(var(--primary-foreground) / .25);
+}
+.user-message-bubble ::selection {
+  background-color: hsl(var(--primary-foreground) / .3);
+}
+
+/* 消息操作栏：同类型相邻消息隐藏操作栏，hover / 键盘聚焦时显示 */
+.user-message-actions {
+  transition: opacity 80ms ease;
+}
+[data-message-row=user]:has(~[data-message-row=user]) .user-message-actions {
+  opacity: 0;
+}
+[data-message-row=user]:hover .user-message-actions,
+[data-message-row=user]:focus-within .user-message-actions {
+  opacity: 1;
+}
+.message-action-button.message-action-button {
+  border-radius: 8px;
+}
+.message-action-button.message-action-button>svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.5;
+}
+.assistant-message-actions .message-action-button>svg {
+  width: 17px;
+  height: 17px;
+}
+.assistant-message-actions {
+  transition: opacity 80ms ease;
+}
+[data-message-row=assistant-turn]:has(~[data-message-row=assistant-turn]) .assistant-message-actions {
+  opacity: 0;
+}
+[data-message-row=assistant-turn]:hover .assistant-message-actions,
+[data-message-row=assistant-turn]:focus-within .assistant-message-actions {
+  opacity: 1;
+}
+
+/* 运行中的步骤摘要：右缘渐隐 */
+.activity-summary-streaming {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 40px), transparent);
+}
+
+/* CRT 终端主题：用户气泡退化为纯文字 */
+.theme-terminal-dark .is-user [class*="bg-primary/10"],
+.theme-terminal-dark .user-message-bubble {
+  background: transparent !important;
+  color: hsl(var(--foreground)) !important;
+  border-radius: 0 !important;
+  padding: 2px 4px !important;
+  box-shadow: none !important;
+}
+.theme-terminal-dark .user-message-bubble .agent-prose :is(a, p, li, strong, em, h1, h2, h3, h4, h5, h6) {
+  color: hsl(var(--foreground)) !important;
 }

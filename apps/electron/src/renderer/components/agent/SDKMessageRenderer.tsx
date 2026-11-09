@@ -21,8 +21,8 @@ import { AskUserAnswerCard } from './AskUserAnswerCard'
 import { collectAnsweredQuestionToolIds } from './ask-user-answers'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
-import { buildAssistantTurnSections, buildProcessSummary, collectAssistantTurnBodyEntries, findTrailingResult, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
-import { PROCESS_TIMELINE_CLASS, ProcessMotion, ProcessStepGroup, ProcessSummary, useElapsedSince } from './ProcessTimeline'
+import { buildAssistantTurnSections, findTrailingResult, formatTurnDuration, getTurnInterruptedDurationMs, getTurnLiveStartedAt, groupConsecutiveQuestions, splitTurnBodyAndProcess, type AssistantTurnListEntry, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
+import { ProcessMotion, ProcessStepGroup, TurnLayoutTransition, TurnProcessSummary, type TurnOutcome } from './ProcessTimeline'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
 // 会话转录的纯逻辑(Turn 分组 / 快照去重 / 预览)已下沉到 @proma/session-core 作为唯一真源。
@@ -53,7 +53,6 @@ import {
 import { UserAvatar } from '@/components/common/UserAvatar'
 import { CopyButton } from '@/components/common/CopyButton'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/lib/message-time'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -205,6 +204,17 @@ function CompactStatusNotice({ message }: { message: SDKSystemMessage }): React.
 }
 
 // extractMeta / MessageMeta 已迁移至 @proma/session-core
+
+/** 从 question 分区中提取 AskUserAnswerCard 需要的 tool_use 块 */
+function extractQuestionBlocks(sections: readonly AssistantTurnSection[]): Array<{ toolUseId: string; input: Record<string, unknown> }> {
+  return sections.flatMap((section) => {
+    if (section.type !== 'question') return []
+    const { block } = section.item
+    return block.type === 'tool_use'
+      ? [{ toolUseId: (block as SDKToolUseBlock).id, input: (block as SDKToolUseBlock).input }]
+      : []
+  })
+}
 
 /** 从 turn 消息列表中提取 result 消息的耗时和用量数据 */
 function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; usage?: AgentEventUsage } {
@@ -392,12 +402,16 @@ export interface AssistantTurnRendererProps {
   isStreaming?: boolean
   /** 是否被用户中断 */
   stoppedByUser?: boolean
+  /**
+   * 被新消息打断的时间戳（插队用户消息的 _createdAt）。
+   * undefined = 未被打断；null = 被打断但时间未知。
+   */
+  interruptedAt?: number | null
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
-  const channels = useAtomValue(channelsAtom)
+export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, interruptedAt }: AssistantTurnRendererProps): React.ReactElement | null {
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -435,9 +449,8 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   // 从 turnMessages 中提取 result 消息的耗时和用量
   const { durationMs, usage } = extractTurnUsage(turn.turnMessages)
 
-  // 只在用户点击停止时显示中断徽章。
-  // aborted_streaming / aborted_tools 是流式追加消息时的软中断，语义是继续补充信息。
-  const showStoppedBadge = !!stoppedByUser
+  // 被新消息打断的轮次：用户消息带 _promaInterruptedPrevious 标记时，渲染层视为「已停止」
+  const isInterrupted = interruptedAt !== undefined
 
   // 构建 Agent/Task tool_use → 子代理内容块映射
   const agentToolIds = new Set<string>()
@@ -475,11 +488,12 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     [allMessages]
   )
 
-  // 将内容块拆分为「执行过程」与「最终输出」（与商业版轮次结构一致）
+  // 将内容块拆分为「执行过程」与「最终输出」（与商业版轮次结构一致）。
+  // 被新消息打断的轮次同样按「已停止」处理（影响 outputState 的 incomplete 判定）。
   const sections = buildAssistantTurnSections(topLevelEntries, {
     messages: turn.assistantMessages.filter((m) => !m.parent_tool_use_id || !agentToolIds.has(m.parent_tool_use_id)),
     isStreaming,
-    stoppedByUser,
+    stoppedByUser: stoppedByUser || isInterrupted,
     result: findTrailingResult(turn.turnMessages),
     answeredQuestionToolIds,
   })
@@ -505,28 +519,16 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           : `text-${textIndex++}`)
     }
   }
-  const processSections: Array<{ item: AssistantTurnSection; index: number }> = []
-  sectionItems.forEach((item, index) => {
-    // 问答卡片属于正文区，不进入执行过程
-    if (item.type === 'question') return
-    if (item.type === 'block' && item.output) return
-    processSections.push({ item, index })
-  })
-  // 正文区：最终输出与「你的回答」卡片，连续的问答合并成一张卡片
-  const bodyEntries = collectAssistantTurnBodyEntries(sectionItems)
-  const firstOutputSectionIndex = bodyEntries.find((entry) => entry.type === 'block')?.sectionIndex
+  const listEntries: AssistantTurnListEntry[] = sectionItems.map((item, itemIndex) => ({ item, itemIndex }))
+  const firstOutputSectionIndex = sectionItems.findIndex((section) => section.type === 'block' && section.output)
 
   // 一旦经历过流式输出，后续的过程/正文切换使用动画；历史消息直接静态渲染
   const hasStreamedRef = React.useRef(false)
   if (isStreaming) hasStreamedRef.current = true
   const hasStreamed = hasStreamedRef.current
-  const turnStartedAt = getAssistantTurnStartedAt(turn)
-  const liveElapsed = useElapsedSince(isStreaming ? turnStartedAt : undefined)
-  const elapsedMs = isStreaming ? liveElapsed : durationMs
-  const processSummary = buildProcessSummary(
-    processSections.flatMap(({ item }) => item.type === 'activity' ? item.items.map((entry) => entry.block) : []),
-    elapsedMs,
-  )
+
+  // 轮次耗时：优先取 result 耗时；被新消息打断的轮次用「打断时间 − 起算时间」
+  const turnDurationMs = durationMs ?? getTurnInterruptedDurationMs(turn, interruptedAt)
   const usageTooltip = !isStreaming && durationMs != null ? buildUsageTooltip(durationMs, usage) : undefined
   const { completedToolIds, failedToolIds } = React.useMemo(() => {
     const completed = new Set<string>()
@@ -565,7 +567,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
 
   // 如果没有任何内容
-  if (enrichedBlocks.length === 0 && !hasError && !sections.completedWithoutAnswer) return null
+  if (enrichedBlocks.length === 0 && !hasError && !sections.completedWithoutAnswer && !isInterrupted) return null
 
   const renderTopLevelBlock = (block: SDKContentBlock, i: number, showFullThinking = false): React.ReactNode => {
     // 任务进度由底部浮层统一呈现，输出记录不再重复显示任务卡。
@@ -610,8 +612,10 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
 
   const renderSection = (section: AssistantTurnSection, sectionIndex: number): React.ReactNode => {
-    // 问答卡片由正文区统一渲染（需要把连续多组合并）
-    if (section.type === 'question') return null
+    if (section.type === 'question') {
+      const questionBlocks = extractQuestionBlocks([section])
+      return questionBlocks.length === 0 ? null : <AskUserAnswerCard blocks={questionBlocks} allMessages={allMessages} />
+    }
     if (section.type === 'block') return renderBlockItem(section.item, section.promotedFromThinking)
     return (
       <ProcessStepGroup
@@ -633,71 +637,116 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   const shouldAnimateSection = (section: AssistantTurnSection, sectionIndex: number): boolean => (
     hasStreamed && !(sectionIndex === 0 && section.type === 'activity')
   )
-  const shouldAnimateBodyEntry = (sectionIndex: number): boolean => (
-    hasStreamed && !(sectionIndex === 0 && sectionItems[0]?.type === 'activity')
-  )
-  const hasProcess = processSections.length > 0
+  const incompleteOutputNotice = sections.outputState === 'incomplete' ? (
+    <div className="mb-1 text-xs text-muted-foreground" role="status">未完成输出</div>
+  ) : null
+
+  /** 单条分区渲染：output 用 reveal 动画，其余用 expand；首个 output 前挂「未完成输出」提示 */
+  const renderEntry = (entry: AssistantTurnListEntry): React.ReactNode => {
+    const { item, itemIndex } = entry
+    const isOutput = item.type === 'block' && !!item.output
+    return (
+      <ProcessMotion
+        key={sectionKeys[itemIndex]}
+        mode={isOutput ? 'reveal' : 'expand'}
+        animate={shouldAnimateSection(item, itemIndex)}
+      >
+        {itemIndex === firstOutputSectionIndex && incompleteOutputNotice}
+        {renderSection(item, itemIndex)}
+      </ProcessMotion>
+    )
+  }
+
+  /** 相邻的已答问答合并成一张「你的回答」卡片，其余条目逐条渲染 */
+  const renderMergedEntries = (entries: readonly AssistantTurnListEntry[]): React.ReactNode =>
+    groupConsecutiveQuestions(entries).map((group) => {
+      if (group.kind === 'entry') return renderEntry(group.entry)
+      const first = group.entries[0]
+      if (!first) return null
+      const questionBlocks = extractQuestionBlocks(group.entries.map(({ item }) => item))
+      if (questionBlocks.length === 0) return null
+      return (
+        <ProcessMotion
+          key={`questions-${sectionKeys[first.itemIndex]}`}
+          mode="reveal"
+          animate={shouldAnimateSection(first.item, first.itemIndex)}
+        >
+          {first.itemIndex === firstOutputSectionIndex && incompleteOutputNotice}
+          <AskUserAnswerCard blocks={questionBlocks} allMessages={allMessages} />
+        </ProcessMotion>
+      )
+    })
+
+  // 轮次结果状态与耗时文案
+  const outcome: TurnOutcome = stoppedByUser || isInterrupted ? 'stopped' : sections.failed ? 'failed' : 'completed'
+  const { body: bodyEntries, process: processEntries } = splitTurnBodyAndProcess(sectionItems, answeredQuestionToolIds.size > 0)
+  const stepsTotal = sectionItems.reduce((count, section) => count + (section.type === 'activity' ? section.items.length : 0), 0)
+  const hasOutputSections = firstOutputSectionIndex >= 0
+  const summaryExpandKey = `${turnKey}:process`
+
+  const layoutContent = (() => {
+    // 运行中：顶部摘要 + 按原始顺序平铺所有分区（不合并问答）
+    if (isStreaming) {
+      return (
+        <>
+          <TurnProcessSummary
+            streaming
+            expandKey={summaryExpandKey}
+            startedAt={getTurnLiveStartedAt(turn)}
+            steps={stepsTotal}
+          />
+          {listEntries.map(renderEntry)}
+        </>
+      )
+    }
+    // 已停止 / 运行失败：分区非空时渲染摘要（不可展开），下方平铺所有分区（合并问答）
+    if (outcome !== 'completed') {
+      return (
+        <>
+          {sectionItems.length > 0 && (
+            <TurnProcessSummary
+              expandKey={summaryExpandKey}
+              outcome={outcome}
+              steps={stepsTotal}
+              tooltip={usageTooltip}
+            />
+          )}
+          {renderMergedEntries(listEntries)}
+        </>
+      )
+    }
+    // 已完成：摘要行（可展开过程分区）+ 正文区（最终回复与你的回答卡片，始终可见）
+    return (
+      <>
+        {processEntries.length > 0 && (
+          <TurnProcessSummary
+            expandKey={summaryExpandKey}
+            outcome={outcome}
+            durationText={formatTurnDuration(turnDurationMs)}
+            steps={stepsTotal}
+            tooltip={usageTooltip}
+          >
+            {processEntries.map(({ item, itemIndex }) => (
+              <div key={`process-${sectionKeys[itemIndex]}`}>{renderSection(item, itemIndex)}</div>
+            ))}
+          </TurnProcessSummary>
+        )}
+        {renderMergedEntries(bodyEntries)}
+      </>
+    )
+  })()
 
   return (
     <Message from="assistant">
-      <MessageHeader
-        model={turn.model ? resolveModelDisplayName(turn.model, channels) : undefined}
-        time={turn.createdAt ? formatMessageTime(turn.createdAt) : undefined}
-        logo={<AssistantLogo model={turn.model} />}
-      />
       <MessageContent>
         <TurnFileMapProvider map={turnFileMap}>
-          <div className="space-y-2" style={{ display: 'flow-root' }}>
-            {(hasProcess || processSummary) && (
-              <ProcessSummary
-                coordinatedCompletion
-                isStreaming={!!isStreaming}
-                summary={processSummary ?? '执行过程'}
-                tooltip={usageTooltip}
-                hasContent={hasProcess}
-              >
-                {hasProcess ? (
-                  <div className={PROCESS_TIMELINE_CLASS}>
-                    {processSections.map(({ item, index }) => (
-                      <ProcessMotion key={`process-${sectionKeys[index]}`} animate={shouldAnimateSection(item, index)}>
-                        {renderSection(item, index)}
-                      </ProcessMotion>
-                    ))}
-                  </div>
-                ) : null}
-              </ProcessSummary>
-            )}
-            {bodyEntries.map((entry) => {
-              if (entry.type === 'question') {
-                const questionBlocks = entry.entries.flatMap(({ block }) => (
-                  block.type === 'tool_use'
-                    ? [{ toolUseId: (block as SDKToolUseBlock).id, input: (block as SDKToolUseBlock).input }]
-                    : []
-                ))
-                return (
-                  <ProcessMotion
-                    key={`questions-${sectionKeys[entry.sectionIndex]}`}
-                    mode="reveal"
-                    animate={shouldAnimateBodyEntry(entry.sectionIndex)}
-                  >
-                    <AskUserAnswerCard blocks={questionBlocks} allMessages={allMessages} />
-                  </ProcessMotion>
-                )
-              }
-              return (
-                <ProcessMotion
-                  key={`body-${sectionKeys[entry.sectionIndex]}`}
-                  mode="reveal"
-                  animate={shouldAnimateBodyEntry(entry.sectionIndex)}
-                >
-                  {entry.sectionIndex === firstOutputSectionIndex && sections.outputState === 'incomplete' && (
-                    <div className="text-xs text-muted-foreground" role="status">未完成输出</div>
-                  )}
-                  {renderBlockItem(entry.item, entry.promotedFromThinking)}
-                </ProcessMotion>
-              )
-            })}
-          </div>
+          <TurnLayoutTransition
+            animate={hasStreamed && (!isStreaming || hasOutputSections)}
+            layoutKey={`${isStreaming ? 'running' : 'complete'}:${sectionKeys.join(',')}`}
+            className="space-y-3"
+          >
+            {layoutContent}
+          </TurnLayoutTransition>
           {sections.completedWithoutAnswer && (
             <div className="text-sm text-muted-foreground">本轮已结束，未提供文字总结。</div>
           )}
@@ -741,9 +790,9 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
           : undefined
         const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
-        if (!hasActions && !showStoppedBadge) return null
+        if (!hasActions && !stoppedByUser && !isInterrupted) return null
         return (
-          <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start animate-in fade-in duration-300">
+          <MessageActions className="assistant-message-actions -ml-1.5 mt-4 min-h-[28px] justify-start animate-in fade-in duration-300">
             {textContent && <CopyButton content={textContent} />}
             {onFork && lastUuid && (
               <MessageAction tooltip="从此处探索（保留主线，结论可带回）" onClick={() => onFork(lastUuid)}>
@@ -755,10 +804,11 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                 <Undo2 className="size-3.5" />
               </MessageAction>
             )}
-            {showStoppedBadge && (
-              <Badge variant="outline" className="text-xs text-muted-foreground/70 border-muted-foreground/30 shrink-0">
-                已被用户中断
-              </Badge>
+            {(stoppedByUser || isInterrupted) && (
+              <span className="inline-flex h-7 shrink-0 items-center gap-1.5 pl-1 text-[14px] text-foreground/40">
+                <span className="size-1.5 rounded-full bg-current" aria-hidden />
+                {stoppedByUser ? '已被用户中断' : '已被用户打断'}
+              </span>
             )}
             {textContent && onCreateTodo && (
               <MessageAction tooltip="标记为 Todo" onClick={() => onCreateTodo(textContent)}>
@@ -772,12 +822,24 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   )
 }
 
-/** 本轮开始时间：取首条助手消息时间与触发输入时间中较晚者 */
-function getAssistantTurnStartedAt(turn: AssistantTurn): number | undefined {
-  const inputCreatedAt = turn.inputMessage ? extractMeta(turn.inputMessage as unknown as SDKMessage).createdAt : undefined
-  if (inputCreatedAt == null) return turn.createdAt
-  if (turn.createdAt == null) return inputCreatedAt
-  return Math.max(turn.createdAt, inputCreatedAt)
+/**
+ * 轮次渲染所需的中断标记工具（对应商业版 hLt）。
+ *
+ * 用户在 Agent 运行中插队打断时，主进程把该用户消息标记为 _promaInterruptedPrevious：
+ * 紧挨在它前面的助手轮次视为「已停止」。这里基于完整分组列表建立
+ * 「被打断的轮次 → 插队消息时间」映射（消息无 _createdAt 时记为 null）。
+ */
+export function buildInterruptedTurnMap(groups: readonly MessageGroup[]): Map<MessageGroup, number | null> {
+  const map = new Map<MessageGroup, number | null>()
+  for (let index = 0; index < groups.length - 1; index++) {
+    const current = groups[index]
+    const next = groups[index + 1]
+    if (!current || current.type !== 'assistant-turn' || !next || next.type !== 'user') continue
+    if ((next.message as unknown as Record<string, unknown>)._promaInterruptedPrevious !== true) continue
+    const createdAt = (next.message as unknown as Record<string, unknown>)._createdAt
+    map.set(current, typeof createdAt === 'number' ? createdAt : null)
+  }
+  return map
 }
 
 // ===== SDKMessageRenderer 主组件（用于实时消息逐条渲染） =====
@@ -1069,7 +1131,6 @@ function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
   message: SDKUserMessage
   onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
 }): React.ReactElement {
-  const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
   // 选区引用与 Agent 历史引用都在消息正文里回填为内联 chip，保持发送时的位置。
@@ -1137,26 +1198,10 @@ function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
 
   return (
     <Message from="user">
-      <div className="flex items-start gap-2.5 mb-2.5">
-        <UserAvatar avatar={userProfile.avatar} size={35} />
-        <div className="flex flex-col justify-between h-[35px]">
-          <span className="text-[15px] font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
-          {(meta.createdAt || isScheduledRun) && (
-            <span className="flex items-center gap-2 leading-none">
-              {meta.createdAt && (
-                <span className="message-time text-[12px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
-              )}
-              {isScheduledRun && (
-                <ScheduledRunBadge />
-              )}
-            </span>
-          )}
-        </div>
-      </div>
       <MessageContent>
         {/* 图片缩略图 */}
         {imageFiles.length > 0 && (
-          <div className="flex flex-wrap gap-2.5 mb-2">
+          <div className="flex flex-wrap justify-end gap-2.5 mb-2">
             {imageFiles.map((file, index) => (
               <AttachedImageThumb
                 key={file.path}
@@ -1170,7 +1215,7 @@ function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
         )}
         {/* 非图片文件芯片 */}
         {nonImageFiles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2">
+          <div className="flex flex-wrap justify-end gap-1.5 mb-2">
             {nonImageFiles.map((file) => (
               <AttachedFileChip key={file.path} file={file} />
             ))}
@@ -1192,9 +1237,19 @@ function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
           onIndexChange={setLightboxIndex}
         />
       )}
-      {text && (
-        <MessageActions className="pl-[46px] mt-0.5">
-          <CopyButton content={replaceAgentHistoryQuoteMentionsWithLabels(text)} />
+      {isScheduledRun && (
+        <div className="mt-1.5 pr-1">
+          <ScheduledRunBadge />
+        </div>
+      )}
+      {(text || meta.createdAt) && (
+        <MessageActions className="user-message-actions mt-1.5 gap-2 pr-1">
+          {meta.createdAt && (
+            <span className="message-time pr-1 text-[14px] leading-none tabular-nums text-foreground/45">
+              {formatMessageTime(meta.createdAt)}
+            </span>
+          )}
+          {text && <CopyButton content={replaceAgentHistoryQuoteMentionsWithLabels(text)} />}
         </MessageActions>
       )}
     </Message>
@@ -1471,22 +1526,11 @@ export function AssistantErrorTail({
 }
 
 function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot }: ErrorMessageProps): React.ReactElement {
-  const meta = extractMeta(message as unknown as SDKMessage)
-
   // Do not copy assistant content carried by an error record.
   const copyText = message.error?.message ?? 'Unknown error'
 
   return (
     <Message from="assistant">
-      <MessageHeader
-        model={undefined}
-        time={meta.createdAt ? formatMessageTime(meta.createdAt) : undefined}
-        logo={
-          <div className="size-[35px] rounded-[25%] bg-destructive/10 flex items-center justify-center">
-            <AlertTriangle size={18} className="text-destructive" />
-          </div>
-        }
-      />
       <MessageContent>
         <AssistantErrorTail
           message={message}
@@ -1498,7 +1542,7 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact, onReli
           standalone
         />
       </MessageContent>
-      <MessageActions className="pl-[46px] mt-0.5">
+      <MessageActions className="assistant-message-actions -ml-1.5 mt-4">
         <CopyButton content={copyText} />
       </MessageActions>
     </Message>
@@ -1533,6 +1577,8 @@ export interface MessageGroupRendererProps {
   isStreaming?: boolean
   /** 是否被用户中断 */
   stoppedByUser?: boolean
+  /** 被新消息打断的时间；undefined = 未被打断，null = 被打断但时间未知 */
+  interruptedAt?: number | null
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
 }
@@ -1583,7 +1629,7 @@ export function getGroupId(group: MessageGroup): string {
 
 // getGroupPreview 已迁移至 @proma/session-core（本文件从该包 import 并 re-export）
 
-export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onAgentHistoryQuoteClick, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, historyTurn, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onAgentHistoryQuoteClick, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, historyTurn, isStreaming, stoppedByUser, interruptedAt, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -1629,6 +1675,7 @@ export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ g
         onRestoreProjectRoot={onRestoreProjectRoot}
         isStreaming={isStreaming}
         stoppedByUser={stoppedByUser}
+        interruptedAt={interruptedAt}
         sessionModelId={sessionModelId}
       />
     </div>
@@ -1648,6 +1695,7 @@ export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ g
   && previous.historyTurn === next.historyTurn
   && previous.isStreaming === next.isStreaming
   && previous.stoppedByUser === next.stoppedByUser
+  && previous.interruptedAt === next.interruptedAt
   && previous.sessionModelId === next.sessionModelId
   && previous.externalMetadataSignature === next.externalMetadataSignature
 ))

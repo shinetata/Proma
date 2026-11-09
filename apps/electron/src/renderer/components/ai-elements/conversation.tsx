@@ -15,8 +15,9 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ArrowDownIcon } from 'lucide-react'
 import type { ComponentProps } from 'react'
-import { useCallback } from 'react'
-import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { StickToBottom, useStickToBottom, useStickToBottomContext } from 'use-stick-to-bottom'
+import { computeFollowLocked, type FollowState } from '@/components/agent/scroll-follow'
 
 // ===== Conversation 根容器 =====
 
@@ -116,5 +117,106 @@ export function ConversationScrollButton({
     >
       <ArrowDownIcon className="size-4" />
     </Button>
+  )
+}
+
+// ===== ConversationFollowController 受控滚动跟随 =====
+
+interface ConversationFollowControllerProps {
+  sessionId: string
+  /** 当前会话是否正在运行 */
+  streaming: boolean
+  /** 当前 run 的起始时间（新一轮开始时解除锁定） */
+  runStartedAt?: number
+  /** 当前 run 的实时消息里是否已出现最终回复 */
+  hasFinalOutput: boolean
+  className?: string
+  children: React.ReactNode
+}
+
+/**
+ * 受控滚动跟随容器（对应商业版 F8t）。
+ *
+ * 运行中且最终回复未出现时自动跟随滚动；最终回复开始输出后锁定当前位置，
+ * 用户可以从回复开头读起；点击「回到底部」仍可直接跳到底部；
+ * 同一会话新一轮开始且用户此前在底部时，立即回到底部。
+ */
+export function ConversationFollowController({
+  sessionId,
+  streaming,
+  runStartedAt,
+  hasFinalOutput,
+  className,
+  children,
+}: ConversationFollowControllerProps): React.ReactElement {
+  const nextState = useRef<FollowState>({ sessionId, streaming, runStartedAt, hasFinalOutput })
+  nextState.current = { sessionId, streaming, runStartedAt, hasFinalOutput }
+  const lockedRef = useRef(computeFollowLocked(undefined, nextState.current, false))
+  const previousStateRef = useRef<FollowState | undefined>(undefined)
+
+  // 锁定时保持当前 scrollTop 不变（不跟随内容增长）
+  const targetScrollTop = useCallback((target: number, { scrollElement }: { scrollElement: HTMLElement }): number => (
+    lockedRef.current ? scrollElement.scrollTop : target
+  ), [])
+
+  const instance = useStickToBottom({ initial: 'instant', resize: 'instant', targetScrollTop })
+  const { scrollRef, contentRef, stopScroll, scrollToBottom } = instance
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const isAtBottomRef = useRef(true)
+
+  useLayoutEffect(() => {
+    const previous = previousStateRef.current
+    const previousLocked = lockedRef.current
+    const next = nextState.current
+    const locked = computeFollowLocked(previous, next, previousLocked)
+    lockedRef.current = locked
+    previousStateRef.current = next
+    // 由未锁变为锁定：停止进行中的跟随动画
+    if (locked && !previousLocked) stopScroll()
+    // 同一会话由锁定变为未锁（新一轮开始）且用户此前在底部时，立即回到底部
+    if (previous?.sessionId === sessionId && previousLocked && !locked && isAtBottomRef.current) {
+      scrollToBottom('instant')
+    }
+  }, [sessionId, streaming, runStartedAt, hasFinalOutput, stopScroll, scrollToBottom])
+
+  // 自行维护 isAtBottom：锁定时库的判断不再可靠，用容差直接测量
+  useLayoutEffect(() => {
+    const scrollElement = scrollRef.current
+    const contentElement = contentRef.current
+    if (!scrollElement || !contentElement) return
+    const measure = (): void => {
+      const atBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop <= 2
+      isAtBottomRef.current = atBottom
+      setIsAtBottom(atBottom)
+    }
+    measure()
+    scrollElement.addEventListener('scroll', measure, { passive: true })
+    const observer = new ResizeObserver(measure)
+    observer.observe(scrollElement)
+    observer.observe(contentElement)
+    return () => {
+      scrollElement.removeEventListener('scroll', measure)
+      observer.disconnect()
+    }
+  }, [sessionId, scrollRef, contentRef])
+
+  // 锁定时点击「回到底部」直接跳到底部，不恢复跟随
+  const controlledScrollToBottom = useCallback((options?: Parameters<typeof scrollToBottom>[0]) => {
+    if (!lockedRef.current) return scrollToBottom(options)
+    const scrollElement = scrollRef.current
+    if (!scrollElement) return false
+    stopScroll()
+    scrollElement.scrollTo({ top: scrollElement.scrollHeight, behavior: 'instant' })
+    return true
+  }, [scrollRef, scrollToBottom, stopScroll])
+
+  return (
+    <StickToBottom
+      className={cn('relative min-h-0 flex-1 overflow-y-hidden scrollbar-none', className)}
+      role="log"
+      instance={{ ...instance, isAtBottom, scrollToBottom: controlledScrollToBottom }}
+    >
+      {children}
+    </StickToBottom>
   )
 }
