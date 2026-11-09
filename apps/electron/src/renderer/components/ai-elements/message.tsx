@@ -63,8 +63,8 @@ export function Message({ className, from, ...props }: MessageProps): React.Reac
   return (
     <div
       className={cn(
-        'message-item group flex w-full flex-col gap-0.5 rounded-[10px] px-2.5 py-2.5',
-        from === 'user' ? 'is-user' : 'is-assistant',
+        'message-item group flex w-full flex-col gap-1 rounded-[10px] px-2.5 py-1.5',
+        from === 'user' ? 'is-user items-end' : 'is-assistant',
         className
       )}
       {...props}
@@ -121,8 +121,8 @@ type MessageContentProps = HTMLAttributes<HTMLDivElement>
 
 /**
  * 消息内容区域
- * - user 消息：pl-[46px] 与头像对齐 + 浅色气泡背景
- * - assistant 消息：pl-[46px] 与头像对齐
+ * - user 消息：右对齐（内容自己控制气泡宽度）
+ * - assistant 消息：全宽
  */
 export function MessageContent({
   children,
@@ -132,9 +132,9 @@ export function MessageContent({
   return (
     <div
       className={cn(
-        'flex max-w-full min-w-0 flex-col gap-2 overflow-hidden pl-[46px]',
-        'group-[.is-user]:text-foreground group-[.is-user]:items-start',
-        'group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground',
+        'flex w-full max-w-full min-w-0 flex-col gap-2 overflow-hidden',
+        'group-[.is-user]:items-end group-[.is-user]:text-foreground',
+        'group-[.is-assistant]:text-foreground',
         className
       )}
       {...props}
@@ -157,7 +157,7 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        'flex items-center gap-2.5 text-muted-foreground/60 hover:text-muted-foreground/90 transition-colors duration-200',
+        'message-actions-row flex items-center gap-2 text-muted-foreground/60 hover:text-muted-foreground/90 transition-colors duration-200',
         className
       )}
       {...props}
@@ -183,10 +183,11 @@ export function MessageAction({
   label,
   variant = 'ghost',
   size = 'icon-sm',
+  className,
   ...props
 }: MessageActionProps): React.ReactElement {
   const button = (
-    <Button size={size} type="button" variant={variant} {...props}>
+    <Button size={size} type="button" variant={variant} className={cn('message-action-button', className)} {...props}>
       {children}
       <span className="sr-only">{label || tooltip}</span>
     </Button>
@@ -814,7 +815,7 @@ export const MessageResponse = React.memo(
     return (
       <div
         className={cn(
-          'prose dark:prose-invert max-w-none text-[length:var(--md-preview-font-size,16px)]',
+          'prose dark:prose-invert agent-prose max-w-none text-[length:var(--md-preview-font-size,16px)]',
           'prose-p:my-1.5 prose-p:leading-[1.6] prose-li:leading-[1.6] prose-pre:my-0 prose-headings:my-2 prose-hr:my-3',
           '[&_.code-block-wrapper+.code-block-wrapper]:mt-4',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
@@ -853,7 +854,7 @@ interface UserMessageContentProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 /**
- * 用户消息内容组件
+ * 用户消息内容组件（右侧气泡，对应商业版 T8t）
  * - 超过 4 行时默认折叠
  * - 点击展开/收起，底部使用低对比度文字提示
  */
@@ -886,17 +887,20 @@ export const UserMessageContent = React.memo(
     }, [])
 
     return (
-      <div className={cn('relative inline-block max-w-full rounded-[10px] bg-primary/10 px-3.5 py-2.5', className)} {...props}>
+      <div className={cn('user-message-bubble relative inline-block max-w-[min(46rem,82%)] rounded-[20px] px-4 py-2.5', className)} {...props}>
         <div
           ref={contentRef}
           className={cn(
-            'overflow-hidden text-[length:var(--chat-body-font-size,16px)] leading-[1.72] transition-[max-height] duration-200',
+            'overflow-hidden text-[length:var(--chat-body-font-size,16px)] transition-[max-height] duration-200',
             '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
             shouldCollapse && !isExpanded && 'max-h-[6.88em]'
           )}
         >
           <AgentHistoryQuoteClickContext.Provider value={onAgentHistoryQuoteClick}>
-            <MessageResponse className="text-[length:var(--chat-body-font-size,16px)] font-normal leading-[1.72] text-foreground/90 prose-p:my-0.5 prose-p:leading-[1.72] prose-p:text-foreground/90 prose-li:leading-[1.72] prose-li:text-foreground/90 prose-headings:my-1.5 prose-strong:font-semibold prose-strong:text-foreground" remarkPlugins={USER_REMARK_PLUGINS}>{children}</MessageResponse>
+            <MessageResponse
+              className="agent-prose-compact text-[length:var(--chat-body-font-size,16px)] font-normal text-primary-foreground prose-p:my-0.5 prose-p:text-primary-foreground prose-li:text-primary-foreground prose-headings:my-1.5 prose-strong:font-semibold prose-strong:text-primary-foreground"
+              remarkPlugins={USER_REMARK_PLUGINS}
+            >{children}</MessageResponse>
           </AgentHistoryQuoteClickContext.Provider>
         </div>
         {shouldCollapse && (
@@ -904,8 +908,8 @@ export const UserMessageContent = React.memo(
             type="button"
             onClick={toggleExpand}
             className={cn(
-              'mt-2 flex items-center gap-1 text-xs text-foreground/35 transition-colors',
-              'hover:text-foreground/55'
+              'mt-2 flex items-center gap-1 text-xs text-primary-foreground/65 transition-colors',
+              'hover:text-primary-foreground'
             )}
           >
             {isExpanded ? (

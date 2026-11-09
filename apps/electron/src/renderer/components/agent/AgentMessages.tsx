@@ -13,20 +13,16 @@ import {
   BasePathsProvider,
   Message,
   MessageContent,
-  MessageHeader,
 } from '@/components/ai-elements/message'
 import {
-  Conversation,
+  ConversationFollowController,
   ConversationContent,
 } from '@/components/ai-elements/conversation'
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
-import { formatMessageTime } from '@/lib/message-time'
-import { resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
-import { channelsAtom } from '@/atoms/channel-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import {
   createLocalSearchRecords,
@@ -36,9 +32,10 @@ import {
   type SessionMessageSearch,
 } from '@/lib/session-message-search'
 import { toTranscript } from '@proma/session-core'
-import { groupIntoTurns, AssistantLogo, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, buildTaskProgressDataForTurn, type MessageGroup } from './SDKMessageRenderer'
+import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, buildInterruptedTurnMap, buildTaskProgressDataForTurn, type MessageGroup } from './SDKMessageRenderer'
 import { buildLiveGroupSet } from './live-group-set'
-import { ProcessExpandStateProvider, RunningProcessSummary } from './ProcessTimeline'
+import { ProcessExpandStateProvider, RunningStepPlaceholder, TurnProcessSummary } from './ProcessTimeline'
+import { hasLiveFinalOutput } from './scroll-follow'
 import { AgentBrowserLinkProvider } from '@/components/browser/AgentBrowserLinkProvider'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import { TaskProgressOverlay, type ContextCompactionProgress } from './TaskProgressOverlay'
@@ -464,6 +461,11 @@ interface AgentTranscriptHistoryProps {
 const EMPTY_LIVE_GROUP_SET: ReadonlySet<MessageGroup> = new Set()
 const EMPTY_MESSAGE_GROUPS: MessageGroup[] = []
 
+/** 行组件的 props：在列表 props 之上追加由父组件计算好的中断映射 */
+type AgentTranscriptRowsProps = AgentTranscriptHistoryProps & {
+  interruptedAtMap: ReadonlyMap<MessageGroup, number | null>
+}
+
 /**
  * 比较两批 group 的“结构身份”是否一致。
  *
@@ -484,8 +486,8 @@ function haveSameGroupIdentities(previous: MessageGroup[], next: MessageGroup[])
 }
 
 function areTranscriptRowsEqual(
-  previous: AgentTranscriptHistoryProps,
-  next: AgentTranscriptHistoryProps,
+  previous: AgentTranscriptRowsProps,
+  next: AgentTranscriptRowsProps,
 ): boolean {
   if (
     previous.groups.length !== next.groups.length
@@ -493,6 +495,7 @@ function areTranscriptRowsEqual(
     || previous.taskNotificationSignature !== next.taskNotificationSignature
     || previous.sessionPath !== next.sessionPath
     || previous.sessionModelId !== next.sessionModelId
+    || previous.interruptedAtMap !== next.interruptedAtMap
     || previous.streaming !== next.streaming
     || previous.stoppedByUser !== next.stoppedByUser
     || previous.onFork !== next.onFork
@@ -518,6 +521,7 @@ const AgentTranscriptRows = React.memo(function AgentTranscriptRows({
   sessionPath,
   sessionModelId,
   groupHistoryTurns,
+  interruptedAtMap,
   streaming,
   stoppedByUser,
   onFork,
@@ -529,7 +533,7 @@ const AgentTranscriptRows = React.memo(function AgentTranscriptRows({
   onRelinkProjectRoot,
   onRestoreProjectRoot,
   onCompact,
-}: AgentTranscriptHistoryProps): React.ReactElement {
+}: AgentTranscriptRowsProps): React.ReactElement {
   const lastAssistantTurnIndex = React.useMemo(
     () => groups.findLastIndex((group) => group.type === 'assistant-turn'),
     [groups],
@@ -548,7 +552,7 @@ const AgentTranscriptRows = React.memo(function AgentTranscriptRows({
         const groupId = getGroupId(group)
 
         return (
-          <div key={groupId} className="w-full pb-1">
+          <div key={groupId} className="w-full pb-1" data-message-row={group.type}>
             <MessageGroupRenderer
               group={group}
               allMessages={group.type === 'assistant-turn' ? allMessages : EMPTY_SDK_MESSAGES}
@@ -566,6 +570,7 @@ const AgentTranscriptRows = React.memo(function AgentTranscriptRows({
               historyTurn={groupHistoryTurns.get(groupId)}
               isStreaming={isLive || undefined}
               stoppedByUser={isLastAssistantTurn || undefined}
+              interruptedAt={interruptedAtMap.get(group)}
               sessionModelId={sessionModelId}
             />
           </div>
@@ -600,6 +605,9 @@ const AgentTranscriptHistory = React.forwardRef<AgentTranscriptHistoryHandle, Ag
   onCompact,
 }, ref): React.ReactElement {
   const { scrollRef, isAtBottom, stopScroll } = useStickToBottomContext()
+  // 映射必须基于完整分组列表计算：历史行与实时行是两次 AgentTranscriptRows 调用，
+  // 「被打断的轮次」和「插队用户消息」可能分属两边。
+  const interruptedAtMap = React.useMemo(() => buildInterruptedTurnMap(groups), [groups])
   const previousLayoutRef = React.useRef<{
     count: number
     firstGroupId: string | undefined
@@ -677,6 +685,7 @@ const AgentTranscriptHistory = React.forwardRef<AgentTranscriptHistoryHandle, Ag
         sessionPath={sessionPath}
         sessionModelId={sessionModelId}
         groupHistoryTurns={groupHistoryTurns}
+        interruptedAtMap={interruptedAtMap}
         streaming={false}
         stoppedByUser={liveGroups.length === 0 ? stoppedByUser : undefined}
         onFork={onFork}
@@ -698,6 +707,7 @@ const AgentTranscriptHistory = React.forwardRef<AgentTranscriptHistoryHandle, Ag
           sessionPath={sessionPath}
           sessionModelId={sessionModelId}
           groupHistoryTurns={groupHistoryTurns}
+          interruptedAtMap={interruptedAtMap}
           streaming={streaming}
           stoppedByUser={stoppedByUser}
           onFork={onFork}
@@ -742,7 +752,6 @@ export const AgentMessages = React.memo(function AgentMessages({
   const liveMessages = useAtomValue(agentLiveMessagesAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
   const userProfile = useAtomValue(userProfileAtom)
-  const channels = useAtomValue(channelsAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
   const historyRef = React.useRef<AgentTranscriptHistoryHandle>(null)
@@ -828,11 +837,11 @@ export const AgentMessages = React.memo(function AgentMessages({
   const startedAt = streamState?.startedAt
   const navigatorOffline = useNavigatorOffline()
   const showOfflineNotice = streaming && navigatorOffline && !retrying
-  const optimisticModelId = streamState?.model || sessionModelId
-  const optimisticModel = optimisticModelId
-    ? resolveModelDisplayName(optimisticModelId, channels)
-    : undefined
-  const optimisticTime = startedAt ? formatMessageTime(startedAt) : undefined
+  // 最终回复开始输出后停止跟随滚动（对应商业版 z8t）
+  const hasFinalOutput = React.useMemo(
+    () => hasLiveFinalOutput(liveMessages ?? [], startedAt),
+    [liveMessages, startedAt],
+  )
 
   // Agent 消息区不使用 StickToBottom 的 smooth resize。切换会话、虚拟列表测量和
   // 历史消息加载都必须立即定位，避免 ResizeObserver 触发滚动 spring 动画。
@@ -1043,7 +1052,13 @@ export const AgentMessages = React.memo(function AgentMessages({
           color: inherit;
         }
       `}</style>
-          <Conversation resize="instant" className={ready ? 'opacity-100' : 'opacity-0'}>
+          <ConversationFollowController
+            sessionId={sessionId}
+            streaming={streaming}
+            runStartedAt={streamState?.startedAt}
+            hasFinalOutput={hasFinalOutput}
+            className={ready ? 'opacity-100' : 'opacity-0'}
+          >
         <ScrollPositionManager id={sessionId} ready={ready} />
         <ConversationContent className="agent-conversation-content">
           {!hasContent && !streaming ? (
@@ -1074,25 +1089,24 @@ export const AgentMessages = React.memo(function AgentMessages({
               />
 
               {/* 有实时助手内容时：显示运行指示器或占位（防止 streaming 结束到 Actions Bar 出现之间的高度跳动） */}
-              {/* 不使用 mt：ConversationContent 的 gap-1(4px) 已提供间距，
-                  匹配内部 MessageActions 的 gap-0.5(2px)+mt-0.5(2px)=4px 间距 */}
               {hasLiveAssistantContent && !suppressAgentRunning && (
-                <div className="pl-[56px] min-h-[28px]">
+                <div className="min-h-[28px]">
                   {retrying ? <RetryingNotice retrying={retrying} /> : showOfflineNotice ? <OfflineNotice /> : null}
                 </div>
               )}
 
-              {/* 首个 live assistant block 到达前，先乐观渲染 assistant 外壳和 Logo；文本仍完全由 SDKMessage 渲染。 */}
+              {/* 首个 live assistant block 到达前，先乐观渲染过程摘要行与运行占位；文本仍完全由 SDKMessage 渲染。 */}
               {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || retrying) && (
                 <Message from="assistant">
-                  <MessageHeader
-                    model={optimisticModel}
-                    time={optimisticTime}
-                    logo={<AssistantLogo model={optimisticModelId} />}
-                  />
                   <MessageContent>
+                    <TurnProcessSummary
+                      streaming
+                      expandKey={`${sessionId}:process`}
+                      startedAt={startedAt}
+                      steps={0}
+                    />
                     {retrying ? <RetryingNotice retrying={retrying} /> : showOfflineNotice ? <OfflineNotice /> : null}
-                    {streaming && !retrying && <RunningProcessSummary startedAt={startedAt} />}
+                    {streaming && !retrying && <RunningStepPlaceholder />}
                   </MessageContent>
                 </Message>
               )}
@@ -1107,7 +1121,7 @@ export const AgentMessages = React.memo(function AgentMessages({
           streaming={streaming}
           contextCompaction={contextCompaction}
         />
-          </Conversation>
+          </ConversationFollowController>
           <AgentHistorySelectionLayer
             sessionId={sessionId}
             rootRef={historySelectionRootRef}

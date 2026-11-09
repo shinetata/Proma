@@ -10,7 +10,8 @@ import {
 } from './ask-user-answers'
 import {
   buildAssistantTurnSections,
-  collectAssistantTurnBodyEntries,
+  groupConsecutiveQuestions,
+  splitTurnBodyAndProcess,
   type AssistantTurnSection,
 } from './assistant-turn-sections'
 
@@ -241,7 +242,7 @@ describe('轮次分区与正文条目', () => {
     const sections = buildSections(messages, new Set(['tool-ask']))
 
     expect(sections.map((section) => section.type)).toEqual(['activity', 'question', 'block'])
-    expect(collectAssistantTurnBodyEntries(sections).map((entry) => entry.type)).toEqual(['question', 'block'])
+    expect(splitTurnBodyAndProcess(sections, true).body.map((entry) => entry.item.type)).toEqual(['question', 'block'])
   })
 
   test('given 未答问答 when 分区 then 仍留在执行过程里', () => {
@@ -250,7 +251,7 @@ describe('轮次分区与正文条目', () => {
     const sections = buildSections(messages, new Set())
 
     expect(sections.map((section) => section.type)).toEqual(['activity'])
-    expect(collectAssistantTurnBodyEntries(sections)).toEqual([])
+    expect(splitTurnBodyAndProcess(sections, true).body).toEqual([])
   })
 
   test('given 连续多组已答问答 when 归集正文条目 then 合并成同一张卡片', () => {
@@ -260,10 +261,11 @@ describe('轮次分区与正文条目', () => {
       assistantText('最终回答'),
     ]
 
-    const entries = collectAssistantTurnBodyEntries(buildSections(messages, new Set(['tool-1', 'tool-2'])))
+    const { body } = splitTurnBodyAndProcess(buildSections(messages, new Set(['tool-1', 'tool-2'])), true)
+    const groups = groupConsecutiveQuestions(body)
 
-    expect(entries.map((entry) => entry.type)).toEqual(['question', 'block'])
-    expect(entries[0]?.type === 'question' ? entries[0].entries.length : 0).toBe(2)
+    expect(groups.map((group) => group.kind)).toEqual(['questions', 'entry'])
+    expect(groups[0]?.kind === 'questions' ? groups[0].entries.length : 0).toBe(2)
   })
 
   test('given 问答被正文隔开 when 归集正文条目 then 分成两张卡片', () => {
@@ -274,8 +276,8 @@ describe('轮次分区与正文条目', () => {
     ]
 
     const sections = buildSections(messages, new Set(['tool-1', 'tool-2']))
-    const entries = collectAssistantTurnBodyEntries(sections)
+    const groups = groupConsecutiveQuestions(splitTurnBodyAndProcess(sections, true).body)
 
-    expect(entries.filter((entry) => entry.type === 'question').length).toBe(2)
+    expect(groups.filter((group) => group.kind === 'questions').length).toBe(2)
   })
 })

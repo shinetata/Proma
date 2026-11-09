@@ -2232,6 +2232,8 @@ export class AgentOrchestrator {
         },
         parent_tool_use_id: null,
         _createdAt: Date.now(),
+        // 插队打断：渲染层据此把紧挨在本消息前面的助手轮次视为「已停止」
+        ...(opts?.interrupt ? { _promaInterruptedPrevious: true } : {}),
         ...(userVaultContext ? {
           _vaultFocus: {
             displayName: userVaultContext.displayName,

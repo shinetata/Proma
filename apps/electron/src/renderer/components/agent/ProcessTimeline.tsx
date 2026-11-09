@@ -1,34 +1,31 @@
 /**
  * ProcessTimeline — 助手轮次的执行过程区
  *
- * 结构与商业版 0.21.88 一致：
- * - ProcessSummary：「已思考 N 次、执行 N 次工具、耗时 Xs」摘要行，可折叠整个过程；
- * - PROCESS_TIMELINE_CLASS：摘要下方带左侧竖线的时间轴容器；
- * - ProcessStepGroup：时间轴上的一组连续 thinking / tool 步骤，折叠时只显示当前步骤文案，
- *   左侧节点显示最后一个工具的图标，点击展开后列出每一步详情。
+ * 结构与商业版 0.22.0 一致：
+ * - TurnProcessSummary：轮次顶部的一行过程摘要（带底边线），完成态可点击展开过程分区，
+ *   运行中实时显示耗时，停止/失败保持收拢并标注状态；
+ * - ProcessStepGroup：一行步骤组（图标 + 文案 + 摘要 + 步数），点击展开步骤明细，
+ *   不再有左侧竖线时间轴；
+ * - TurnLayoutTransition：轮次三种布局（运行中 / 停止失败 / 完成）切换时的高度过渡。
  */
 
 import * as React from 'react'
-import { BookOpen, ChevronRight, ListTree, Server } from 'lucide-react'
+import { BookOpen, ChevronRight, Server, Sparkles } from 'lucide-react'
 import type { SDKContentBlock, SDKToolUseBlock } from '@proma/shared'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { getToolIcon } from './tool-utils'
 import {
   THINKING_STEP_CONTENT,
-  buildProcessSummary,
   countProcessBlocks,
+  formatLiveElapsed,
   getProcessStepContent,
   type ProcessStepContent,
   type ToolReference,
 } from './assistant-turn-sections'
 
-/** 时间轴容器：左侧细竖线，步骤节点通过负偏移压在竖线上 */
-export const PROCESS_TIMELINE_CLASS = 'ml-[7px] space-y-1 border-l border-border/70 py-0.5 pl-4'
-
 const STEP_TRANSITION_MS = 420
 const STEP_MIN_DWELL_MS = 900
-const COLLAPSE_TRANSITION_MS = 420
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
@@ -85,13 +82,13 @@ export function ToolReferenceChip({ reference, className }: { reference: ToolRef
   return (
     <span
       className={cn(
-        'inline-flex max-w-[min(18rem,60vw)] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[15px] font-medium leading-none align-baseline',
+        'inline-flex max-w-[min(18rem,60vw)] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium leading-none align-baseline',
         styleClassName,
         className,
       )}
       title={reference.title}
     >
-      <Icon className="size-[15px] shrink-0" />
+      <Icon className="size-4 shrink-0" />
       <span className="truncate">{reference.label}</span>
     </span>
   )
@@ -99,11 +96,14 @@ export function ToolReferenceChip({ reference, className }: { reference: ToolRef
 
 // ===== 步骤文案：切换时上下淡入淡出，并保证每条文案至少停留 900ms =====
 
-function getStepContentKey(content: ProcessStepContent): string {
+/** 停留内容的类型：步骤文案 + 仅参与停留 key 的 suffix（步数） */
+type DwellStepContent = ProcessStepContent & { suffix?: string }
+
+function getStepContentKey(content: DwellStepContent): string {
   return `${content.label}|${content.reference?.kind ?? ''}|${content.reference?.label ?? ''}|${content.suffix ?? ''}|${content.markerTool ?? ''}`
 }
 
-function useDwellStepContent(content: ProcessStepContent, initial?: ProcessStepContent): ProcessStepContent {
+function useDwellStepContent(content: DwellStepContent, initial?: ProcessStepContent): ProcessStepContent {
   const [shown, setShown] = React.useState(initial ?? content)
   const shownKeyRef = React.useRef(getStepContentKey(initial ?? content))
   const shownAtRef = React.useRef(0)
@@ -131,9 +131,8 @@ function useDwellStepContent(content: ProcessStepContent, initial?: ProcessStepC
 function StepLabelContent({ content }: { content: ProcessStepContent }): React.ReactElement {
   return (
     <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
-      <span className="truncate">{content.label}</span>
+      <span className="shrink-0">{content.label}</span>
       {content.reference && <ToolReferenceChip reference={content.reference} />}
-      {content.suffix && <span className="shrink-0 font-normal tabular-nums text-foreground/30">{content.suffix}</span>}
     </span>
   )
 }
@@ -145,16 +144,16 @@ interface StepLabelState {
   generation: number
 }
 
-function StepLabel({ content }: { content: ProcessStepContent }): React.ReactElement {
-  const key = `${content.label}|${content.reference?.kind ?? ''}|${content.reference?.label ?? ''}|${content.suffix ?? ''}`
-  const [state, setState] = React.useState<StepLabelState>({ current: content, previous: null, phase: 'idle', generation: 0 })
-  const latestRef = React.useRef({ key, content })
+function StepLabel({ label, reference }: { label: string; reference?: ToolReference }): React.ReactElement {
+  const key = `${label}|${reference?.kind ?? ''}|${reference?.label ?? ''}`
+  const [state, setState] = React.useState<StepLabelState>({ current: { label, reference }, previous: null, phase: 'idle', generation: 0 })
+  const latestRef = React.useRef({ key, content: { label, reference } })
 
   React.useEffect(() => {
     if (latestRef.current.key === key) return
     const previous = latestRef.current.content
-    latestRef.current = { key, content }
-    setState((prev) => ({ current: content, previous, phase: 'enter', generation: prev.generation + 1 }))
+    latestRef.current = { key, content: { label, reference } }
+    setState((prev) => ({ current: { label, reference }, previous, phase: 'enter', generation: prev.generation + 1 }))
     let secondFrame = 0
     const firstFrame = requestAnimationFrame(() => {
       secondFrame = requestAnimationFrame(() => setState((prev) => ({ ...prev, phase: 'active' })))
@@ -167,7 +166,7 @@ function StepLabel({ content }: { content: ProcessStepContent }): React.ReactEle
       cancelAnimationFrame(secondFrame)
       window.clearTimeout(timer)
     }
-    // content 由 key 唯一确定
+    // label/reference 由 key 唯一确定
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
 
@@ -176,7 +175,7 @@ function StepLabel({ content }: { content: ProcessStepContent }): React.ReactEle
   const leaving = state.previous !== null && state.phase === 'active'
 
   return (
-    <span className="inline-grid min-w-0 max-w-full text-[15px] font-medium text-foreground/45">
+    <span className="inline-grid shrink-0 max-w-full font-normal text-foreground/60">
       {state.previous !== null && (
         <span
           key={`previous-${state.generation}`}
@@ -204,25 +203,7 @@ function StepLabel({ content }: { content: ProcessStepContent }): React.ReactEle
   )
 }
 
-/** 时间轴节点：最后一个工具的图标；纯思考时显示圆点 */
-function StepMarker({ toolName, reference, active }: { toolName?: string; reference?: ToolReference; active: boolean }): React.ReactElement {
-  const Icon = reference?.kind === 'skill' ? BookOpen : toolName ? getToolIcon(toolName) : null
-  return (
-    <span aria-hidden className="absolute -left-[24.5px] top-[3px] flex size-4 items-center justify-center rounded-full bg-background">
-      <span
-        key={reference?.kind ?? toolName ?? 'thinking'}
-        className="flex animate-in fade-in"
-        style={{ animationDuration: `${STEP_TRANSITION_MS}ms` }}
-      >
-        {Icon ? (
-          <Icon className={cn('size-3.5', active ? 'text-foreground/55' : 'text-foreground/35')} />
-        ) : (
-          <span className={cn('size-1.5 rounded-full', active ? 'bg-foreground/45' : 'bg-foreground/25')} />
-        )}
-      </span>
-    </span>
-  )
-}
+// ===== 步骤组行 =====
 
 interface ProcessStepGroupProps {
   blocks: SDKContentBlock[]
@@ -236,6 +217,7 @@ interface ProcessStepGroupProps {
   expandKey?: string
 }
 
+/** 一行步骤组：图标 + 文案（带切换动画）+ 摘要 + 步数，可展开步骤明细 */
 export function ProcessStepGroup({
   blocks,
   isActive = false,
@@ -250,27 +232,63 @@ export function ProcessStepGroup({
   const last = blocks[blocks.length - 1]
   const steps = thinkingCount + toolCount
   const stepContent = getProcessStepContent(blocks, isActive, completedToolIds, failedToolIds)
-  const content = useDwellStepContent({
+  // 文案与图标参与 900ms 停留；summary 不参与停留，每次渲染直接取最新值
+  const dwellContent = useDwellStepContent({
     ...stepContent,
     suffix: !isActive && steps > 1 ? `· ${steps} 步` : undefined,
     markerTool: stepContent.markerTool ?? (isActive ? (last?.type === 'tool_use' ? (last as SDKToolUseBlock).name : undefined) : lastTool?.name),
   }, startFromThinking ? THINKING_STEP_CONTENT : undefined)
+  const summary = stepContent.summary
   const canExpand = blocks.length > 0 && !!renderChildren
+  const Icon = dwellContent.reference?.kind === 'skill'
+    ? BookOpen
+    : dwellContent.markerTool
+      ? getToolIcon(dwellContent.markerTool)
+      : null
 
   return (
-    <div className="relative min-w-0">
-      <StepMarker toolName={content.markerTool} reference={content.reference} active={isActive} />
+    <div className="min-w-0">
       <button
         type="button"
         aria-expanded={expanded}
         disabled={!canExpand}
-        className="group flex min-h-[22px] max-w-full min-w-0 items-center gap-1.5 rounded-md text-left transition-opacity enabled:hover:opacity-75 disabled:cursor-default"
         onClick={toggle}
+        className={cn(
+          'group -mx-1.5 flex h-[25px] max-w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left transition-colors',
+          'text-[length:var(--chat-body-font-size,16px)]',
+          canExpand && 'hover:bg-foreground/[0.05]',
+          expanded && 'bg-foreground/[0.03]',
+          !canExpand && 'cursor-default',
+        )}
       >
-        <StepLabel content={content} />
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          {Icon
+            ? <Icon className={cn('size-4', isActive ? 'text-foreground/60' : 'text-foreground/40')} />
+            : <Sparkles className={cn('size-4', isActive ? 'text-foreground/60' : 'text-foreground/40')} />}
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <StepLabel label={dwellContent.label} reference={dwellContent.reference} />
+          {summary && (
+            <>
+              <span className="shrink-0 text-foreground/25">·</span>
+              <span className={cn('min-w-0 truncate text-foreground/45', isActive && 'activity-summary-streaming')}>{summary}</span>
+            </>
+          )}
+          {!isActive && steps > 1 && (
+            <span className="shrink-0 tabular-nums text-foreground/30">· {steps} 步</span>
+          )}
+        </span>
+        {canExpand && (
+          <ChevronRight
+            className={cn(
+              'size-3.5 shrink-0 text-foreground/30 opacity-0 transition-all duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+              expanded && 'rotate-90 opacity-100',
+            )}
+          />
+        )}
       </button>
       {expanded && canExpand && (
-        <div className="mb-1.5 mt-1 space-y-2 rounded-lg bg-muted/35 px-3 py-2.5 animate-in fade-in duration-150">
+        <div className="mb-1.5 ml-6 mt-1 space-y-2 rounded-lg bg-muted/25 px-3 py-2.5 animate-in fade-in duration-150">
           {renderChildren?.(true)}
         </div>
       )}
@@ -278,149 +296,106 @@ export function ProcessStepGroup({
   )
 }
 
-// ===== 过程摘要（可折叠整个过程区） =====
-
-function ProcessSummaryRow({ summary, tooltip, expanded, interactive, onToggle }: {
-  summary: string
-  tooltip?: string
-  expanded: boolean
-  interactive: boolean
-  onToggle: () => void
-}): React.ReactElement {
-  const text = (
-    <span className="truncate text-[16px] font-semibold leading-[1.72] tabular-nums text-foreground/55 transition-colors group-data-[interactive]:group-hover:text-foreground/70">
-      {summary}
-    </span>
-  )
-  return (
-    <button
-      type="button"
-      aria-expanded={interactive ? expanded : undefined}
-      aria-disabled={!interactive || undefined}
-      data-interactive={interactive || undefined}
-      className={cn('group flex min-h-[24px] max-w-full min-w-0 items-center gap-2 rounded-md text-left', interactive ? 'cursor-pointer' : 'cursor-default')}
-      onClick={interactive ? onToggle : undefined}
-    >
-      <span className="flex size-4 shrink-0 items-center justify-center">
-        <ListTree className="size-[18px] shrink-0 text-foreground/45" />
-      </span>
-      {tooltip ? (
-        <Tooltip>
-          <TooltipTrigger asChild>{text}</TooltipTrigger>
-          <TooltipContent side="top">
-            <p className="whitespace-pre-line text-left">{tooltip}</p>
-          </TooltipContent>
-        </Tooltip>
-      ) : text}
-      {interactive && (
-        <ChevronRight
-          className={cn(
-            'size-3.5 shrink-0 text-foreground/40 opacity-0 transition-all duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
-            expanded && 'rotate-90',
-          )}
-        />
-      )}
-    </button>
-  )
+/** 运行占位：Sparkles 图标 +「正在思考...」（对应商业版 s9t） */
+export function RunningStepPlaceholder(): React.ReactElement {
+  return <ProcessStepGroup blocks={[]} isActive />
 }
 
-interface ProcessSummaryProps {
-  isStreaming: boolean
-  /** 运行结束时立即同步折叠，避免与正文出现动画叠加 */
-  coordinatedCompletion?: boolean
-  summary: string
+// ===== 轮次过程摘要行 =====
+
+export type TurnOutcome = 'stopped' | 'failed' | 'completed'
+
+interface TurnProcessSummaryProps {
+  expandKey?: string
+  /** 运行中：不可展开，显示实时耗时 */
+  streaming?: boolean
+  /** 运行结束后的结果状态，决定主文案与是否可展开 */
+  outcome?: TurnOutcome
+  /** 完成轮次的耗时文案（formatTurnDuration 的结果） */
+  durationText?: string
+  /** 运行中轮次的起始时间，用于实时耗时 */
+  startedAt?: number
+  /** 步数（所有活动分区的条目数之和） */
+  steps: number
+  /** 耗时与用量 tooltip（仅完成态传入） */
   tooltip?: string
-  hasContent: boolean
-  interactive?: boolean
   children?: React.ReactNode
 }
 
-/** 运行中默认展开过程，运行结束后自动收起，可再次点击展开 */
-export function ProcessSummary({
-  isStreaming,
-  coordinatedCompletion = false,
-  summary,
+/**
+ * 轮次顶部的一行过程摘要（对应商业版 xj）。
+ *
+ * 运行中显示「正在执行任务 · 已完成 N 步 · 持续 X」；
+ * 完成/停止/失败收拢为一行，仅完成态可点击展开下方的过程分区（children）。
+ */
+export function TurnProcessSummary({
+  expandKey,
+  streaming = false,
+  outcome = 'completed',
+  durationText,
+  startedAt,
+  steps,
   tooltip,
-  hasContent,
-  interactive = hasContent,
   children,
-}: ProcessSummaryProps): React.ReactElement {
-  const [expanded, setExpanded] = React.useState(isStreaming)
-  const [mounted, setMounted] = React.useState(isStreaming)
-  const [height, setHeight] = React.useState<number | undefined>(isStreaming ? undefined : 0)
-  const contentRef = React.useRef<HTMLDivElement>(null)
-  const frameRef = React.useRef<number | null>(null)
-  const mountedRef = React.useRef(mounted)
-  const initializedRef = React.useRef(false)
-  mountedRef.current = mounted
+}: TurnProcessSummaryProps): React.ReactElement {
+  const [expanded, toggle] = useProcessExpandState(expandKey)
+  const elapsed = useElapsedSince(streaming ? startedAt : undefined)
+  const liveElapsedText = formatLiveElapsed(elapsed)
+  const canToggle = !streaming && outcome === 'completed'
+  const label = streaming
+    ? '正在执行任务'
+    : outcome === 'stopped'
+      ? '已停止'
+      : outcome === 'failed'
+        ? '运行失败'
+        : durationText
+          ? `已完成，用时 ${durationText}`
+          : '已完成'
+  const stepsText = streaming
+    ? (steps > 0 ? `· 已完成 ${steps} 步` : undefined)
+    : (steps > 1 ? `· ${steps} 步` : undefined)
+  const liveText = streaming && startedAt != null && liveElapsedText
+    ? `· 持续 ${liveElapsedText}`
+    : undefined
 
-  const [trackedStreaming, setTrackedStreaming] = React.useState(isStreaming)
-  if (trackedStreaming !== isStreaming) {
-    setTrackedStreaming(isStreaming)
-    if (coordinatedCompletion) {
-      setExpanded(isStreaming)
-      setMounted(isStreaming)
-    }
-  }
-
-  React.useLayoutEffect(() => {
-    if (coordinatedCompletion) return
-    if (isStreaming) {
-      setExpanded(true)
-      return
-    }
-    const element = contentRef.current
-    if (element) setHeight(element.clientHeight)
-    setExpanded(false)
-  }, [isStreaming, coordinatedCompletion])
-
-  React.useEffect(() => {
-    if (!initializedRef.current) {
-      initializedRef.current = true
-      return
-    }
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current)
-      frameRef.current = null
-    }
-    if (expanded) {
-      setMounted(true)
-      setHeight(undefined)
-      return
-    }
-    if (!mountedRef.current) return
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null
-      setHeight(0)
-    })
-    const timer = window.setTimeout(() => setMounted(false), COLLAPSE_TRANSITION_MS)
-    return () => {
-      window.clearTimeout(timer)
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current)
-        frameRef.current = null
-      }
-    }
-  }, [expanded])
-
-  const toggle = (): void => {
-    if (expanded && contentRef.current) setHeight(contentRef.current.clientHeight)
-    setExpanded((prev) => !prev)
-  }
+  const mainText = (
+    <span className="shrink-0 tabular-nums text-foreground/60">{label}</span>
+  )
 
   return (
-    <div className="min-w-0 space-y-1">
-      <ProcessSummaryRow summary={summary} tooltip={tooltip} expanded={expanded} interactive={interactive} onToggle={toggle} />
-      {mounted && hasContent && (
-        <div
-          ref={contentRef}
-          className="overflow-hidden transition-[height,opacity] ease-in-out"
-          style={{
-            height: expanded ? 'auto' : `${height ?? 0}px`,
-            opacity: expanded ? 1 : 0,
-            transitionDuration: `${COLLAPSE_TRANSITION_MS}ms`,
-          }}
-        >
+    <div className="min-w-0">
+      <button
+        type="button"
+        aria-expanded={canToggle ? expanded : undefined}
+        disabled={!canToggle}
+        onClick={canToggle ? toggle : undefined}
+        className={cn(
+          'group flex w-full min-w-0 items-center gap-2 border-b border-border/50 pb-2 text-left transition-colors',
+          'text-[length:var(--chat-body-font-size,16px)]',
+          canToggle ? 'hover:text-foreground/75' : 'cursor-default text-foreground/55',
+        )}
+      >
+        {tooltip ? (
+          <Tooltip>
+            <TooltipTrigger asChild>{mainText}</TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="whitespace-pre-line text-left">{tooltip}</p>
+            </TooltipContent>
+          </Tooltip>
+        ) : mainText}
+        {stepsText && <span className="shrink-0 tabular-nums text-foreground/35">{stepsText}</span>}
+        {liveText && <span className="shrink-0 tabular-nums text-foreground/35">{liveText}</span>}
+        {canToggle && (
+          <ChevronRight
+            className={cn(
+              'size-3.5 shrink-0 text-foreground/30 opacity-0 transition-all duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+              expanded && 'rotate-90 opacity-100',
+            )}
+          />
+        )}
+      </button>
+      {expanded && children != null && (
+        <div className="mb-1 mt-2 space-y-0.5 animate-in fade-in duration-150">
           {children}
         </div>
       )}
@@ -428,21 +403,114 @@ export function ProcessSummary({
   )
 }
 
-/** 首个助手内容到达前的占位过程：「耗时 Xs」+「正在思考...」 */
-export function RunningProcessSummary({ startedAt }: { startedAt?: number }): React.ReactElement {
-  const [mountedAt] = React.useState(() => Date.now())
-  const elapsed = useElapsedSince(startedAt ?? mountedAt)
-  const summary = buildProcessSummary([], elapsed ?? 0) ?? '耗时 0s'
-  return (
-    <div className="space-y-2">
-      <ProcessSummary isStreaming summary={summary} hasContent interactive={false}>
-        <div className={PROCESS_TIMELINE_CLASS}>
-          <ProcessStepGroup blocks={[]} isActive />
-        </div>
-      </ProcessSummary>
-    </div>
-  )
+// ===== 轮次布局切换的高度过渡 =====
+
+const LAYOUT_TRANSITION_DELAY_MS = 150
+const LAYOUT_TRANSITION_DURATION_MS = 500
+const LAYOUT_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
+
+interface TurnLayoutTransitionProps {
+  /** 是否启用高度过渡动画 */
+  animate: boolean
+  /** 布局标识：变化时触发高度过渡 */
+  layoutKey: string
+  className?: string
+  children: React.ReactNode
 }
+
+/**
+ * 轮次三种布局（运行中 / 停止失败 / 完成）切换时的高度过渡（对应商业版 X7t）。
+ *
+ * 提交前记下外层高度（getSnapshotBeforeUpdate），提交后对外层做
+ * height: 旧 → 新 的 Web Animations 过渡（delay 150ms、duration 500ms、
+ * cubic-bezier(0.22, 1, 0.36, 1)、fill: 'both'），过渡期间外层 overflow: clip；
+ * 过渡未结束时内容高度再变化，用 ResizeObserver 以剩余时长重新定位目标高度。
+ * prefers-reduced-motion 或 animate 为假时不做动画。
+ */
+class TurnLayoutTransition extends React.Component<TurnLayoutTransitionProps> {
+  private outerRef = React.createRef<HTMLDivElement>()
+  private innerRef = React.createRef<HTMLDivElement>()
+  private animation: Animation | undefined
+  private observer: ResizeObserver | undefined
+  private deadline = 0
+  private targetHeight = 0
+
+  private observeContent(): void {
+    if (typeof ResizeObserver === 'undefined') return
+    this.observer ??= new ResizeObserver(() => {
+      if (!this.animation) return
+      const remaining = this.deadline - performance.now()
+      const outer = this.outerRef.current
+      const inner = this.innerRef.current
+      if (!outer || !inner || remaining <= 0) return
+      const height = inner.getBoundingClientRect().height
+      if (Math.abs(height - this.targetHeight) < 1) return
+      const current = outer.getBoundingClientRect().height
+      this.transition(current, height, 0, remaining)
+    })
+    if (this.innerRef.current) this.observer.observe(this.innerRef.current)
+  }
+
+  private clearAnimation(): void {
+    this.observer?.disconnect()
+    this.animation?.cancel()
+    this.animation = undefined
+    if (this.outerRef.current) this.outerRef.current.style.overflow = ''
+  }
+
+  private transition(from: number, to: number, delay: number, duration: number): void {
+    this.clearAnimation()
+    const outer = this.outerRef.current
+    if (!outer?.animate || Math.abs(from - to) < 1) return
+    outer.style.overflow = 'clip'
+    this.targetHeight = to
+    this.deadline = performance.now() + delay + duration
+    const animation = outer.animate(
+      [{ height: `${from}px` }, { height: `${to}px` }],
+      { delay, duration, easing: LAYOUT_TRANSITION_EASING, fill: 'both' },
+    )
+    this.animation = animation
+    animation.onfinish = () => {
+      if (this.animation === animation) this.clearAnimation()
+    }
+    this.observeContent()
+  }
+
+  override getSnapshotBeforeUpdate(previous: TurnLayoutTransitionProps): number | null {
+    if (!this.props.animate || previous.layoutKey === this.props.layoutKey || prefersReducedMotion()) return null
+    return this.outerRef.current?.getBoundingClientRect().height ?? null
+  }
+
+  override componentDidUpdate(previous: TurnLayoutTransitionProps, _state: Readonly<Record<string, never>>, snapshot: number | null): void {
+    if (prefersReducedMotion() || !this.props.animate) {
+      this.clearAnimation()
+      return
+    }
+    if (snapshot == null || !this.innerRef.current) return
+    this.transition(
+      snapshot,
+      this.innerRef.current.getBoundingClientRect().height,
+      LAYOUT_TRANSITION_DELAY_MS,
+      LAYOUT_TRANSITION_DURATION_MS,
+    )
+  }
+
+  override componentWillUnmount(): void {
+    this.clearAnimation()
+  }
+
+  override render(): React.ReactElement {
+    return (
+      <div ref={this.outerRef} data-completion-layout="">
+        <div ref={this.innerRef} className={this.props.className} style={{ display: 'flow-root' }}>
+          {this.props.children}
+        </div>
+      </div>
+    )
+  }
+}
+
+export { TurnLayoutTransition }
 
 // ===== 新步骤展开 / 最终输出显现动画 =====
 
