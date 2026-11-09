@@ -7,6 +7,7 @@ import {
   getPiAssistantErrorDetails,
   hasPiAssistantTextContent,
   stripPiAssistantError,
+  TOOL_USE_WITHOUT_TOOL_CALL_ERROR,
 } from './pi-message-adapter'
 
 function writeToolCall(content: string): AssistantMessage {
@@ -117,5 +118,31 @@ describe('convertPiMessage', () => {
     expect(partialStop.errors).toBeUndefined()
     expect(terminalError.subtype).toBe('error_during_execution')
     expect(terminalError.errors).toEqual([providerError])
+  })
+
+  test('reports a toolUse stop without any tool call as an execution error', () => {
+    const missingToolCall = convertResultMessage([{
+      role: 'assistant',
+      content: [{ type: 'text', text: '我把这些交给原来的子会话补。' }],
+      stopReason: 'toolUse',
+    } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[]; terminal_reason?: string }
+    const normalToolUse = convertResultMessage([{
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: {} }],
+      stopReason: 'toolUse',
+    } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[] }
+    const guarded = convertResultMessage([{
+      role: 'assistant', content: [], stopReason: 'toolUse',
+    } as unknown as AssistantMessage], 'session-1', {
+      subtype: 'error_max_turns', terminalReason: 'max_turns', errors: ['max turns'],
+    }) as { subtype?: string; errors?: string[] }
+
+    expect(missingToolCall.subtype).toBe('error_during_execution')
+    expect(missingToolCall.errors).toEqual([TOOL_USE_WITHOUT_TOOL_CALL_ERROR])
+    expect(missingToolCall.terminal_reason).toBe('completed')
+    expect(normalToolUse.subtype).toBe('success')
+    expect(normalToolUse.errors).toBeUndefined()
+    expect(guarded.subtype).toBe('error_max_turns')
+    expect(guarded.errors).toEqual(['max turns'])
   })
 })

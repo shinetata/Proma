@@ -61,6 +61,47 @@ describe('installPromaRetryClassifier', () => {
     installPromaRetryClassifier(host.session)
     expect(host.isRetryable({ stopReason: 'error', errorMessage: 'net::ERR_NAME_NOT_RESOLVED' })).toBe(true)
   })
+
+  const signatureError = '400 {"error":{"message":"***.***.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation."}}'
+
+  test('Given 思考块签名错误且调用方已安排剥离 Then 原地重试', () => {
+    const host = createClassifierHost(false)
+    const seen: unknown[] = []
+    installPromaRetryClassifier(host.session, {
+      recoverThinkingSignature: (message) => {
+        seen.push(message)
+        return true
+      },
+    })
+    const failed = { stopReason: 'error', errorMessage: signatureError }
+
+    expect(host.isRetryable(failed)).toBe(true)
+    expect(seen).toEqual([failed])
+  })
+
+  test('Given 思考块签名错误但原地恢复已用尽 Then 按 400 不重试', () => {
+    const host = createClassifierHost(false)
+    installPromaRetryClassifier(host.session, { recoverThinkingSignature: () => false })
+
+    expect(host.isRetryable({ stopReason: 'error', errorMessage: signatureError })).toBe(false)
+  })
+
+  test('Given 未传恢复回调或非签名错误 Then 不触发恢复', () => {
+    const plain = createClassifierHost(false)
+    installPromaRetryClassifier(plain.session)
+    expect(plain.isRetryable({ stopReason: 'error', errorMessage: signatureError })).toBe(false)
+
+    let called = false
+    const host = createClassifierHost(false)
+    installPromaRetryClassifier(host.session, {
+      recoverThinkingSignature: () => {
+        called = true
+        return true
+      },
+    })
+    expect(host.isRetryable({ stopReason: 'error', errorMessage: '400 Bad Request: invalid tool schema' })).toBe(false)
+    expect(called).toBe(false)
+  })
 })
 
 describe('classifyPiRetryReason', () => {

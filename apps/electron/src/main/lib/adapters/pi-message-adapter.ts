@@ -306,6 +306,21 @@ export function hasToolResult(message: SDKMessage): boolean {
   return Array.isArray(content) && content.some((block) => block.type === 'tool_result')
 }
 
+/**
+ * 模型以 toolUse 收尾却没有给出任何工具调用时的错误说明。
+ *
+ * Pi 只看工具调用块决定是否继续循环，这种响应会被当成自然收尾；若仍报 success，
+ * 界面会显示「本轮已结束」，用户无从得知任务其实停在了一半。
+ */
+export const TOOL_USE_WITHOUT_TOOL_CALL_ERROR =
+  '模型响应声明要调用工具，但没有包含工具调用，本轮已中断。发送「继续」可让 Agent 接着完成。'
+
+function isToolUseWithoutToolCall(message: AssistantMessage | undefined): boolean {
+  if (message?.stopReason !== 'toolUse') return false
+  const content = message.content as unknown
+  return !Array.isArray(content) || !content.some((block) => (block as { type?: unknown } | null)?.type === 'toolCall')
+}
+
 export function convertResultMessage(
   messages: AgentMessage[],
   sessionId: string,
@@ -327,14 +342,16 @@ export function convertResultMessage(
   )
   const lastAssistant = assistants[assistants.length - 1]
   const assistantError = lastAssistant?.stopReason === 'error' ? lastAssistant.errorMessage : undefined
+  const executionError = assistantError
+    ?? (isToolUseWithoutToolCall(lastAssistant) ? TOOL_USE_WITHOUT_TOOL_CALL_ERROR : undefined)
   const terminalReason = override?.terminalReason ?? (lastAssistant?.stopReason === 'length' ? 'max_tokens' : 'completed')
   return {
     type: 'result',
-    subtype: override?.subtype ?? (assistantError ? 'error_during_execution' : terminalReason === 'max_tokens' ? 'max_tokens' : 'success'),
+    subtype: override?.subtype ?? (executionError ? 'error_during_execution' : terminalReason === 'max_tokens' ? 'max_tokens' : 'success'),
     usage,
     total_cost_usd: costValues.length > 0 ? costValues.reduce((sum, cost) => sum + cost, 0) : undefined,
     terminal_reason: terminalReason,
-    errors: override?.errors ?? (assistantError ? [assistantError] : undefined),
+    errors: override?.errors ?? (executionError ? [executionError] : undefined),
     session_id: sessionId,
   } as unknown as SDKMessage
 }

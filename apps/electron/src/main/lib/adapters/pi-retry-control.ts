@@ -9,6 +9,7 @@
  */
 
 import type { RetryAttempt, RetryReasonKind } from '@proma/shared'
+import { isThinkingSignatureError } from '@proma/shared'
 import { classifyModelFailure } from '../network/retry-classifier'
 
 /**
@@ -67,6 +68,14 @@ interface PiRetryClassifiableMessage {
   stopReason?: string
 }
 
+export interface PromaRetryClassifierOptions {
+  /**
+   * 上游以思考块签名错误拒绝请求时调用。返回 true 表示调用方已安排好重试前的思考块剥离，
+   * 应由 Pi 在同一 transcript 上原地重试；同一条失败消息可能被询问多次，实现需幂等。
+   */
+  recoverThinkingSignature?: (failedMessage: object) => boolean
+}
+
 /**
  * Pi native retry 的终态事件门控。
  *
@@ -108,10 +117,12 @@ export function classifyPiRetryReason(errorMessage?: string): RetryReasonKind {
  * 这里在 Pi 判定之后再叠加一层：仍以 Pi 判定为兜底，但当错误是
  * `stopReason === 'error'` 且带 `errorMessage` 时，以 Proma 分类为准。
  *
+ * 签名错误是 400，按常规分类不可重试；传入 `recoverThinkingSignature` 后由调用方决定是否剥离思考块再重试。
+ *
  * 返回 false 表示当前 Pi 版本的 session 上没有这个方法，调用方应记录警告；
  * 此时功能退化为 Pi 原生行为，不影响正常使用。
  */
-export function installPromaRetryClassifier(session: unknown): boolean {
+export function installPromaRetryClassifier(session: unknown, options: PromaRetryClassifierOptions = {}): boolean {
   const target = session as PiRetryClassifierTarget | null | undefined
   const original = target?._isRetryableError
   if (!target || typeof original !== 'function') return false
@@ -124,6 +135,9 @@ export function installPromaRetryClassifier(session: unknown): boolean {
     const errorMessage = typeof classifiable.errorMessage === 'string' ? classifiable.errorMessage : undefined
     if (classifiable.stopReason !== 'error' || !errorMessage) return piRetryable
 
+    if (options.recoverThinkingSignature && isThinkingSignatureError(errorMessage) && options.recoverThinkingSignature(message)) {
+      return true
+    }
     return classifyModelFailure(errorMessage, piRetryable).retryable
   }
 

@@ -6,8 +6,12 @@
  * 不一致），把历史思考块原样回传会让上游直接返回 400，而部分网关还会把错误详情脱敏成
  * `upstream http 400`，导致 Proma 侧无法按具体错误码分流。
  *
- * 因此这里在**发给上游之前**就按轮次边界剥掉不该回传的思考块，让请求本身不触发 400；
- * 同时保留一次性强制剥离开关，供「已经收到隐去诊断的 400」时兜底重试用。
+ * 因此这里在**发给上游之前**就按轮次边界剥掉不该回传的思考块，让请求本身不触发 400。
+ * 已经收到 400 时有两条补救路径：
+ * - 上游明确报签名错误：Pi 原生重试在同一 transcript 上原地重试，重试前剥掉出错时点之前的
+ *   全部带签名思考块（见 `prepareThinkingSignatureRecovery`），已完成的工具结果都保留；
+ * - 网关隐去诊断的 400 或原地重试用尽：编排层整次重跑，并通过 query 选项 `forceThinkingStrip`
+ *   让新会话以 `none` 模式启动。
  *
  * 设计约定：
  * - 只在 Anthropic Messages 协议下生效（其他协议不校验 signature，剥离会丢失有价值的思考内容）。
@@ -36,27 +40,52 @@ export interface ThinkingReplayFingerprint {
   signedThinkingCount: number
 }
 
+/** 签名错误原地恢复的状态；随一次 adapter.query 存在。 */
+export interface ThinkingSignatureRecoveryState {
+  /** 已启动的原地恢复次数。 */
+  attempts: number
+  /** 已判定过的失败消息；Pi 对同一条失败消息会多次询问是否可重试。 */
+  handled: WeakSet<object>
+  /** 剥离时点：时间戳不晚于该值的 assistant 消息，其带签名思考块一律不再回传。 */
+  stripSignedBefore?: number
+}
+
 /** 会话级重放状态；随一次 adapter.query 存在，模式在建立会话时确定。 */
 export interface ThinkingReplayState {
   mode: ThinkingReplayMode
   fingerprints: ThinkingReplayFingerprint[]
+  signatureRecovery: ThinkingSignatureRecoveryState
 }
+
+/** `prepareThinkingSignatureRecovery` 的判定结果。 */
+export type ThinkingSignatureRecoveryStatus =
+  /** 本次失败首次判定，已记录剥离时点，应原地重试。 */
+  | 'started'
+  /** 同一条失败消息已判定过，保持「应重试」的结论。 */
+  | 'pending'
+  /** 本次 query 的原地恢复次数已用完，交给编排层兜底。 */
+  | 'exhausted'
+  /** 当前协议不校验签名，或处于 legacy 排查模式。 */
+  | 'unsupported'
 
 /** 策略只需要消息的 role / content，不绑定具体 SDK 消息类型以保持调用方类型。 */
 interface ReplayMessageShape {
   role?: unknown
   content?: unknown
   sections?: unknown
+  timestamp?: unknown
 }
 
 /** 最多保留的指纹条数：只比较相邻两次请求，留 3 条足够定位漂移。 */
 const MAX_FINGERPRINTS = 3
 
-/** 强制剥离开关的有效期：6 小时，覆盖「arm 之后用户很久才继续会话」的场景。 */
-const FORCED_STRIP_TTL_MS = 6 * 60 * 60 * 1000
-
-/** 强制剥离的会话集合；值为过期时间戳。 */
-const forcedStripSessions = new Map<string, number>()
+/**
+ * 每次 query 最多原地恢复的次数。
+ *
+ * 一次恢复后旧思考块已全部剥掉，同一原因不会再触发；第二次只用于同一轮内 system 又变了一次
+ * （例如本轮再次写入记忆）。再失败说明问题不在思考块，交给编排层处理。
+ */
+export const MAX_THINKING_SIGNATURE_RECOVERIES = 2
 
 /** 轮次边界角色：表示「上一轮 assistant 输出已闭环，新的输入从这里开始」。 */
 const TURN_BOUNDARY_ROLES: ReadonlySet<string> = new Set([
@@ -72,7 +101,7 @@ const OPAQUE_UPSTREAM_400 = /upstream http 400|upstream request failed/i
 
 /** 创建会话级重放状态；默认按轮次边界剥离。 */
 export function createThinkingReplayState(mode: ThinkingReplayMode = 'turn'): ThinkingReplayState {
-  return { mode, fingerprints: [] }
+  return { mode, fingerprints: [], signatureRecovery: { attempts: 0, handled: new WeakSet() } }
 }
 
 /** 读取 `PROMA_THINKING_REPLAY_MODE`；非法值视为未配置，由调用方回落到默认模式。 */
@@ -84,19 +113,28 @@ export function resolveThinkingReplayMode(
   return undefined
 }
 
-/** 标记某个会话的下一次请求必须剥离全部带 signature 的思考块。 */
-export function armThinkingStripForSession(sessionId: string | undefined, now = Date.now()): void {
-  if (!sessionId) return
-  forcedStripSessions.set(sessionId, now + FORCED_STRIP_TTL_MS)
-}
-
-/** 读取并清除强制剥离开关；已过期视为未命中。 */
-export function consumeThinkingStripForSession(sessionId: string | undefined, now = Date.now()): boolean {
-  if (!sessionId) return false
-  const expiresAt = forcedStripSessions.get(sessionId)
-  if (expiresAt === undefined) return false
-  forcedStripSessions.delete(sessionId)
-  return expiresAt > now
+/**
+ * 上游以签名错误拒绝请求时，判定能否剥离思考块后原地重试。
+ *
+ * 典型成因是同一轮工具循环中 system 段发生了变化（记忆或 AGENTS.md 被写入、项目规则维护），
+ * 也可能是网关把请求路由到了另一个上游。两种情况下，此前生成的思考块都与当前前缀不再匹配，
+ * 只要不再回传就能通过；后续新生成的思考块绑定的是新前缀，继续正常回传。
+ *
+ * Pi 对同一条失败消息会多次询问是否可重试，这里按消息去重，只在首次判定时计数并记录剥离时点。
+ */
+export function prepareThinkingSignatureRecovery(
+  state: ThinkingReplayState,
+  failedMessage: object,
+  options: { supported: boolean, now?: number },
+): ThinkingSignatureRecoveryStatus {
+  if (!options.supported || state.mode === 'legacy') return 'unsupported'
+  const recovery = state.signatureRecovery
+  if (recovery.handled.has(failedMessage)) return 'pending'
+  if (recovery.attempts >= MAX_THINKING_SIGNATURE_RECOVERIES) return 'exhausted'
+  recovery.attempts += 1
+  recovery.handled.add(failedMessage)
+  recovery.stripSignedBefore = options.now ?? Date.now()
+  return 'started'
 }
 
 function isSignatureBoundThinkingBlock(block: unknown): boolean {
@@ -127,6 +165,13 @@ function hasCompactionSummary(messages: readonly ReplayMessageShape[]): boolean 
   return messages.some((message) => message?.role === 'compactionSummary')
 }
 
+/** 消息生成时间不晚于剥离时点；缺少时间戳的消息按旧消息处理。 */
+function isBeforeStripPoint(message: ReplayMessageShape, stripSignedBefore: number | undefined): boolean {
+  if (stripSignedBefore === undefined) return false
+  const timestamp = message.timestamp
+  return typeof timestamp !== 'number' || timestamp <= stripSignedBefore
+}
+
 /** 剥离单条 assistant 消息里的带 signature 思考块；无变化时返回 undefined。 */
 function stripSignedThinkingBlocks<T extends ReplayMessageShape>(message: T): T | undefined {
   const blocks = assistantBlocksOf(message)
@@ -153,11 +198,13 @@ export function applyThinkingReplayPolicy<T extends ReplayMessageShape>(
   const turnBoundaryIndex = findLastTurnBoundaryIndex(messages)
   const dropAll = state.mode === 'none' || hasCompactionSummary(messages) || turnBoundaryIndex < 0
 
+  const { stripSignedBefore } = state.signatureRecovery
   let changed = false
   const next = messages.map((message, index) => {
     if (!assistantBlocksOf(message)) return message
-    // 轮次边界之后（即当前轮）的思考块必须保留，否则同一轮的工具循环会因缺 signature 被拒。
-    if (!dropAll && index > turnBoundaryIndex) return message
+    // 当前轮的思考块默认保留，供同一轮工具循环续接推理；
+    // 上游已经以签名错误拒绝过时，剥离时点之前生成的块也不再回传。
+    if (!dropAll && index > turnBoundaryIndex && !isBeforeStripPoint(message, stripSignedBefore)) return message
     const stripped = stripSignedThinkingBlocks(message)
     if (!stripped) return message
     changed = true

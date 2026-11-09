@@ -76,7 +76,6 @@ import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { resolvePiApi, resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import {
-  armThinkingStripForSession,
   isClaudeFamilyModelId,
   isOpaqueUpstream400,
 } from './adapters/pi-thinking-replay'
@@ -1578,7 +1577,7 @@ export class AgentOrchestrator {
                   wasResuming
                 ) {
                   // 回填重跑仍会带着带 signature 的历史思考块，一并开启强制剥离。
-                  armThinkingStripForSession(sessionId)
+                  queryOptions.forceThinkingStrip = true
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
                   this.prepareResumeFallbackRecovery(
@@ -1631,7 +1630,7 @@ export class AgentOrchestrator {
                   attempt < MAX_QUERY_ATTEMPTS
                 ) {
                   thinkingStripRetryUsed = true
-                  armThinkingStripForSession(sessionId)
+                  queryOptions.forceThinkingStrip = true
                   shouldRetryFromError = true
                   console.warn(`[Agent 编排] 上游 400 诊断被网关隐去，剥离历史思考块后重试: ${sessionId}`)
                   break
@@ -1766,7 +1765,7 @@ export class AgentOrchestrator {
                   break
                 }
                 if (isThinkingSignatureError(resultErrorText)) {
-                  armThinkingStripForSession(sessionId)
+                  queryOptions.forceThinkingStrip = true
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
                   this.prepareResumeFallbackRecovery(
@@ -1880,7 +1879,7 @@ export class AgentOrchestrator {
             wasResuming
           ) {
             // 回填重跑仍会带着带 signature 的历史思考块，一并开启强制剥离。
-            armThinkingStripForSession(sessionId)
+            queryOptions.forceThinkingStrip = true
             existingSdkSessionId = undefined
             capturedSdkSessionId = undefined
             this.prepareResumeFallbackRecovery(
@@ -1907,7 +1906,7 @@ export class AgentOrchestrator {
             attempt < MAX_QUERY_ATTEMPTS
           ) {
             thinkingStripRetryUsed = true
-            armThinkingStripForSession(sessionId)
+            queryOptions.forceThinkingStrip = true
             console.warn(`[Agent 编排] 上游 400 诊断被网关隐去，剥离历史思考块后重试一次: ${sessionId}`)
             continue
           }

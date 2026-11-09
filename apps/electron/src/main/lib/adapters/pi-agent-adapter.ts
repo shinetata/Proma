@@ -71,9 +71,10 @@ import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   applyThinkingReplayPolicy,
   buildPrefixFingerprint,
-  consumeThinkingStripForSession,
   createThinkingReplayState,
   describePrefixDrift,
+  MAX_THINKING_SIGNATURE_RECOVERIES,
+  prepareThinkingSignatureRecovery,
   recordPrefixFingerprint,
   resolveThinkingReplayMode,
 } from './pi-thinking-replay'
@@ -152,6 +153,11 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
     initialSources: ProjectInstructionSource[]
   }
   resumeSessionId?: string
+  /**
+   * 本次 query 不回传任何带签名的历史思考块（`none` 模式）。编排层在收到签名类或隐去诊断的
+   * 400 后整次重跑时设置；经 query 选项传递，utility 运行时与主进程内运行时都能生效。
+   */
+  forceThinkingStrip?: boolean
   piAgentDir: string
   piSessionDir: string
   customTools?: ToolDefinition[]
@@ -1661,9 +1667,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       })
       session.agent.toolExecution = 'sequential'
       // 思考块重放策略：模式在本次建会话时确定且整次 query 不变。
-      // 命中「网关隐去诊断的 400」后编排层会 arm，下一次建会话消费一次即回到默认模式。
+      // 编排层整次重跑时会带上 forceThinkingStrip，本次 query 改用 none 模式。
       const thinkingReplay = createThinkingReplayState(
-        consumeThinkingStripForSession(input.sessionId)
+        input.forceThinkingStrip
           ? 'none'
           : (resolveThinkingReplayMode() ?? 'turn'),
       )
@@ -1745,7 +1751,25 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       installCurrentSessionCompactionHooks(session)
       // Proma 的失败分类要盖在 Pi 自带重试判定之上，否则网关特定错误（额度不足、
       // 代理返回 HTML 错误页等）会被 Pi 无意义地重试到上限。
-      if (!installPromaRetryClassifier(session)) {
+      // 思考块签名错误在这里原地恢复：剥离出错前的思考块，由 Pi 在同一 transcript 上重试，
+      // 已完成的工具结果都保留，不必走编排层「新建会话 + 重读历史」的整次恢复。
+      const retryClassifierInstalled = installPromaRetryClassifier(session, {
+        recoverThinkingSignature: (failedMessage) => {
+          const status = prepareThinkingSignatureRecovery(thinkingReplay, failedMessage, {
+            supported: thinkingReplaySupported,
+          })
+          if (status === 'started') {
+            console.warn(
+              `[Pi SDK] 上游拒绝历史思考块签名，剥离后原地重试` +
+              `（${thinkingReplay.signatureRecovery.attempts}/${MAX_THINKING_SIGNATURE_RECOVERIES}）: ${input.sessionId}`,
+            )
+          } else if (status === 'exhausted') {
+            console.warn(`[Pi SDK] 思考块签名错误的原地重试已用尽，交给编排层处理: ${input.sessionId}`)
+          }
+          return status === 'started' || status === 'pending'
+        },
+      })
+      if (!retryClassifierInstalled) {
         console.warn('[Pi SDK] 未找到 _isRetryableError，Proma 网络重试分类未生效；请检查 Pi 版本兼容性')
       }
       active.session = session
