@@ -1,0 +1,197 @@
+/**
+ * sage-light — 鼠尾草晨雾（Qoder 风格浅色主题）
+ *
+ * 独立主题：所有规则都收敛在 .theme-sage-light 作用域内，不改写 globals.css
+ * 的既有规则，也不复用其他特殊主题的样式。与主程序的接触面只有三处注册，
+ * 见文件末尾。
+ *
+ * 取色依据（对参考截图逐点采样）
+ * - 侧栏是自上而下的四段渐变，不是纯色：暖黄绿 #eaeac8 → 灰绿 #e1e5d3 → 雾青 #cfd8df。
+ * - 内容区、右侧面板、弹层为纯白 #ffffff，只用 1px 极浅描边分层，不用阴影。
+ * - 强调色是墨黑 #171717（主按钮、发送键、Tab 指示条）；绿色只作状态点缀。
+ * - 用户气泡是浅米灰配墨色文字，不是实心黑底。
+ *
+ * 两条不能违反的约束（由现有代码结构决定）
+ * 1. --background 被 84 处 bg-background 引用（输入框、toast、switch、popover…），
+ *    语义是「内容表面」。它必须接近白色，否则全站控件会被染绿。
+ *    侧栏的绿色只由 --sidebar-surface 与渐变的 background-image 承担。
+ * 2. .proma-chrome-surface 不只用于侧栏，内容区顶栏（AgentHeader、TabBar）也用它。
+ *    因此渐变不挂在 .proma-chrome-surface 上，而只挂在左栏的两个容器：
+ *    .sidebar-rail 与侧栏面板 —— 否则白色内容区顶部会浮出一条绿带。
+ */
+
+.theme-sage-light {
+  /* ===== 基础色 ===== */
+  --background: 0 0% 100%;                /* 内容表面：必须近白，见约束 1 */
+  --foreground: 0 0% 8%;                  /* #141414 正文墨色 */
+  --content-area: 0 0% 100%;              /* #ffffff 主内容区 */
+
+  /* ===== 层级色 ===== */
+  --muted: 60 20% 95%;                    /* 极浅米灰，弱底色块 */
+  --muted-foreground: 40 1% 46%;          /* #78756f 弱化文字，中性微暖 */
+  --border: 60 8% 88%;                    /* 白底上的分隔线，比侧栏线更浅 */
+  --input: 0 0% 96%;
+  --ring: 130 19% 45%;                    /* 与点缀绿同色系，聚焦反馈 */
+
+  /* ===== 交互色：墨黑主色 ===== */
+  --primary: 0 0% 9%;                     /* #171717 主按钮 / 发送键 / Tab 指示条 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 60 10% 96%;
+  --secondary-foreground: 0 0% 12%;
+  --accent: 70 18% 92%;                   /* 温和米绿高亮底 */
+  --accent-foreground: 130 20% 26%;       /* 深绿文字，配高亮底 */
+  --destructive: 4 62% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --stop-hover-bg: hsla(4, 62%, 50%, 0.10);
+
+  /* ===== 组件表面 ===== */
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 8%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 8%;
+  --dialog: 0 0% 100%;
+  --dialog-foreground: 0 0% 8%;
+  --input-surface: 0 0% 100%;
+  --tab-surface: 0 0% 100%;
+  --code-bg: 70 22% 96%;                  /* 代码块极浅米绿，不割裂白底 */
+
+  /* ===== 侧栏：绿色只在这里出现 ===== */
+  --sidebar-surface: 62 34% 89%;          /* 渐变兜底底色 */
+  --tabbar-surface: 0 0% 100%;            /* 顶部 Tab 条属于内容区，保持纯白 */
+  --tab-indicator: 0 0% 9%;
+  --sidebar-control-surface: 60 22% 95%;
+  --sidebar-control-surface-hover: 60 20% 90%;
+  --sidebar-control-stroke: 0 0% 9% / 0.10;
+  --sidebar-list-surface: 62 30% 91%;     /* 列表底，作为渐变内层 */
+  --sidebar-primary-foreground: 0 0% 10%;
+
+  /* ===== 提示与描边 ===== */
+  --tooltip: 0 0% 10%;
+  --tooltip-foreground: 0 0% 98%;
+  --tooltip-muted: 0 0% 72%;
+  --dashed-border: 0 0% 9% / 0.22;
+  --dashed-border-hover: 0 0% 9% / 0.34;
+
+  /* ===== 几何与阴影：圆角更柔，阴影几乎不用 ===== */
+  --radius: 0.5rem;
+  --radius-cap: 8px;
+  --radius-xl-extra: 4px;
+  --radius-2xl-extra: 6px;
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.03);
+  --shadow-sm: 0 1px 3px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 6px 16px -6px rgb(0 0 0 / 0.08);
+  --shadow-lg: 0 16px 32px -12px rgb(0 0 0 / 0.10);
+  --shadow-xl: 0 28px 56px -20px rgb(0 0 0 / 0.14);
+}
+
+/* ===== 侧栏渐变：参考图最关键的一层 =====
+ * 必须只画一次，画在整个左栏容器上。
+ *
+ * 踩过的坑：先前把渐变挂在 .proma-chrome-surface 上，而这个类被左栏内每个表面元素复用
+ * （40px 高的标题栏、rail、面板），于是每个元素各自画了一遍完整渐变 ——
+ * 标题栏把整条绿到蓝压进 40px，下方又重新开始，视觉上就是断层色带。
+ * 现在：外层容器画一次渐变，内部所有表面层透明，整列颜色才是一个整体。
+ */
+.theme-sage-light .crt-sidebar:has(.sidebar-rail) {
+  background-color: hsl(var(--sidebar-surface));
+  background-image: linear-gradient(
+    180deg,
+    #eaeac8 0%,     /* 顶部：暖黄绿 */
+    #e6e8ce 22%,
+    #e1e5d3 46%,
+    #d9e0d8 68%,
+    #d3dbe0 88%,
+    #cfd8df 100%    /* 底部：雾青 */
+  );
+}
+
+/* 左栏内部各层表面一律透明：不再各自画渐变，也不叠半透明白。
+ * 这样渐变只在最外层画一次，往下连续不断。
+ */
+.theme-sage-light .crt-sidebar:has(.sidebar-rail) :is(
+  .proma-chrome-surface,
+  .proma-sidebar-list-surface,
+  .sidebar-rail,
+  .tabbar-bg
+) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* 外层缝隙：让人造圆角外缘与侧栏同色，不露出深色底。 */
+.theme-sage-light .shell-bg {
+  background: linear-gradient(180deg, #eaeac8 0%, #cfd8df 100%);
+}
+
+/* ===== 弹层：纯白 + 极淡分层，不带发光 ===== */
+.theme-sage-light [data-radix-dialog-content] {
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.06),
+    0 24px 48px -16px rgb(0 0 0 / 0.16);
+}
+
+/* ===== 选区：墨黑主色铺满太重，压到 12% ===== */
+.theme-sage-light ::selection {
+  background-color: rgb(20 20 20 / 0.12);
+  color: inherit;
+}
+
+/* ===== 侧栏选中态：比背景深一档 + 极细内描边，不画左侧色条 ===== */
+.theme-sage-light .agent-session-item-active.agent-session-item-active,
+.theme-sage-light .workspace-item-selected.workspace-item-selected,
+.theme-sage-light .session-item-selected.session-item-selected,
+.theme-sage-light .tab-item-selected.tab-item-selected {
+  background-color: rgb(23 23 23 / 0.07);
+  box-shadow: inset 0 0 0 1px rgb(23 23 23 / 0.06);
+}
+
+/* 选中行内的图标与次要文字跟随加深，避免在深一档底色上发灰 */
+.theme-sage-light .agent-session-item-active.agent-session-item-active *,
+.theme-sage-light .workspace-item-selected.workspace-item-selected * {
+  color: inherit;
+}
+
+/* ===== 侧栏顶部「新建任务 / 搜索」胶囊 =====
+ * 默认是半透明墨色叠加，压在渐变底上会发脏；换成实白胶囊 + 细描边。
+ * 这两个类同时出现的位置只有 SIDEBAR_ACTION_SURFACE_CLASS 一处。
+ */
+.theme-sage-light [class*='rounded-xl'][class*='border-foreground/[0.08]'] {
+  background-color: rgb(255 255 255 / 0.82);
+  border-color: rgb(23 23 23 / 0.08);
+}
+
+.theme-sage-light [class*='rounded-xl'][class*='border-foreground/[0.08]']:hover {
+  background-color: rgb(255 255 255 / 0.95);
+  border-color: rgb(23 23 23 / 0.14);
+}
+
+/* ===== 顶部 Tab 条与内容区同为纯白，只留一条极浅分隔线 ===== */
+.theme-sage-light .main-tabbar,
+.theme-sage-light .file-source-tabbar {
+  border-color: rgb(23 23 23 / 0.07);
+}
+
+/* ===== 用户消息气泡：浅米灰底 + 墨色文字 =====
+ * 对比度仍在 12:1 以上；比实心黑底更贴近参考图的克制感。
+ */
+.theme-sage-light .user-message-bubble {
+  background-color: hsl(70 12% 94%);
+  color: hsl(0 0% 10%);
+  box-shadow: inset 0 0 0 1px rgb(23 23 23 / 0.05);
+}
+
+/* ===== 滚动条：弱化到接近背景 ===== */
+.theme-sage-light ::-webkit-scrollbar-thumb {
+  background-color: rgb(23 23 23 / 0.14);
+}
+
+.theme-sage-light ::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(23 23 23 / 0.24);
+}
+
+/* ===== 与主程序的接触面 =====
+ * 本主题需要在三处各加一项注册，除此之外没有其他改动：
+ * 1. src/types/settings.ts      THEME_STYLES 增加 'sage-light'
+ * 2. src/renderer/main.tsx      在 globals.css 之后引入本 CSS
+ * 3. components/settings/AppearanceSettings.tsx   SPECIAL_STYLES 增加描述符与预览图
+ */

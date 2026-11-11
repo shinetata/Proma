@@ -55,6 +55,7 @@ import themeOceanDark from '@/assets/theme-previews/theme-ocean-dark.webp'
 import themeForestNight from '@/assets/theme-previews/theme-forest-night.webp'
 import themeMorandiNight from '@/assets/theme-previews/theme-morandi-night.webp'
 import themeTerminalDark from '@/assets/theme-previews/theme-terminal-dark.png'
+import themeSageLight from '@/assets/theme-previews/theme-sage-light.webp'
 
 /** 主题选项 */
 const THEME_OPTIONS = [
@@ -136,6 +137,13 @@ const SPECIAL_STYLES: readonly SpecialStyle[] = [
     variant: 'dark',
     image: themeTerminalDark,
     tooltip: '该主题包含轻微闪烁动画',
+  },
+  {
+    id: 'sage-light',
+    name: '晨露纸白',
+    variant: 'light',
+    image: themeSageLight,
+    tooltip: '侧栏为柔和渐变，内容区纯白',
   },
 ]
 
@@ -225,7 +233,9 @@ export function AppearanceSettings(): React.ReactElement {
           {/* 特殊风格 - 标签在上，卡片在下 */}
           <div className="px-4 py-3 space-y-2">
             <div className="text-sm font-medium text-foreground">特殊风格</div>
-            <div className="grid grid-cols-7 gap-3">
+            {/* 主题数量已超过一行可容纳卡片的宽度，改为自动换行：
+                每张卡片保持 99px 宽度不变，换行后依然左对齐。 */}
+            <div className="grid grid-cols-[repeat(auto-fill,99px)] gap-3">
               {SPECIAL_STYLES.map((style) => (
                 <StyleCard
                   key={style.id}

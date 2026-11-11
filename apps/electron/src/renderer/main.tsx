@@ -85,6 +85,9 @@ import { triggerLegacyScratchPadMigration } from './lib/legacy-scratch-pad-migra
 import { initializePerformanceMonitor } from './lib/performance-monitor'
 import { createUpdateReminderScheduler, type UpdateReminderScheduler } from './lib/update-reminder-scheduler'
 import './styles/globals.css'
+// 独立主题必须在 globals.css 之后引入：它靠 .theme-* 作用域提高优先级，
+// 而不是靠 !important 与其他主题抢样式。
+import './styles/themes/sage-light.css'
 import 'katex/dist/katex.min.css'
 
 // ===== 窗口类型检测 =====
