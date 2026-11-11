@@ -194,6 +194,41 @@ export function buildAssistantTurnSections(
   }
 }
 
+// ===== 运行中轮次的末尾占位 =====
+
+/** 以工具调用收尾的 stop_reason：Pi 为 toolUse，旧 Claude SDK 会话为 tool_use */
+const TOOL_USE_STOP_REASONS = new Set(['toolUse', 'tool_use'])
+
+/**
+ * 运行中的轮次末尾是否需要补一行「正在思考...」占位。
+ *
+ * 运行中只有末尾是执行过程分区时，步骤组才会给出「正在思考 / 正在执行」；
+ * 末尾是「你的回答」卡片或一段已收尾的说明文字时，在下一次模型请求返回首个块之前，
+ * 轮次内没有任何运行提示。长上下文、高推理档位下这段等待可达数十秒，看起来像卡住。
+ *
+ * - 末尾是执行过程分区：已有活动提示，不补；
+ * - 最后一条 assistant 消息带错误：交给错误横幅与重试提示，不补；
+ * - 已有更新的 assistant 消息但尚无可渲染内容（空预览帧）：补；
+ * - 末尾是已答问答：回答已提交，正在等待下一次请求，补；
+ * - 末尾是最后一条消息里的文字：仍在流式输出或已自然收尾时不补，
+ *   只有该消息已以工具调用收尾（后面必然还有请求）时补。
+ */
+export function needsTrailingRunningPlaceholder(
+  sections: readonly AssistantTurnSection[],
+  blocks: readonly AssistantTurnSourceBlock[],
+  messages: readonly SDKAssistantMessage[],
+  isStreaming: boolean,
+): boolean {
+  if (!isStreaming) return false
+  const last = sections.at(-1)
+  if (!last || last.type === 'activity') return false
+  const lastMessage = messages.at(-1) as LooseAssistantMessage | undefined
+  if (!lastMessage || lastMessage.error) return false
+  if (blocks[last.item.index]?.sourceMessage !== lastMessage) return true
+  if (last.type === 'question') return true
+  return lastMessage._partial !== true && TOOL_USE_STOP_REASONS.has(lastMessage.message.stop_reason ?? '')
+}
+
 // ===== 正文 / 过程拆分 =====
 
 /**

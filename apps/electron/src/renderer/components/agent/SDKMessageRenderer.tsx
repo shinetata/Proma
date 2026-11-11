@@ -21,7 +21,7 @@ import { AskUserAnswerCard } from './AskUserAnswerCard'
 import { collectAnsweredQuestionToolIds } from './ask-user-answers'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
-import { buildAssistantTurnSections, findTrailingResult, formatTurnDuration, getTurnInterruptedDurationMs, getTurnLiveStartedAt, groupConsecutiveQuestions, splitTurnBodyAndProcess, type AssistantTurnListEntry, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
+import { buildAssistantTurnSections, findTrailingResult, formatTurnDuration, getTurnInterruptedDurationMs, getTurnLiveStartedAt, groupConsecutiveQuestions, needsTrailingRunningPlaceholder, splitTurnBodyAndProcess, type AssistantTurnListEntry, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
 import { ProcessMotion, ProcessStepGroup, TurnLayoutTransition, TurnProcessSummary, type TurnOutcome } from './ProcessTimeline'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
@@ -490,8 +490,9 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
 
   // 将内容块拆分为「执行过程」与「最终输出」（与商业版轮次结构一致）。
   // 被新消息打断的轮次同样按「已停止」处理（影响 outputState 的 incomplete 判定）。
+  const topLevelMessages = turn.assistantMessages.filter((m) => !m.parent_tool_use_id || !agentToolIds.has(m.parent_tool_use_id))
   const sections = buildAssistantTurnSections(topLevelEntries, {
-    messages: turn.assistantMessages.filter((m) => !m.parent_tool_use_id || !agentToolIds.has(m.parent_tool_use_id)),
+    messages: topLevelMessages,
     isStreaming,
     stoppedByUser: stoppedByUser || isInterrupted,
     result: findTrailingResult(turn.turnMessages),
@@ -521,6 +522,10 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
   const listEntries: AssistantTurnListEntry[] = sectionItems.map((item, itemIndex) => ({ item, itemIndex }))
   const firstOutputSectionIndex = sectionItems.findIndex((section) => section.type === 'block' && section.output)
+  const showRunningTail = needsTrailingRunningPlaceholder(sectionItems, topLevelEntries, topLevelMessages, !!isStreaming)
+  // 占位沿用「下一个执行过程分区」的 key：首个思考块到达后，同一节点直接变成真实步骤，
+  // 不会先卸载占位再从 0 高展开新行。
+  const runningTailKey = `run-${sectionItems.filter((section) => section.type === 'activity').length}`
 
   // 一旦经历过流式输出，后续的过程/正文切换使用动画；历史消息直接静态渲染
   const hasStreamedRef = React.useRef(false)
@@ -687,6 +692,21 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   const layoutContent = (() => {
     // 运行中：顶部摘要 + 按原始顺序平铺所有分区（不合并问答）
     if (isStreaming) {
+      // 末尾占位与 renderEntry 保持同一数组、同一 key 与同样的子节点位置（提示位 + 步骤组），
+      // 真实步骤到达时 React 复用 ProcessMotion 与 ProcessStepGroup，文案停留状态也得以延续。
+      const runningTail = showRunningTail ? (
+        <ProcessMotion key={runningTailKey} mode="expand" animate={hasStreamed}>
+          {null}
+          <ProcessStepGroup
+            key={runningTailKey}
+            expandKey={`${turnKey}:${runningTailKey}`}
+            blocks={[]}
+            isActive
+            completedToolIds={completedToolIds}
+            failedToolIds={failedToolIds}
+          />
+        </ProcessMotion>
+      ) : null
       return (
         <>
           <TurnProcessSummary
@@ -695,7 +715,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
             startedAt={getTurnLiveStartedAt(turn)}
             steps={stepsTotal}
           />
-          {listEntries.map(renderEntry)}
+          {[...listEntries.map(renderEntry), runningTail]}
         </>
       )
     }

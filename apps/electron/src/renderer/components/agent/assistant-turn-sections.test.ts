@@ -11,6 +11,7 @@ import {
   getTurnInterruptedDurationMs,
   getTurnLiveStartedAt,
   groupConsecutiveQuestions,
+  needsTrailingRunningPlaceholder,
   splitTurnBodyAndProcess,
   type AssistantTurnSourceBlock,
 } from './assistant-turn-sections'
@@ -208,6 +209,105 @@ describe('splitTurnBodyAndProcess', () => {
 
     expect(withoutAnswered.body.map((entry) => entry.item.type)).toEqual(['block'])
     expect(withAnswered.body.map((entry) => entry.item.type)).toEqual(['block', 'block'])
+  })
+})
+
+// ===== 运行中末尾占位 =====
+
+describe('needsTrailingRunningPlaceholder', () => {
+  const ASK_INPUT = { questions: [{ question: 'A', options: [] }] }
+
+  function check(messages: SDKMessage[], options: { isStreaming?: boolean; answered?: string[] } = {}): boolean {
+    const assistants = messages.filter((m): m is SDKAssistantMessage => m.type === 'assistant')
+    const blocks = toSourceBlocks(messages)
+    const isStreaming = options.isStreaming ?? true
+    const sections = buildAssistantTurnSections(blocks, {
+      messages: assistants,
+      isStreaming,
+      result: findTrailingResult(messages),
+      answeredQuestionToolIds: new Set(options.answered ?? []),
+    })
+    return needsTrailingRunningPlaceholder(sections.items, blocks, assistants, isStreaming)
+  }
+
+  function partialAssistant(content: SDKContentBlock[]): SDKAssistantMessage {
+    return {
+      type: 'assistant',
+      message: { content },
+      parent_tool_use_id: null,
+      _partial: true,
+    } as SDKAssistantMessage
+  }
+
+  test('given 已答问答后尚无新消息 when 运行中 then 补占位', () => {
+    const messages: SDKMessage[] = [
+      assistantToolUse('tool-ask', ASK_INPUT, 'AskUserQuestion'),
+      userToolResult('tool-ask', JSON.stringify({ answers: { A: '答案' } })),
+    ]
+    expect(check(messages, { answered: ['tool-ask'] })).toBe(true)
+  })
+
+  test('given 已答问答后只有空预览帧 when 运行中 then 补占位', () => {
+    const messages: SDKMessage[] = [
+      assistantToolUse('tool-ask', ASK_INPUT, 'AskUserQuestion'),
+      userToolResult('tool-ask', JSON.stringify({ answers: { A: '答案' } })),
+      partialAssistant([{ type: 'text', text: '  ' }]),
+    ]
+    expect(check(messages, { answered: ['tool-ask'] })).toBe(true)
+  })
+
+  test('given 问答后首个思考块已到达 when 运行中 then 交给步骤组，不补', () => {
+    const messages: SDKMessage[] = [
+      assistantToolUse('tool-ask', ASK_INPUT, 'AskUserQuestion'),
+      userToolResult('tool-ask', JSON.stringify({ answers: { A: '答案' } })),
+      partialAssistant([{ type: 'thinking', thinking: '' }]),
+    ]
+    expect(check(messages, { answered: ['tool-ask'] })).toBe(false)
+  })
+
+  test('given 问答尚未回答 when 运行中 then 仍是执行过程，不补', () => {
+    const messages: SDKMessage[] = [assistantToolUse('tool-ask', ASK_INPUT, 'AskUserQuestion')]
+    expect(check(messages)).toBe(false)
+  })
+
+  test('given 末尾是工具步骤 when 运行中 then 不补', () => {
+    const messages: SDKMessage[] = [
+      assistantToolUse('tool-1', { command: 'ls' }),
+      userToolResult('tool-1', 'ok'),
+    ]
+    expect(check(messages)).toBe(false)
+  })
+
+  test('given 正文仍在流式输出 when 运行中 then 不补', () => {
+    const messages: SDKMessage[] = [partialAssistant([{ type: 'text', text: '正在写' }])]
+    expect(check(messages)).toBe(false)
+  })
+
+  test('given 文字已自然收尾 when 运行中 then 不补', () => {
+    expect(check([assistantText('最终回复', 'stop')])).toBe(false)
+  })
+
+  test('given 文字以工具调用收尾 when 运行中 then 补占位', () => {
+    expect(check([assistantText('中间说明', 'toolUse')])).toBe(true)
+    expect(check([assistantText('中间说明', 'tool_use')])).toBe(true)
+  })
+
+  test('given 最后一条消息带错误 when 运行中 then 交给错误提示，不补', () => {
+    const failed = { ...partialAssistant([]), error: { message: 'boom' } } as SDKAssistantMessage
+    const messages: SDKMessage[] = [
+      assistantToolUse('tool-ask', ASK_INPUT, 'AskUserQuestion'),
+      userToolResult('tool-ask', JSON.stringify({ answers: { A: '答案' } })),
+      failed,
+    ]
+    expect(check(messages, { answered: ['tool-ask'] })).toBe(false)
+  })
+
+  test('given 轮次已结束 when 判断 then 不补', () => {
+    const messages: SDKMessage[] = [
+      assistantToolUse('tool-ask', ASK_INPUT, 'AskUserQuestion'),
+      userToolResult('tool-ask', JSON.stringify({ answers: { A: '答案' } })),
+    ]
+    expect(check(messages, { isStreaming: false, answered: ['tool-ask'] })).toBe(false)
   })
 })
 
