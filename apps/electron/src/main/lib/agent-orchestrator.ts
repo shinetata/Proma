@@ -22,6 +22,7 @@ import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, GithubCopilotOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
+  migrateNarrationMode,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -1116,6 +1117,7 @@ export class AgentOrchestrator {
         workspaceName: workspace?.name,
         workspaceSlug,
         agentCwd,
+        narrationMode: migrateNarrationMode(sessionMeta?.narrationMode),
         userBrowserContext: browserController.getUserContext(sessionId),
         userVaultContext: vaultUserContext,
       })
@@ -1256,6 +1258,7 @@ export class AgentOrchestrator {
         agentCwd,
         sessionWorkbenchLayout: getSessionWorkbenchLayout(sessionMeta),
         permissionMode: initialPermissionMode,
+        narrationMode: migrateNarrationMode(sessionMeta?.narrationMode),
         collaborationAvailable,
         currentModelId: selectedModelId,
         projectKnowledgeRoot,
@@ -2166,10 +2169,12 @@ export class AgentOrchestrator {
 
     const userBrowserContext = browserController.getUserContext(sessionId)
     const userVaultContext = getVaultUserContext(sessionId)
-    // 运行中的 Agent 收到队列消息时也必须看到用户刚刚主动打开的页面。
-    // 未打开浏览器时保持既有消息形态，避免给每条插队消息重复注入无关环境块。
-    let enrichedText = userBrowserContext || userVaultContext
-      ? `${buildDynamicContext({ userBrowserContext, userVaultContext })}\n\n${text}`
+    const narrationMode = migrateNarrationMode(meta?.narrationMode)
+    // 运行中的 Agent 收到队列消息时也必须看到用户刚刚主动打开的页面，
+    // 以及当前会话的过程表述模式（explain 需要每轮重申阶段说明）。
+    const needsDynamicContext = Boolean(userBrowserContext || userVaultContext) || narrationMode === 'explain'
+    let enrichedText = needsDynamicContext
+      ? `${buildDynamicContext({ narrationMode, userBrowserContext, userVaultContext })}\n\n${text}`
       : text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceSlug)
     if (referencedSessionsBlock) {

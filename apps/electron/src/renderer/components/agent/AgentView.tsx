@@ -96,6 +96,7 @@ import {
   workspaceAttachedDirectoriesMapAtom,
   workspaceAttachedFilesMapAtom,
   liveMessagesMapAtom,
+  agentLiveMessagesAtomFamily,
   agentThinkingAtom,
   agentEffortAtom,
   stoppedByUserSessionsAtom,
@@ -115,6 +116,7 @@ import { modelSelectorOpenAtom } from '@/atoms/model-selector-atoms'
 import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { NarrationModeSelector } from './NarrationModeSelector'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentDeferredQueueMessageInput, AgentSendInput, AgentPendingFile, AgentThinkingLevel, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage } from '@proma/shared'
@@ -770,6 +772,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     [globalChannels],
   )
   const isComposerDisabled = isLegacyTranscript || !agentChannelId || !hasAvailableModel
+  // 空会话判据使用的实时消息；只读长度，不影响渲染分支。
+  const liveMessages = useAtomValue(agentLiveMessagesAtomFamily(sessionId))
   const channelsLoaded = useAtomValue(channelsLoadedAtom)
   // 当前会话选择的模型已不在任何启用渠道中，或上一轮返回「model is not available」时提示重新选择。
   const isSelectedModelOffline = React.useMemo(
@@ -1046,6 +1050,18 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
   // 消息首次加载状态直接由同步缓存决定；缓存命中时首个 render 就显示历史，IPC 只做后台校准。
   const [messagesLoaded, setMessagesLoaded] = React.useState(initialCachedMessages !== undefined)
+
+  // 空会话判据：非嵌入、非历史只读、非流式、无流式错误、消息已加载（或尚未落盘的 draft）
+  // 且没有任何消息。用于在输入框上方展示仅空会话可见的控件（如过程表述选择器）。
+  const showEmptySessionChrome = React.useMemo(() => !(
+    embedded
+    || isLegacyTranscript
+    || streaming
+    || !!agentError
+    || (!messagesLoaded && !sessionMeta?.isDraft)
+    || persistedSDKMessages.length > 0
+    || liveMessages.length > 0
+  ), [agentError, embedded, isLegacyTranscript, liveMessages.length, messagesLoaded, persistedSDKMessages.length, sessionMeta?.isDraft, streaming])
   const [messagesRefreshing, setMessagesRefreshing] = React.useState(false)
   const messagesRefreshingRef = React.useRef(false)
   const loadingSessionIdRef = React.useRef<string | null>(null)
@@ -2959,6 +2975,11 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
         <div className="agent-input-container px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
+          {showEmptySessionChrome && (
+            <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-2.5 px-0.5">
+              <NarrationModeSelector sessionId={sessionId} />
+            </div>
+          )}
           {isSelectedModelOffline && (
             <div
               className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5 text-sm text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04)] animate-in fade-in-0 slide-in-from-bottom-1 duration-200"

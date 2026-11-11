@@ -46,6 +46,7 @@ import type {
   SDKMessage,
   AgentSendInput,
   AgentThinkingLevel,
+  PromaNarrationMode,
   AgentStreamEvent,
   AgentStreamCompletePayload,
   AgentStreamErrorPayload,
@@ -522,6 +523,9 @@ export interface ElectronAPI {
 
   /** 切换当前会话的 ChatGPT Codex Fast Mode */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
+
+  /** 切换当前会话的过程表述模式（下一轮生效） */
+  updateSessionNarrationMode: (sessionId: string, mode: PromaNarrationMode) => Promise<AgentSessionMeta>
 
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   getPiReasoningCapability: (channelId: string, modelId: string) => Promise<import('@proma/shared').ReasoningCapability | undefined>
@@ -1707,6 +1711,10 @@ const electronAPI: ElectronAPI = {
 
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
+  },
+
+  updateSessionNarrationMode: (sessionId: string, mode: PromaNarrationMode) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_NARRATION_MODE, sessionId, mode)
   },
 
   getPiReasoningCapability: (channelId: string, modelId: string) => {

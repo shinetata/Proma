@@ -9,6 +9,21 @@ import type { ProviderType } from './channel'
 
 // ===== Agent 工作区 =====
 
+// ===== 过程表述模式 =====
+
+export const PROMA_NARRATION_MODES = ['efficiency', 'explain'] as const
+export type PromaNarrationMode = (typeof PROMA_NARRATION_MODES)[number]
+export const PROMA_DEFAULT_NARRATION_MODE: PromaNarrationMode = 'efficiency'
+
+export function isPromaNarrationMode(mode: unknown): mode is PromaNarrationMode {
+  return typeof mode === 'string' && (PROMA_NARRATION_MODES as readonly string[]).includes(mode)
+}
+
+/** 缺失或历史脏值统一回落到默认模式，调用方不需要自己兜底。 */
+export function migrateNarrationMode(mode: unknown): PromaNarrationMode {
+  return isPromaNarrationMode(mode) ? mode : PROMA_DEFAULT_NARRATION_MODE
+}
+
 /** 本地项目根目录的即时可用状态；仅在读取工作区列表时计算，不写入索引。 */
 export type LocalProjectRootStatus = 'available' | 'missing' | 'not_directory' | 'unavailable'
 
@@ -783,6 +798,9 @@ export interface AgentSessionMeta {
     sourceRuntime: 'claude'
     continuationRequired: true
   }
+  /** 本会话的过程表述模式。efficiency 不再逐阶段解释，explain 在动手前说明阶段目标。
+   * 缺失时回落到 efficiency，兼容不使用该字段的历史会话。 */
+  narrationMode?: PromaNarrationMode
   /** ChatGPT Codex Fast Mode 开关；仅 Pi + ChatGPT OAuth 的受支持模型实际生效。 */
   codexFastMode?: boolean
   /** 本会话的推理深度；未设置时兼容旧版全局思考设置。 */
@@ -2190,6 +2208,8 @@ export const AGENT_IPC_CHANNELS = {
   /** 切换指定会话的 Agent runtime（下一轮生效，跨 runtime 时清空 SDK resume ID） */
   /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效） */
   UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
+  /** 更新指定会话的过程表述模式（下一轮系统提示词生效） */
+  UPDATE_SESSION_NARRATION_MODE: 'agent:update-session-narration-mode',
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
   /** 更新指定会话的推理深度（下一轮 Pi 请求生效） */

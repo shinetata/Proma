@@ -6,7 +6,8 @@
  * Profile 规则、项目知识状态与本轮项目地图行动。
  */
 
-import type { PromaPermissionMode, SessionWorkbenchLayout } from '@proma/shared'
+import type { PromaPermissionMode, PromaNarrationMode, SessionWorkbenchLayout } from '@proma/shared'
+import { migrateNarrationMode } from '@proma/shared'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
@@ -29,6 +30,12 @@ const BUILTIN_MCP_PROMPT = `## 内置能力
 Proma 内置 MCP 工具不会出现在工作区 mcp.json。只要 \`mcp__*\` 工具出现在当前工具列表中即为可用，调用时照抄真实的下划线 server 名；不要因其不在 workspace_state 中而忽略或改用低级替代。
 按用户目标与验收需要选择、组合当前可用能力，复用已知路径与连接；工具调用成功不等于任务完成。Proma Coach 核心已由应用加载，按其中的路由读取本轮需要的专业指南。`
 
+const NARRATION_EFFICIENCY_PROMPT = `## 效率模式
+当前为效率模式：用户希望更快地拿到结果。省去阶段性过程说明，直接推进并给出结论；在把握较大、风险可控且可以回退的情况下，更多依据直觉和已有经验直接完成任务，减少不必要的反复确认。`
+
+const NARRATION_EXPLAIN_PROMPT = `## 执行过程的阶段性说明
+当前为解释模式。在开始第一批工具调用之前，先用一两句自然语言说明这一阶段要做什么、为什么这样做；完成一个阶段、进入下一个阶段时，同样先用一句话衔接。遇到会改变实现方向、涉及删除或覆盖数据、或影响用户判断的重要决策时，说明取舍和依据，方便给用户更多的信息和理解。`
+
 interface SystemPromptContext {
   workspaceName?: string
   workspaceSlug?: string
@@ -37,6 +44,8 @@ interface SystemPromptContext {
   /** 会话私有工作台布局；缺失时按历史 `.context/` 兼容。 */
   sessionWorkbenchLayout?: SessionWorkbenchLayout
   permissionMode: PromaPermissionMode
+  /** 会话的过程表述模式；缺失按 efficiency 处理。 */
+  narrationMode?: PromaNarrationMode
   collaborationAvailable?: boolean
   currentModelId?: string
   /** worktree 会话的项目根；项目地图与记忆都跟随当前 checkout。 */
@@ -126,6 +135,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 重要命令仍须遵守权限确认和安全规则；可见终端不替代确认。Automation、外部 Bridge 和协作子 Agent 没有可见终端时，不要假装可见。
 - 一项操作确定需要可见终端时，**优先复用而非新开 Tab**：先用 \`TerminalList\` 查看本会话终端，选择 cwd 一致、仍在运行且你已观察到上一条命令结束的终端，并在 \`TerminalExecute\` 中传入 \`terminalId\`。仅在没有这种安全候选、cwd 或 shell 必须改变、或需要让用户独立观察并行会话时，才新开终端。交互式、长驻或忙碌状态不明的终端不可复用；需要确认完成状态或命令结果时使用 \`TerminalRead\`。`,
     WORKFLOW_PROMPT,
+    migrateNarrationMode(ctx.narrationMode) === 'explain' ? NARRATION_EXPLAIN_PROMPT : NARRATION_EFFICIENCY_PROMPT,
     BUILTIN_MCP_PROMPT,
     buildPromaCoachPrompt(),
     planningPrompt,
@@ -196,6 +206,8 @@ interface DynamicContext {
   userBrowserContext?: BrowserUserContextSnapshot | null
   /** 用户当前在会话右侧打开的 Vault 状态；不包含笔记正文。 */
   userVaultContext?: VaultUserContextSnapshot | null
+  /** explain 模式需要在每条消息里再强调一次阶段说明，避免长会话漂移。 */
+  narrationMode?: PromaNarrationMode
 }
 
 function escapeContextText(value: string): string {
@@ -237,6 +249,10 @@ export function buildDynamicContext(ctx: DynamicContext): string {
   }
 
   if (ctx.agentCwd) sections.push(`<working_directory>${ctx.agentCwd}</working_directory>`)
+
+  if (ctx.narrationMode === 'explain') {
+    sections.push('<narration_mode>解释模式：本轮开始执行前先用一两句话说明阶段目标与判断依据，阶段切换时再衔接；不要只在最终答复里总结。</narration_mode>')
+  }
 
   if (ctx.userBrowserContext) {
     const { activeTabId, title, url } = ctx.userBrowserContext
