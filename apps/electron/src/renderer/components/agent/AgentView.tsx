@@ -16,6 +16,7 @@
 import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import { toast } from 'sonner'
 import { CornerDownLeft, Square, Settings, X, Copy, Check, Brain, Sparkles, ListTodo, Paperclip, ArrowRight } from 'lucide-react'
 import { AgentMessages, type AgentHistoryQuoteNavigationRequest } from './AgentMessages'
@@ -117,6 +118,7 @@ import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { NarrationModeSelector } from './NarrationModeSelector'
+import { ProjectSelector } from './ProjectSelector'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentDeferredQueueMessageInput, AgentSendInput, AgentPendingFile, AgentThinkingLevel, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage } from '@proma/shared'
@@ -538,7 +540,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
-  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtomFamily(sessionId))
+  // 空态整栏宽度按右侧面板是否展开切换 56/60rem；同一次调用同时提供读写。
+  const [sidePanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtomFamily(sessionId))
   const setSideTemporaryAgentMap = useSetAtom(agentSideTemporaryAgentMapAtom)
   const openSession = useOpenSession()
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
@@ -2944,9 +2947,19 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
         <div className={cn(
           'flex min-h-0 flex-1 w-full flex-col overflow-hidden',
-          embedded ? 'max-w-none' : 'max-w-[min(72rem,100%)] mx-auto',
+          showEmptySessionChrome
+            ? cn(
+                'mx-auto justify-center pt-[3vh]',
+                sidePanelOpen ? 'max-w-[min(56rem,100%)]' : 'max-w-[min(60rem,100%)]',
+              )
+            : embedded
+              ? 'max-w-none'
+              : 'max-w-[min(72rem,100%)] mx-auto',
         )}>
-        {/* 消息区域 */}
+        {/* 空会话：问候语整栏替代消息区，与输入框同栏垂直居中 */}
+        {showEmptySessionChrome ? (
+          <WelcomeEmptyState inline />
+        ) : (
         <AgentMessages
           sessionId={sessionId}
           sessionModelId={agentModelId || undefined}
@@ -2968,6 +2981,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
           onAgentHistoryQuoteClick={handleAgentHistoryQuoteClick}
           historyQuoteNavigation={historyQuoteNavigation}
         />
+        )}
 
         {/* AskUserQuestion 交互式问答横幅 */}
         <AskUserBanner sessionId={sessionId} />
@@ -2977,6 +2991,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         <div className="agent-input-container px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
           {showEmptySessionChrome && (
             <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-2.5 px-0.5">
+              <ProjectSelector sessionId={sessionId} />
               <NarrationModeSelector sessionId={sessionId} />
             </div>
           )}

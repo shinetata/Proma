@@ -3474,3 +3474,79 @@ body {
 .theme-terminal-dark .user-message-bubble .agent-prose :is(a, p, li, strong, em, h1, h2, h3, h4, h5, h6) {
   color: hsl(var(--foreground)) !important;
 }
+
+/* ===== 空会话问候（对齐商业版 0.22.0）===== */
+.welcome-empty-state {
+  justify-content: safe center;
+  container: welcome-state / inline-size;
+}
+
+.welcome-greeting-title {
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 0;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, 'Songti SC', STSong,
+    'Noto Serif CJK SC', 'Source Han Serif SC', SimSun, serif;
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1.6;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.welcome-greeting-phrase {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  padding-block-start: 0.55em;
+  padding-inline-end: 0.7em;
+}
+
+.welcome-greeting-artwork {
+  position: absolute;
+  inset-block-start: 0.1em;
+  inset-inline-end: 0;
+  display: block;
+  width: 1.15em;
+  height: 1.15em;
+  max-width: 100%;
+  pointer-events: none;
+}
+
+.welcome-greeting-artwork[data-period='night'] {
+  inset-block-start: 0.16em;
+  inset-inline-end: 0.02em;
+}
+
+.welcome-greeting-artwork[data-moon-tone='warm'],
+.welcome-greeting-artwork[data-moon-tone='full'] {
+  --welcome-moon-stroke: #b29867;
+  --welcome-moon-fill: #e6c98b;
+}
+
+.welcome-greeting-artwork[data-moon-tone='cool'] {
+  --welcome-moon-stroke: #9389ae;
+  --welcome-moon-fill: #b8aed7;
+}
+
+.welcome-greeting-artwork[data-moon-tone='muted'] {
+  --welcome-moon-stroke: hsl(var(--muted-foreground) / 0.5);
+  --welcome-moon-fill: hsl(var(--muted-foreground) / 0.3);
+}
+
+.dark .welcome-greeting-artwork[data-moon-tone='warm'],
+.dark .welcome-greeting-artwork[data-moon-tone='full'] {
+  --welcome-moon-stroke: #dfc58d;
+  --welcome-moon-fill: #e6cc97;
+}
+
+.dark .welcome-greeting-artwork[data-moon-tone='cool'] {
+  --welcome-moon-stroke: #bcb2d6;
+  --welcome-moon-fill: #b8aed7;
+}
+
+@container welcome-state (max-width: 360px) {
+  .welcome-greeting-title {
+    font-size: 26px;
+  }
+}

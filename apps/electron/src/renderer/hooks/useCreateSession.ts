@@ -22,6 +22,8 @@ interface CreateSessionOptions {
   channelId?: string
   /** 覆盖默认模型 ID */
   modelId?: string
+  /** 指定目标项目（AgentWorkspace）；不传时使用当前项目 */
+  workspaceId?: string
 }
 
 interface CreateSessionActions {
@@ -44,7 +46,7 @@ export function useCreateSession(): CreateSessionActions {
       const meta = await window.electronAPI.createAgentSession(
         undefined,
         options?.channelId ?? agentChannelId ?? undefined,
-        currentWorkspaceId || undefined,
+        options?.workspaceId ?? (currentWorkspaceId || undefined),
         options?.modelId ?? agentModelId ?? undefined,
         options?.draft,
       )
