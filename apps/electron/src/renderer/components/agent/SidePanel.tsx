@@ -540,15 +540,19 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const selectedWorktreeMap = useAtomValue(agentSelectedWorktreeAtom)
   const selectedWorktreePath = selectedWorktreeMap.get(sessionId) ?? null
 
-  const handleDiffFileClick = React.useCallback((filePath: string, gitRoot?: string) => {
-    // WebP 无法生成文本 Diff，按图片预览打开。
-    const imageOnly = /\.webp$/i.test(filePath)
+  /**
+   * 改动 Tab 里「在标签中打开」与轮次改动卡定位失败时的兜底：打开文件本身的预览。
+   * 连续视图已经内联展示了 diff，这里不再打开 diff 预览（文件没有 Git 改动时 diff 为空会被自动关闭）。
+   * 改动列表给出的是相对 gitRoot 的路径，因此候选根依次为 gitRoot、当前 worktree 与会话授权目录。
+   */
+  const handleChangesFileOpen = React.useCallback((filePath: string, gitRoot?: string) => {
+    const basePaths = [...new Set([gitRoot, selectedWorktreePath, ...basePathsRef.current].filter((item): item is string => Boolean(item)))]
     openPreview(sessionId, {
       filePath,
-      previewOnly: imageOnly,
-      basePaths: imageOnly && gitRoot ? [gitRoot] : undefined,
+      previewOnly: true,
+      basePaths: basePaths.length > 0 ? basePaths : undefined,
       dirPath: sessionPath || undefined,
-      gitRoot,
+      gitRoot: gitRoot ?? selectedWorktreePath ?? undefined,
       baseRef: selectedWorktreePath ? 'origin/main' : undefined,
     })
   }, [openPreview, sessionId, sessionPath, selectedWorktreePath])
@@ -1696,8 +1700,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           currentFileChangeRunId={fileChangesCurrentRunId}
           focusPath={changesFocusPath}
           onFocused={clearChangesFocus}
-          onFocusMissing={handleDiffFileClick}
-          onOpenFile={handleDiffFileClick}
+          onFocusMissing={handleChangesFileOpen}
+          onOpenFile={handleChangesFileOpen}
           onOpenNonGitFile={handlePlainChangeFilePreview}
         />
       ) : (
@@ -1814,6 +1818,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
               )}
               {!inPreviewList && workspaceSlug && showProjectFileRoot && (
                 <FileDropZone
+                  compact
                   workspaceSlug={workspaceSlug}
                   target="workspace"
                   onFilesUploaded={handleFilesUploaded}

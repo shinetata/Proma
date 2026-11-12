@@ -17,14 +17,14 @@ export interface SkillAccent {
 
 /** 8 色板；按哈希取模，因此增删颜色会整体换色，需谨慎调整。 */
 export const SKILL_ACCENTS: readonly SkillAccent[] = [
-  { surface: 'bg-amber-500/12 text-amber-600 dark:text-amber-400', dot: 'bg-amber-500/70' },
-  { surface: 'bg-sky-500/12 text-sky-600 dark:text-sky-400', dot: 'bg-sky-500/70' },
-  { surface: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400', dot: 'bg-emerald-500/70' },
-  { surface: 'bg-violet-500/12 text-violet-600 dark:text-violet-400', dot: 'bg-violet-500/70' },
-  { surface: 'bg-rose-500/12 text-rose-600 dark:text-rose-400', dot: 'bg-rose-500/70' },
-  { surface: 'bg-teal-500/12 text-teal-600 dark:text-teal-400', dot: 'bg-teal-500/70' },
-  { surface: 'bg-indigo-500/12 text-indigo-600 dark:text-indigo-400', dot: 'bg-indigo-500/70' },
-  { surface: 'bg-orange-500/12 text-orange-600 dark:text-orange-400', dot: 'bg-orange-500/70' },
+  { surface: 'bg-amber-500/[0.12] text-amber-600 dark:text-amber-400', dot: 'bg-amber-500/70' },
+  { surface: 'bg-sky-500/[0.12] text-sky-600 dark:text-sky-400', dot: 'bg-sky-500/70' },
+  { surface: 'bg-emerald-500/[0.12] text-emerald-600 dark:text-emerald-400', dot: 'bg-emerald-500/70' },
+  { surface: 'bg-violet-500/[0.12] text-violet-600 dark:text-violet-400', dot: 'bg-violet-500/70' },
+  { surface: 'bg-rose-500/[0.12] text-rose-600 dark:text-rose-400', dot: 'bg-rose-500/70' },
+  { surface: 'bg-teal-500/[0.12] text-teal-600 dark:text-teal-400', dot: 'bg-teal-500/70' },
+  { surface: 'bg-indigo-500/[0.12] text-indigo-600 dark:text-indigo-400', dot: 'bg-indigo-500/70' },
+  { surface: 'bg-orange-500/[0.12] text-orange-600 dark:text-orange-400', dot: 'bg-orange-500/70' },
 ]
 
 /** FNV-1a 32 位哈希，对短字符串足够分散且完全确定。 */
