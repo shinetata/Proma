@@ -452,6 +452,7 @@ const TOOL_STATUS_PHRASES: Record<string, { action: string; operation: string; c
   TerminalExecute: { action: '启动终端命令', operation: '终端命令启动', completed: '启动了终端命令' },
   TerminalRead: { action: '读取终端输出', operation: '终端输出读取', completed: '读取了终端输出' },
   TerminalList: { action: '查看终端列表', operation: '终端列表读取', completed: '查看了终端列表' },
+  Present: { action: '整理交付物', operation: '交付物整理', completed: '整理了交付物' },
 }
 
 /** 工具状态短语，例如「正在读取文件」「读取了文件」「命令执行失败」 */

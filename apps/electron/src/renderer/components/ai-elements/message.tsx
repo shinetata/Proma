@@ -300,6 +300,11 @@ export function BasePathsProvider({ basePaths, sessionId, children }: MessagePat
   return <BasePathsContext.Provider value={value}>{children}</BasePathsContext.Provider>
 }
 
+/** 读取当前消息所属会话的路径解析上下文；未包在 Provider 内时返回 undefined。 */
+export function useMessagePathResolution(): MessagePathResolutionContext | undefined {
+  return React.useContext(BasePathsContext)
+}
+
 /** 仅在普通文本中转换旧引用，避免改写 inline code、fenced code 和缩进代码块。 */
 export function normalizeNamedReferenceDelimiters(markdown: string): string {
   const normalizeText = (text: string): string => text.replace(

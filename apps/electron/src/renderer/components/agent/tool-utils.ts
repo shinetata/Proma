@@ -33,6 +33,7 @@ import {
   MapPinOff,
   MessageCircleQuestion,
   OctagonX,
+  PackageCheck,
   Pencil,
   Plug,
   Radio,
@@ -107,6 +108,7 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   BrowserPreviewOpen: Globe,
   BrowserDomAction: MousePointer2,
   BrowserExecuteJavaScript: Code2,
+  Present: PackageCheck,
 }
 
 /**
@@ -183,6 +185,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   BrowserPreviewOpen: '打开本地网页预览',
   BrowserDomAction: '操作网页 DOM',
   BrowserExecuteJavaScript: '执行网页 JavaScript',
+  Present: '声明交付物',
 }
 
 /**

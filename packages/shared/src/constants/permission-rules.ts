@@ -33,6 +33,7 @@ export const SAFE_TOOLS: readonly string[] = [
   'TodoRead',        // Todo 列表读取
 
   'TaskOutput',      // 后台任务输出
+  'Present',         // 声明交付物：只校验路径，不复制也不修改文件
   // 注意：AskUserQuestion 不在此列表 — 由 canUseTool 拦截并展示交互式 UI
 ]
 
