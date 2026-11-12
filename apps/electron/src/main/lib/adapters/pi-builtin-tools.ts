@@ -42,6 +42,7 @@ import { getAgentWorkspacePath } from '../config-paths'
 import { buildMemoryTools } from './pi-memory-tools'
 import { buildInstructionMigrationTools } from './pi-instruction-migration-tools'
 import { buildProjectMapTools } from './pi-project-map-tools'
+import { buildPresentTools } from './pi-present-tools'
 import { wrapSynchronousKnowledgeTools } from './pi-knowledge-change-tools'
 import type { KnowledgeFileChange } from '../knowledge-change-tracker'
 import { resolveAutomationWorkspace, summarizeAutomationWorkspace } from './automation-workspace'
@@ -1655,6 +1656,18 @@ export async function buildPiBuiltinTools(
     tools.push(...buildAgentWorktreeTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入 Worktree 选择工具失败:', error)
+  }
+
+  // 交付物声明只建立指针并校验授权范围，不复制文件；所有运行场景都注册，
+  // 因为交付物语义与触发来源无关，越权与不存在仍由路径校验拦下。
+  try {
+    tools.push(...buildPresentTools(sdk, {
+      sessionId: ctx.sessionId,
+      agentCwd: ctx.agentCwd,
+      allowedRoots: ctx.allowedRoots,
+    }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入交付物声明工具失败:', error)
   }
 
   // Agent 终端以可见 PTY 承接直接执行；无用户在场的自动任务/子 Agent 不会获得该能力。

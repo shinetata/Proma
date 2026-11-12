@@ -20,6 +20,7 @@ import { ContentBlock } from './ContentBlock'
 import { AskUserAnswerCard } from './AskUserAnswerCard'
 import { collectAnsweredQuestionToolIds } from './ask-user-answers'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
+import { TurnDeliverables } from './TurnDeliverables'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { buildAssistantTurnSections, findTrailingResult, formatTurnDuration, getTurnInterruptedDurationMs, getTurnLiveStartedAt, groupConsecutiveQuestions, needsTrailingRunningPlaceholder, splitTurnBodyAndProcess, type AssistantTurnListEntry, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
 import { ProcessMotion, ProcessStepGroup, TurnLayoutTransition, TurnProcessSummary, type TurnOutcome } from './ProcessTimeline'
@@ -792,6 +793,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
             turnMessages={turn.turnMessages}
           />
           <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+          <TurnDeliverables turnMessages={turn.turnMessages} basePath={basePath} />
         </div>
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}
