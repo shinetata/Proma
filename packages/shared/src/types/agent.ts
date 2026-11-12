@@ -285,6 +285,8 @@ export interface SDKUserMessage {
   isSynthetic?: boolean
   /** Skills successfully loaded for this specific user input. */
   skill_activations?: SkillActivation[]
+  /** 本轮真实文件改动汇总（主进程 turn-changes 录制器写入） */
+  turn_changes?: TurnChangesSummary
 }
 
 /** Skill successfully loaded during an Agent turn. */
@@ -1880,6 +1882,62 @@ export interface ExitPlanModeResponse {
   feedback?: string
 }
 
+// ===== 轮次文件改动（turn changes） =====
+
+/** 单个文件在本轮的改动摘要 */
+export interface TurnChangedFile {
+  /** 规范化后的绝对路径（用于定位与 IPC） */
+  path: string
+  /** 显示用路径：cwd/仓库内为相对路径，home 内为 ~/...，其余为绝对路径 */
+  display: string
+  added: number
+  deleted: number
+  binary?: boolean
+  oversized?: boolean
+}
+
+/** 一轮的文件改动汇总，持久化在该轮用户消息的 turn_changes 字段 */
+export interface TurnChangesSummary {
+  /** 触发本轮的用户消息 uuid */
+  key: string
+  cwd: string
+  files: TurnChangedFile[]
+  /** 截断前的文件总数 */
+  total: number
+  added: number
+  deleted: number
+}
+
+/**
+ * 单个 hunk 的统一结构。
+ *
+ * lines 每行首字符表示类型：'+' 新增、'-' 删除、' ' 上下文。
+ * oldStart/newStart 为该 hunk 在旧/新文件中的起始行号（1 基）。
+ */
+export interface TurnDiffHunk {
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: string[]
+}
+
+/** 单文件改动详情，按需由主进程计算 */
+export type TurnFileDiff =
+  | { kind: 'binary' | 'oversized'; path: string; display: string }
+  | {
+      kind: 'text'
+      path: string
+      display: string
+      /** 改动前是否存在该文件 */
+      before: boolean
+      /** 改动后是否存在该文件 */
+      after: boolean
+      hunks: TurnDiffHunk[]
+      /** 差异过大退化为整体替换 */
+      coarse: boolean
+    }
+
 // ===== 权限系统类型 =====
 
 /** 当前 Proma 支持的权限模式，值直接映射 SDK 原生 permissionMode */
@@ -2049,6 +2107,12 @@ export const AGENT_IPC_CHANNELS = {
   SEND_MESSAGE: 'agent:send-message',
   /** 中止 Agent 执行 */
   STOP_AGENT: 'agent:stop',
+
+  // 轮次文件改动
+  /** 获取指定轮（用户消息 uuid）的文件改动摘要 */
+  GET_TURN_CHANGES: 'agent:get-turn-changes',
+  /** 获取指定轮某个改动文件的完整 hunks */
+  GET_TURN_FILE_DIFF: 'agent:get-turn-file-diff',
 
   // Pi 受管浏览器（网页内容与 CDP 仅驻留主进程）
   OPEN_BROWSER: 'agent:open-browser',

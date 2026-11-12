@@ -46,6 +46,8 @@ import type {
   RestoreAgentCheckoutInput,
   RestoreAgentCheckoutResult,
   SDKMessage,
+  TurnChangesSummary,
+  TurnFileDiff,
   AgentSendInput,
   AgentThinkingLevel,
   PromaNarrationMode,
@@ -518,6 +520,12 @@ export interface ElectronAPI {
 
   /** 获取 Agent 会话 SDKMessage（Phase 4 新格式） */
   getAgentSessionSDKMessages: (id: string) => Promise<SDKMessage[]>
+
+  /** 获取某一轮（用户消息 uuid）的真实文件改动摘要；持久化字段缺失时兜底 */
+  getTurnChanges: (sessionId: string, key: string) => Promise<TurnChangesSummary | null>
+
+  /** 按需计算某一轮某个改动文件的 hunks，供悬停预览与改动视图使用 */
+  getTurnFileDiff: (sessionId: string, key: string, filePath: string) => Promise<TurnFileDiff | null>
 
   /** 更新 Agent 会话标题 */
   updateAgentSessionTitle: (id: string, title: string) => Promise<AgentSessionMeta>
@@ -1710,6 +1718,14 @@ const electronAPI: ElectronAPI = {
 
   getAgentSessionSDKMessages: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id)
+  },
+
+  getTurnChanges: (sessionId: string, key: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TURN_CHANGES, sessionId, key)
+  },
+
+  getTurnFileDiff: (sessionId: string, key: string, filePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TURN_FILE_DIFF, sessionId, key, filePath)
   },
 
   updateAgentSessionTitle: (id: string, title: string) => {

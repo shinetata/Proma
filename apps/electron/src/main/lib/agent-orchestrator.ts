@@ -49,8 +49,9 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, resolveSessionCheckoutCwd, defaultCheckoutEntry, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, isAgentSessionDeleting } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, updateSDKUserMessageTurnChanges, rewindPiAgentSession, resolveAgentCwd, resolveSessionCheckoutCwd, defaultCheckoutEntry, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, isAgentSessionDeleting } from './agent-session-manager'
 import { appendCheckoutEntry, checkoutFromActiveWorktree } from './session-checkout'
+import { beginTurnChanges, finishTurnChanges, observeTurnToolResult, preExecuteTurnTool } from './turn-changes'
 import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getMcpApiKeyEnvironment, getMcpOAuthHeaders } from './mcp-oauth-service'
@@ -1203,6 +1204,48 @@ export class AgentOrchestrator {
       const initialPermissionMode: PromaPermissionMode = PROMA_DEFAULT_PERMISSION_MODE
       const runTriggeredBy = input.triggeredBy
 
+      // ── 本轮文件改动录制 ──
+      // 轮首给工作树做 Git 快照，文件工具执行前保存写前副本，轮末比较快照与副本，
+      // 结果写回该轮用户消息的 turn_changes（渲染层底部的改动卡据此渲染）。
+      // key 用触发本轮的用户消息 uuid：本轮由前端发起时已知（initialUserMessageUuid），
+      // 否则（自动化、直接重试等）回退到历史里最后一条真实用户输入。
+      // 注：JSONL 实际落盘的是 SDK 消息结构，getAgentSessionMessages 的返回类型只是宽松声明，
+      // 所以这里按运行时字段扫描。
+      const activeTurnUserMessageUuid: string | undefined = initialUserMessageUuid ?? (() => {
+        const history = getAgentSessionMessages(sessionId) as unknown[]
+        for (let index = history.length - 1; index >= 0; index -= 1) {
+          const item = history[index] as {
+            type?: string
+            uuid?: string
+            isSynthetic?: boolean
+            message?: { content?: unknown }
+          } | undefined
+          if (item?.type !== 'user' || item.isSynthetic) continue
+          const blocks = item.message?.content
+          if (Array.isArray(blocks) && blocks.some((block) => (block as { type?: string } | null)?.type === 'tool_result')) continue
+          if (typeof item.uuid === 'string' && item.uuid.length > 0) return item.uuid
+        }
+        return undefined
+      })()
+
+      if (activeTurnUserMessageUuid && agentCwd) {
+        beginTurnChanges(sessionId, activeTurnUserMessageUuid, agentCwd)
+      }
+
+      /** 结算本轮文件改动并写回用户消息；失败只告警，不影响本轮收尾。 */
+      const settleActiveTurnChanges = async (): Promise<void> => {
+        if (!activeTurnUserMessageUuid) return
+        const turnKey = activeTurnUserMessageUuid
+        try {
+          const summary = await finishTurnChanges(sessionId, turnKey)
+          if (summary !== null) {
+            updateSDKUserMessageTurnChanges(sessionId, turnKey, summary)
+          }
+        } catch (error) {
+          console.warn('[Agent 编排] 结算本轮文件改动失败:', error)
+        }
+      }
+
       /**
        * 工具调用拦截管道
        *
@@ -1254,6 +1297,8 @@ export class AgentOrchestrator {
         }
 
         // 保留管道，当前产品决策为直接执行（对齐商业版 0.22.0）。
+        // 放行前捕获文件修改工具的写前副本，轮末据此统计真实改动。
+        await preExecuteTurnTool(sessionId, toolName, input, agentCwd ?? process.cwd())
         return { behavior: 'allow' as const, updatedInput: input }
       }
 
@@ -1477,6 +1522,7 @@ export class AgentOrchestrator {
           const wasStoppedByUser = this.consumeStoppedByUser(sessionId, runGeneration)
           this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
           try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
+          await settleActiveTurnChanges()
           completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
           return
         }
@@ -1713,6 +1759,7 @@ export class AgentOrchestrator {
                 // 透传归一化后的错误消息到前端，避免 SDK 原始 API Error 直接暴露给用户。
                 emitLiveSdkMessage(errorSDKMsg)
                 try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+                await settleActiveTurnChanges()
                 completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
                 return
               }
@@ -1730,6 +1777,7 @@ export class AgentOrchestrator {
                   const content = (msg as { message?: { content?: Array<{ type: string }> } }).message?.content
                   const hasToolResult = Array.isArray(content) && content.some((b) => b.type === 'tool_result')
                   if (hasToolResult) {
+                    observeTurnToolResult(sessionId)
                     accumulatedMessages.push(msg)
                   }
                 } else {
@@ -1851,6 +1899,7 @@ export class AgentOrchestrator {
 
           if (!wasStoppedByUser && visibleRunMessageCount === 0) {
             const errorContent = this.persistEmptyResponseError(sessionId, capturedResultSubtype, capturedResultErrors)
+            await settleActiveTurnChanges()
             failRun(errorContent, getAgentSessionMessages(sessionId), {
               startedAt: streamStartedAt,
               resultSubtype: EMPTY_RESPONSE_RESULT_SUBTYPE,
@@ -1859,7 +1908,8 @@ export class AgentOrchestrator {
             return
           }
 
-          // 发送完成信号
+          // 发送完成信号；先把本轮文件改动写回用户消息，completeRun 携带的消息才会带上 turn_changes
+          await settleActiveTurnChanges()
           completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
 
           return
@@ -1871,6 +1921,7 @@ export class AgentOrchestrator {
             const wasStoppedByUser = this.consumeStoppedByUser(sessionId, runGeneration)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
+            await settleActiveTurnChanges()
             completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
             return
           }
@@ -2009,6 +2060,7 @@ export class AgentOrchestrator {
             console.error('[Agent 编排] 保存错误消息失败:', saveError)
           }
 
+          await settleActiveTurnChanges()
           failRun(userFacingError, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
           // 保留 Pi session ID，确保网络或上游临时失败后的下一轮可继续 resume。
@@ -2032,6 +2084,7 @@ export class AgentOrchestrator {
         _errorTitle: '会话恢复失败',
       } as unknown as SDKMessage
       appendSDKMessages(sessionId, [recoveryError])
+      await settleActiveTurnChanges()
       failRun(recoveryFailure, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
     } finally {
