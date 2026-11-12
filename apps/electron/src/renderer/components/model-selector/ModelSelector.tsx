@@ -188,6 +188,8 @@ export interface ModelSelectorThinking {
   level: AgentThinkingLevel
   /** 该模型可选的档位，顺序由浅到深 */
   levels: readonly AgentThinkingLevel[]
+  /** 该模型的默认档位，用于在单选组中标注「默认档位」 */
+  defaultLevel?: AgentThinkingLevel
   /** 档位变更回调 */
   onChange: (level: AgentThinkingLevel) => void
   /** 会话元数据未就绪时禁止切换 */
@@ -205,13 +207,18 @@ const THINKING_LEVEL_LABELS: Record<AgentThinkingLevel, string> = {
   max: '最大',
 }
 
-/** 档位说明，单选组内以第二行小字展示。 */
+/**
+ * 档位说明，单选组内以第二行小字展示。
+ *
+ * 「默认档位」不写死在某一档上：各模型默认档位不同（如 DeepSeek V4.1 Flash 为低、Gemini 4 为中），
+ * 由 buildThinkingLevelOptions 按模型实际默认档位追加。
+ */
 const THINKING_LEVEL_HINTS: Record<AgentThinkingLevel, string> = {
   off: '不进行扩展思考',
   minimal: '极少思考，最快响应',
   low: '轻量思考，响应较快',
   medium: '在速度与深度之间平衡',
-  high: '深度推理，默认档位',
+  high: '深度推理',
   xhigh: '更长时间的推理',
   max: '最大思考预算，最慢',
 }
@@ -228,13 +235,17 @@ interface ThinkingLevelOption {
 function buildThinkingLevelOptions(
   levels: readonly AgentThinkingLevel[],
   selected: AgentThinkingLevel,
+  defaultLevel: AgentThinkingLevel | undefined,
 ): ThinkingLevelOption[] {
-  return levels.map((level) => ({
-    level,
-    label: THINKING_LEVEL_LABELS[level] ?? level,
-    hint: THINKING_LEVEL_HINTS[level],
-    selected: level === selected,
-  }))
+  return levels.map((level) => {
+    const hint = THINKING_LEVEL_HINTS[level]
+    return {
+      level,
+      label: THINKING_LEVEL_LABELS[level] ?? level,
+      hint: level === defaultLevel ? `${hint}，默认档位` : hint,
+      selected: level === selected,
+    }
+  })
 }
 
 /** 档位显示名；未设置档位时返回 undefined，由调用方决定占位文案。 */
@@ -296,7 +307,7 @@ export function ModelSelector({
   const [effortHighlight, setEffortHighlight] = React.useState(-1)
   const effortItemRefs = React.useRef<HTMLButtonElement[]>([])
   const effortOptions = React.useMemo(
-    () => (thinking ? buildThinkingLevelOptions(thinking.levels, thinking.level) : []),
+    () => (thinking ? buildThinkingLevelOptions(thinking.levels, thinking.level, thinking.defaultLevel) : []),
     [thinking],
   )
   const effortLabel = getThinkingLevelLabel(thinking?.level)

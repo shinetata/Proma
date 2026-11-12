@@ -1996,12 +1996,13 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       ? {
           level: openAIThinkingLevel,
           levels: openAIThinkingLevels,
+          defaultLevel: effectiveReasoningCapability?.defaultLevel,
           // 会话元数据未就绪时无法写回档位，先禁用单选组。
           disabled: !sessionMeta,
           onChange: (level: AgentThinkingLevel): void => { void updateReasoningLevel(level) },
         }
       : undefined
-  ), [isSessionThinkingAvailable, openAIThinkingLevel, openAIThinkingLevels, sessionMeta, updateReasoningLevel])
+  ), [effectiveReasoningCapability?.defaultLevel, isSessionThinkingAvailable, openAIThinkingLevel, openAIThinkingLevels, sessionMeta, updateReasoningLevel])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
