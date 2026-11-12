@@ -107,6 +107,8 @@ import type {
   WeChatConfig,
   WeChatBridgeState,
   SDKMessage,
+  TurnChangesSummary,
+  TurnFileDiff,
   GetFileDiffInput,
   DetachedPreviewWindowInput,
   RevertFileInput,
@@ -289,6 +291,7 @@ import {
 import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, listActiveAgentSessionSnapshots, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
+import { disposeTurnChanges, getTurnChanges, getTurnFileDiff } from './lib/turn-changes'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getConfigDir, getWorkspaceSkillsDir, getScratchPadPath } from './lib/config-paths'
@@ -2452,6 +2455,22 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 轮次文件改动：内存中的本轮摘要（持久化字段缺失时渲染层兜底）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_TURN_CHANGES,
+    async (_, sessionId: string, key: string): Promise<TurnChangesSummary | null> => {
+      return getTurnChanges(sessionId, key)
+    }
+  )
+
+  // 轮次文件改动：按需计算单文件 hunks，供悬停预览与改动 Tab 使用
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_TURN_FILE_DIFF,
+    async (_, sessionId: string, key: string, filePath: string): Promise<TurnFileDiff | null> => {
+      return getTurnFileDiff(sessionId, key, filePath)
+    }
+  )
+
   // 更新 Agent 会话标题
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
@@ -2522,6 +2541,8 @@ export function registerIpcHandlers(): void {
       // Tombstone first so a headless run still in async preflight cannot start
       // or recreate its transcript after this handler removes session files.
       await stopAgentAndDrain(id)
+      // 释放本轮文件改动录制器（含临时快照目录）
+      await disposeTurnChanges(id)
       // 清理权限服务中该会话的白名单
       permissionService.clearSessionWhitelist(id)
       permissionService.clearSessionPending(id)

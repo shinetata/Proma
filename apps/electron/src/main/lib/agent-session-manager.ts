@@ -43,6 +43,7 @@ import type {
   AgentCwdMode,
   AgentActiveWorktree,
   SessionWorkbenchLayout,
+  TurnChangesSummary,
 } from '@proma/shared'
 import { migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult, compareAgentSessionsByActivityDesc, getAgentSessionActivityAt } from '@proma/shared'
 import { getConversationMessages } from './legacy-chat-store'
@@ -1283,6 +1284,41 @@ export function updateSDKUserMessageSkillActivations(
   if (JSON.stringify(merged) === JSON.stringify(target.skill_activations ?? [])) return true
 
   messages[targetIndex] = { ...target, skill_activations: merged }
+  const content = messages.map((message) => JSON.stringify(message)).join('\n') + '\n'
+  writeTextFileAtomic(filePath, content)
+  return true
+}
+
+/**
+ * 把本轮真实文件改动写回触发它的用户消息。
+ *
+ * 只改这一条 JSONL 记录并原子写回：轮末渲染层会用 turn_changes 直接渲染改动卡，
+ * 重启后也能从磁盘恢复，不依赖主进程内存。
+ *
+ * @returns false 表示会话文件或目标消息不存在（调用方只告警，不阻断收尾）
+ */
+export function updateSDKUserMessageTurnChanges(
+  id: string,
+  userMessageUuid: string,
+  turnChanges: TurnChangesSummary,
+): boolean {
+  const filePath = getAgentSessionMessagesPath(id)
+  if (!existsSync(filePath)) return false
+
+  const raw = readFileSync(filePath, 'utf-8')
+  const lines = raw.split('\n').filter((line) => line.trim())
+  const messages = parseJsonlStrict<unknown>(lines, `更新用户本轮文件改动 (${id})`)
+    .map(normalizePersistedSDKMessage)
+  const targetIndex = messages.findIndex((message) => (
+    message.type === 'user'
+    && (message as SDKUserMessage).uuid === userMessageUuid
+  ))
+  if (targetIndex < 0) return false
+
+  const target = messages[targetIndex] as SDKUserMessage
+  if (JSON.stringify(target.turn_changes) === JSON.stringify(turnChanges)) return true
+
+  messages[targetIndex] = { ...target, turn_changes: turnChanges }
   const content = messages.map((message) => JSON.stringify(message)).join('\n') + '\n'
   writeTextFileAtomic(filePath, content)
   return true

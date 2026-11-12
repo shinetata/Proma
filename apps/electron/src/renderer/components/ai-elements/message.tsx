@@ -294,6 +294,13 @@ interface MessagePathResolutionContext {
 const BasePathsContext = React.createContext<MessagePathResolutionContext | undefined>(undefined)
 const AgentHistoryQuoteClickContext = React.createContext<((quote: QuotedSelection) => void) | undefined>(undefined)
 
+const EMPTY_PATH_RESOLUTION: MessagePathResolutionContext = {}
+
+/** 读取当前消息所在的路径解析上下文（basePaths + sessionId）。 */
+export function useMessagePathResolution(): MessagePathResolutionContext {
+  return React.useContext(BasePathsContext) ?? EMPTY_PATH_RESOLUTION
+}
+
 /** 提供会话与附加目录候选给所有内嵌的 MessageResponse。 */
 export function BasePathsProvider({ basePaths, sessionId, children }: MessagePathResolutionContext & { children: React.ReactNode }): React.ReactElement {
   const value = React.useMemo(() => ({ basePaths, sessionId }), [basePaths, sessionId])

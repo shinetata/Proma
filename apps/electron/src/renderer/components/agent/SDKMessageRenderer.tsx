@@ -19,7 +19,8 @@ import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbo
 import { ContentBlock } from './ContentBlock'
 import { AskUserAnswerCard } from './AskUserAnswerCard'
 import { collectAnsweredQuestionToolIds } from './ask-user-answers'
-import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
+import { TurnChangesCard } from './TurnChangesCard'
+import { buildTurnFileNameMap } from './turn-change-files'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { buildAssistantTurnSections, findTrailingResult, formatTurnDuration, getTurnInterruptedDurationMs, getTurnLiveStartedAt, groupConsecutiveQuestions, needsTrailingRunningPlaceholder, splitTurnBodyAndProcess, type AssistantTurnListEntry, type AssistantTurnSection, type AssistantTurnSectionItem } from './assistant-turn-sections'
 import { ProcessMotion, ProcessStepGroup, TurnLayoutTransition, TurnProcessSummary, type TurnOutcome } from './ProcessTimeline'
@@ -551,10 +552,10 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }, [allMessages])
   const turnKey = getGroupId(turn)
 
-  // 本轮「文件名 → 绝对路径」映射：与 footer chips 同源，供正文内联文件引用补全裸文件名
+  // 本轮「文件名 → 绝对路径」映射：与底部改动卡同源，供正文内联文件引用补全裸文件名
   const turnFileMap = React.useMemo(
-    () => buildTurnFileNameMap(turn.turnMessages),
-    [turn.turnMessages]
+    () => buildTurnFileNameMap(turn.turnMessages, turn.inputMessage),
+    [turn.turnMessages, turn.inputMessage]
   )
 
   // 如果只有错误消息
@@ -783,14 +784,18 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           )}
         </TurnFileMapProvider>
       </MessageContent>
-      {/* 完成态汇总：Skill 使用记录与文件改动 chip */}
+      {/* 完成态汇总：Skill 使用记录与文件改动卡 */}
       {!isStreaming && (
         <div className="animate-in fade-in duration-300">
           <TurnSkillUsageSummary
             inputMessage={turn.inputMessage}
             turnMessages={turn.turnMessages}
           />
-          <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+          <TurnChangesCard
+            inputMessage={turn.inputMessage}
+            turnMessages={turn.turnMessages}
+            basePath={basePath}
+          />
         </div>
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}
