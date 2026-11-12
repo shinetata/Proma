@@ -64,6 +64,7 @@ import type {
   WorkspaceAttachFileInput,
   WorkspaceMcpConfig,
   SkillMeta,
+  SkillUsageSummary,
   BulkImportSkillItemResult,
   BulkImportSkillsResult,
   BulkImportWorkspaceSelection,
@@ -292,6 +293,7 @@ import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getConfigDir, getWorkspaceSkillsDir, getScratchPadPath } from './lib/config-paths'
+import { getSkillUsageSummary } from './lib/skill-usage-service'
 import { getCachedDefaultAppInfo, saveCachedDefaultAppInfo } from './lib/default-app-cache'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -314,6 +316,7 @@ import {
   getDefaultSkillSlugs,
   getWorkspaceCapabilities,
   getAgentWorkspace,
+  getAgentWorkspaceBySlug,
   getProjectFilesPath,
   deleteWorkspaceSkill,
   importSkillFromWorkspace,
@@ -3141,6 +3144,16 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS,
     async () => {
       return getDefaultSkillSlugs()
+    }
+  )
+
+  // 按工作区汇总 Skill 使用统计（哪些会话用过、最近一次使用时间）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_SKILL_USAGE,
+    async (_, workspaceSlug: string): Promise<SkillUsageSummary> => {
+      const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+      if (!workspace) return {}
+      return getSkillUsageSummary(workspace)
     }
   )
 

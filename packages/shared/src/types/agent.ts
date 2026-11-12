@@ -1194,6 +1194,19 @@ export interface SkillMeta {
   hasUpdate?: boolean
 }
 
+// ===== Skill 使用统计 =====
+
+/** 单个 Skill 在一个工作区内的使用统计 */
+export interface SkillUsageEntry {
+  /** 使用过这个 Skill 的会话数 */
+  count: number
+  /** 最近一次使用的时间戳（取该会话的最后活动时间） */
+  lastUsedAt: number
+}
+
+/** 按工作区汇总的 Skill 使用统计，key 为 Skill slug */
+export type SkillUsageSummary = Record<string, SkillUsageEntry>
+
 /** 其他工作区 Skill 分组（导入对话框用） */
 export interface OtherWorkspaceSkillsGroup {
   workspaceName: string
@@ -2072,6 +2085,8 @@ export const AGENT_IPC_CHANNELS = {
   DELETE_SKILL_ENTRY: 'agent:delete-skill-entry',
   /** 重命名/移动 Skill 目录下的文件或目录 */
   RENAME_SKILL_ENTRY: 'agent:rename-skill-entry',
+  /** 按工作区汇总 Skill 使用统计（哪些会话用过、最近一次使用时间） */
+  GET_SKILL_USAGE: 'agent:get-skill-usage',
   /** 获取工作区记忆摘要 */
   GET_WORKSPACE_MEMORY_SUMMARY: 'agent:get-workspace-memory-summary',
   /** 读取工作区 AGENTS.md */

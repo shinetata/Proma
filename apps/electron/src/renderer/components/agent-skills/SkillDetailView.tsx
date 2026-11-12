@@ -15,8 +15,9 @@ import { SettingsCard } from '@/components/settings/primitives'
 import { SkillFilesPanel } from '@/components/settings/SkillFilesPanel'
 import { LiveMarkdownEditor } from '@/components/markdown/LiveMarkdownEditor'
 import { cn } from '@/lib/utils'
-import type { SkillMeta } from '@proma/shared'
+import type { SkillMeta, SkillUsageEntry } from '@proma/shared'
 import { extractSkillBody, rebuildSkillMd } from './skillMdUtils'
+import { describeSkillUsage, formatSkillUsageAge } from './skillUsage'
 
 export interface SkillDetailViewProps {
   skill: SkillMeta
@@ -25,6 +26,8 @@ export interface SkillDetailViewProps {
   contentVersion: number
   isBuiltin: boolean
   updating: boolean
+  /** 该 Skill 在当前工作区的使用统计（哪些会话用过、最近一次时间） */
+  usage?: SkillUsageEntry
   onBack: () => void
   onToggle: (enabled: boolean) => void
   onUpdate: () => void
@@ -38,6 +41,7 @@ export function SkillDetailView({
   contentVersion,
   isBuiltin,
   updating,
+  usage,
   onBack,
   onToggle,
   onUpdate,
@@ -333,6 +337,8 @@ export function SkillDetailView({
               <MetaEditRow label="描述" value={editDescription} onChange={(description) => updateDraft({ description })} multiline />
               <MetaRow label="数据源" value={sourceLabel} />
               <MetaRow label="位置" value={`skills/${skill.slug}`} />
+              <MetaRow label="使用统计" value={describeSkillUsage(usage)} />
+              <MetaRow label="最近使用" value={formatSkillUsageAge(usage)} />
             </SettingsCard>
           </div>
 
