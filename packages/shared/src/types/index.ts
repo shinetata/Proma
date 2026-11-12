@@ -66,3 +66,6 @@ export * from './agent-island'
 
 // 用户授权的 Markdown Vault 相关类型
 export * from './vault'
+
+// Proma Cloud 联网检索配置相关类型
+export * from './proma-cloud'

@@ -1,5 +1,21 @@
 {
-  "comment": "Proma 内置 MCP 能力目录。基础运行时工具（如自动化、协作）不在此展示，外部 MCP 由工作区配置管理。旧 Nano Banana 内置能力已移除。",
+  "comment": "Proma 内置 MCP 能力目录。基础运行时工具（如自动化、协作）不在此展示，外部 MCP 由工作区配置管理。旧 Nano Banana 内置能力已移除。Proma Cloud 一项对应联网检索（WebSearch / WebFetch），凭据由用户在能力中心填写 API Key。",
   "version": 1,
-  "servers": []
+  "servers": [
+    {
+      "id": "proma-cloud",
+      "name": "proma_cloud",
+      "displayName": "Proma Cloud",
+      "description": "填写你的 Proma Cloud API Key 后，Agent 可用 WebSearch 搜索公开网页、用 WebFetch 读取指定网页正文；需要登录或交互的页面仍交给受管浏览器。按成功请求扣 Proma Cloud 积分。",
+      "category": "system",
+      "kind": "internal",
+      "deletable": false,
+      "defaultEnabled": true,
+      "toggleable": false,
+      "tools": [
+        { "name": "WebSearch", "description": "搜索公开网页，返回带标题、链接、摘要、发布时间和权威度的结构化结果。", "readOnly": true },
+        { "name": "WebFetch", "description": "把一个已知网页的正文转成 Markdown，单页最多 4 万字符。", "readOnly": true }
+      ]
+    }
+  ]
 }

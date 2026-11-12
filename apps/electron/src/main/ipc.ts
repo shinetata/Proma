@@ -10,7 +10,7 @@ import { existsSync, realpathSync, readFileSync, writeFileSync, mkdirSync, statS
 import { realpath, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, LEGACY_CHAT_IPC_CHANNELS, FILE_RESOURCE_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, isPromaNarrationMode, normalizePathForCompare, removeMcpServerFromConfig, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, LEGACY_CHAT_IPC_CHANNELS, FILE_RESOURCE_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, isPromaNarrationMode, normalizePathForCompare, removeMcpServerFromConfig, TERMINAL_IPC_CHANNELS, PROMA_CLOUD_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS, TRAY_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -79,6 +79,10 @@ import type {
   InstallerDownloadResult,
   ProxyConfig,
   SystemProxyDetectResult,
+  PromaCloudConfigSummary,
+  PromaCloudConfigUpdateInput,
+  PromaCloudConnectionTestInput,
+  PromaCloudConnectionTestResult,
   GitHubRelease,
   GitHubReleaseListOptions,
   PermissionResponse,
@@ -224,6 +228,8 @@ import {
   launchInstaller,
 } from './lib/installer-downloader'
 import { getEffectiveProxyUrl, getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
+import { getPromaCloudConfigSummary, updatePromaCloudConfig } from './lib/proma-cloud-config'
+import { testPromaCloudConnection } from './lib/proma-cloud-search'
 import { getFetchFn } from './lib/proxy-fetch'
 import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
@@ -373,6 +379,10 @@ import { movePathSafely } from './lib/file-move-service'
 import { subscribeWorkspaceMemoryChanges } from './lib/workspace-memory-change-watcher'
 import { confirmWorkspaceMemoryWindowClose, markWorkspaceMemoryWindowReady } from './lib/workspace-memory-window'
 import { deleteMcpCredential, startMcpOAuth, saveMcpApiKey, saveMcpOAuthClientSecret } from './lib/mcp-oauth-service'
+
+/** Proma Cloud 配置入参长度上限；超出视为误用而非正常配置。 */
+const MAX_PROMA_CLOUD_API_KEY_LENGTH = 512
+const MAX_PROMA_CLOUD_BASE_URL_LENGTH = 2048
 
 /** Renderer-scoped subscriptions; disposed on explicit tab cleanup or renderer destruction. */
 const workspaceMemoryWatchSubscriptions = new Map<number, Map<string, () => void>>()
@@ -2515,6 +2525,80 @@ export function registerIpcHandlers(): void {
     PROXY_IPC_CHANNELS.DETECT_SYSTEM,
     async (): Promise<SystemProxyDetectResult> => {
       return detectSystemProxy()
+    }
+  )
+
+  // ===== Proma Cloud 联网检索配置 =====
+
+  // 读取配置摘要（不含任何形式的 API Key）
+  ipcMain.handle(
+    PROMA_CLOUD_IPC_CHANNELS.GET_CONFIG,
+    async (): Promise<PromaCloudConfigSummary> => getPromaCloudConfigSummary()
+  )
+
+  // 更新配置；入参在主进程侧做类型与长度校验
+  ipcMain.handle(
+    PROMA_CLOUD_IPC_CHANNELS.UPDATE_CONFIG,
+    async (_, input: unknown): Promise<PromaCloudConfigSummary> => {
+      if (!input || typeof input !== 'object') throw new Error('配置参数不合法')
+      const record = input as Record<string, unknown>
+
+      const apiKey = record.apiKey
+      if (apiKey !== undefined && apiKey !== null && typeof apiKey !== 'string') {
+        throw new Error('API Key 必须是字符串')
+      }
+      if (typeof apiKey === 'string' && apiKey.trim().length > MAX_PROMA_CLOUD_API_KEY_LENGTH) {
+        throw new Error(`API Key 长度不能超过 ${MAX_PROMA_CLOUD_API_KEY_LENGTH} 个字符`)
+      }
+
+      const baseUrl = record.baseUrl
+      if (baseUrl !== undefined && typeof baseUrl !== 'string') {
+        throw new Error('服务地址必须是字符串')
+      }
+      if (typeof baseUrl === 'string' && baseUrl.length > MAX_PROMA_CLOUD_BASE_URL_LENGTH) {
+        throw new Error(`服务地址长度不能超过 ${MAX_PROMA_CLOUD_BASE_URL_LENGTH} 个字符`)
+      }
+
+      const webResearchEnabled = record.webResearchEnabled
+      if (webResearchEnabled !== undefined && typeof webResearchEnabled !== 'boolean') {
+        throw new Error('联网检索开关必须是布尔值')
+      }
+
+      const update: PromaCloudConfigUpdateInput = {
+        ...(apiKey === undefined ? {} : { apiKey: apiKey as string | null }),
+        ...(baseUrl === undefined ? {} : { baseUrl: baseUrl as string }),
+        ...(webResearchEnabled === undefined ? {} : { webResearchEnabled: webResearchEnabled as boolean }),
+      }
+      return updatePromaCloudConfig(update)
+    }
+  )
+
+  // 测试连接：不写配置、不扣积分（空查询必然被鉴权后的参数校验拒绝）
+  ipcMain.handle(
+    PROMA_CLOUD_IPC_CHANNELS.TEST_CONNECTION,
+    async (_, input: unknown): Promise<PromaCloudConnectionTestResult> => {
+      if (input !== undefined && (input === null || typeof input !== 'object')) {
+        throw new Error('测试参数不合法')
+      }
+      const record = (input ?? {}) as Record<string, unknown>
+
+      const apiKey = record.apiKey
+      if (apiKey !== undefined && typeof apiKey !== 'string') throw new Error('API Key 必须是字符串')
+      if (typeof apiKey === 'string' && apiKey.trim().length > MAX_PROMA_CLOUD_API_KEY_LENGTH) {
+        throw new Error(`API Key 长度不能超过 ${MAX_PROMA_CLOUD_API_KEY_LENGTH} 个字符`)
+      }
+
+      const baseUrl = record.baseUrl
+      if (baseUrl !== undefined && typeof baseUrl !== 'string') throw new Error('服务地址必须是字符串')
+      if (typeof baseUrl === 'string' && baseUrl.length > MAX_PROMA_CLOUD_BASE_URL_LENGTH) {
+        throw new Error(`服务地址长度不能超过 ${MAX_PROMA_CLOUD_BASE_URL_LENGTH} 个字符`)
+      }
+
+      const testInput: PromaCloudConnectionTestInput = {
+        ...(typeof apiKey === 'string' ? { apiKey } : {}),
+        ...(typeof baseUrl === 'string' ? { baseUrl } : {}),
+      }
+      return testPromaCloudConnection(input === undefined ? undefined : testInput)
     }
   )
 
