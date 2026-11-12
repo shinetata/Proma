@@ -85,6 +85,7 @@ import {
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { browserController } from './browser-controller'
+import { isPromaCloudWebResearchAvailable } from './proma-cloud-config'
 import { resolveRuntimeAdditionalDirectories } from './agent-orchestrator-vault-access'
 
 // ===== 类型定义 =====
@@ -1104,6 +1105,8 @@ export class AgentOrchestrator {
             return context
           })()
         : undefined
+      // 工具与提示词必须在同一轮里用同一个判定结果，避免模型被告知可用却没有工具。
+      const webResearchAvailable = isPromaCloudWebResearchAvailable()
       const mcpServers = await this.buildMcpServers(workspaceSlug, proxyUrl)
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
@@ -1123,6 +1126,7 @@ export class AgentOrchestrator {
         lastWindowsTerminalProfile: appSettings.lastWindowsTerminalProfile,
         productivityTools,
         projectKnowledgeRoot,
+        webResearchAvailable,
         onKnowledgeChanges: (changes) => {
           if (workspaceSlug) broadcastKnowledgeChanges(workspaceSlug, changes)
         },
@@ -1336,6 +1340,7 @@ export class AgentOrchestrator {
         currentModelId: selectedModelId,
         projectKnowledgeRoot,
         productivityTools,
+        webResearchAvailable,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return

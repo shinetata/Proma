@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import type { BuiltinMcpCategory, BuiltinMcpServerSummary } from '@proma/shared'
+import { PromaCloudConfigPanel } from './PromaCloudConfigPanel'
 
 const CATEGORY_LABELS: Record<BuiltinMcpCategory, string> = {
   system: '系统',
@@ -24,8 +25,8 @@ const CATEGORY_LABELS: Record<BuiltinMcpCategory, string> = {
 function getBuiltinMcpSource(server: BuiltinMcpServerSummary): { source: string; description: string } {
   if (server.id === 'proma-cloud') {
     return {
-      source: 'Proma 登录凭据',
-      description: '凭据网关随 Proma 登录态自动注入，是生图、AI 应用生成等能力的基础设施，因此不提供开关。',
+      source: '本机 API Key',
+      description: '联网检索使用你填写的 Proma Cloud API Key，直接在下方本面板配置；Key 只保存在本机。',
     }
   }
   return { source: 'Proma 运行时', description: '该内置能力由 Proma 运行时托管。' }
@@ -54,7 +55,7 @@ export function BuiltinMcpDetailSheet({ open, server, onOpenChange }: BuiltinMcp
             </div>
             {server && (
               <div className="mt-4 flex items-start gap-3">
-                <div className="rounded-xl bg-blue-500/12 p-2 text-blue-500 shadow-sm shrink-0">
+                <div className="rounded-xl bg-blue-500/[0.12] p-2 text-blue-500 shadow-sm shrink-0">
                   <Plug size={18} />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -85,14 +86,21 @@ export function BuiltinMcpDetailSheet({ open, server, onOpenChange }: BuiltinMcp
                   />
                   <InfoTile label="配置来源" value={source.source} />
                 </div>
-                <section className="rounded-lg bg-muted/45 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground">如何配置</div>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{source.description}</p>
+                {server.id === 'proma-cloud' ? (
+                  <section className="flex flex-col gap-3">
+                    <div className="text-sm font-medium text-foreground">配置</div>
+                    <PromaCloudConfigPanel />
+                  </section>
+                ) : (
+                  <section className="rounded-lg bg-muted/45 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground">如何配置</div>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{source.description}</p>
+                      </div>
                     </div>
-                  </div>
-                </section>
+                  </section>
+                )}
                 <section className="flex flex-col gap-3">
                   <div className="text-sm font-medium text-foreground">工具</div>
                   <div className="flex flex-col gap-2">

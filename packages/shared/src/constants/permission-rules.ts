@@ -34,6 +34,9 @@ export const SAFE_TOOLS: readonly string[] = [
 
   'TaskOutput',      // 后台任务输出
   'Present',         // 声明交付物：只校验路径，不复制也不修改文件
+  // Proma Cloud 联网检索：只读网络请求，与受管浏览器同类；计费与限流在服务端处理。
+  'WebSearch',
+  'WebFetch',
   // 注意：AskUserQuestion 不在此列表 — 由 canUseTool 拦截并展示交互式 UI
 ]
 

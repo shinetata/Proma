@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, LEGACY_CHAT_IPC_CHANNELS, FILE_RESOURCE_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS,
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, LEGACY_CHAT_IPC_CHANNELS, FILE_RESOURCE_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS, PROMA_CLOUD_IPC_CHANNELS,
 } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
@@ -83,6 +83,10 @@ import type {
   InstallerProgressPayload,
   ProxyConfig,
   SystemProxyDetectResult,
+  PromaCloudConfigSummary,
+  PromaCloudConfigUpdateInput,
+  PromaCloudConnectionTestInput,
+  PromaCloudConnectionTestResult,
   GitHubRelease,
   GitHubReleaseListOptions,
   PermissionRequest,
@@ -499,6 +503,17 @@ export interface ElectronAPI {
 
   /** 检测系统代理 */
   detectSystemProxy: () => Promise<SystemProxyDetectResult>
+
+  // ===== Proma Cloud 联网检索配置 =====
+
+  /** 读取配置摘要（不含 API Key） */
+  getPromaCloudConfig: () => Promise<PromaCloudConfigSummary>
+
+  /** 更新配置并返回最新摘要 */
+  updatePromaCloudConfig: (input: PromaCloudConfigUpdateInput) => Promise<PromaCloudConfigSummary>
+
+  /** 测试连接；不传参数时使用已保存配置 */
+  testPromaCloudConnection: (input?: PromaCloudConnectionTestInput) => Promise<PromaCloudConnectionTestResult>
 
   // ===== Agent 会话管理相关 =====
 
@@ -1695,6 +1710,19 @@ const electronAPI: ElectronAPI = {
 
   detectSystemProxy: () => {
     return ipcRenderer.invoke(PROXY_IPC_CHANNELS.DETECT_SYSTEM)
+  },
+
+  // Proma Cloud 联网检索配置
+  getPromaCloudConfig: () => {
+    return ipcRenderer.invoke(PROMA_CLOUD_IPC_CHANNELS.GET_CONFIG)
+  },
+
+  updatePromaCloudConfig: (input: PromaCloudConfigUpdateInput) => {
+    return ipcRenderer.invoke(PROMA_CLOUD_IPC_CHANNELS.UPDATE_CONFIG, input)
+  },
+
+  testPromaCloudConnection: (input?: PromaCloudConnectionTestInput) => {
+    return ipcRenderer.invoke(PROMA_CLOUD_IPC_CHANNELS.TEST_CONNECTION, input)
   },
 
   // Agent 会话管理

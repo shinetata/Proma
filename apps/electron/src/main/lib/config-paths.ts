@@ -302,6 +302,18 @@ export function getChatToolsConfigPath(): string {
 }
 
 /**
+ * 获取 Proma Cloud 配置路径
+ *
+ * 打包后的 Dev 构建与商业版共用 ~/.proma 时落到 proma-cloud.dev.json，
+ * 商业版不认识这个文件名，因此不会读写它。
+ *
+ * @returns ~/.proma/proma-cloud.json（Dev 共用目录时为 proma-cloud.dev.json）
+ */
+export function getPromaCloudConfigPath(): string {
+  return resolveDevAwareConfigPath('proma-cloud.json')
+}
+
+/**
  * 获取第三方 MCP OAuth 凭据的加密索引路径。
  *
  * 文件只保存 Electron safeStorage 加密后的 payload，不会写入任何工作区 mcp.json。

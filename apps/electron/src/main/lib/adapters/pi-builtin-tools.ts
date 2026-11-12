@@ -45,6 +45,7 @@ import { buildMemoryTools } from './pi-memory-tools'
 import { buildInstructionMigrationTools } from './pi-instruction-migration-tools'
 import { buildProjectMapTools } from './pi-project-map-tools'
 import { buildPresentTools } from './pi-present-tools'
+import { buildWebResearchTools } from './pi-web-research-tools'
 import { wrapSynchronousKnowledgeTools } from './pi-knowledge-change-tools'
 import type { KnowledgeFileChange } from '../knowledge-change-tracker'
 import { resolveAutomationWorkspace, summarizeAutomationWorkspace } from './automation-workspace'
@@ -127,6 +128,8 @@ export interface PiBuiltinToolsContext {
   projectKnowledgeRoot?: string
   /** 记忆/规则文件被工具改动时推送到界面。 */
   onKnowledgeChanges?: (changes: KnowledgeFileChange[]) => void
+  /** 已配置 Proma Cloud API Key 且开启联网检索时，注入 WebSearch / WebFetch。 */
+  webResearchAvailable?: boolean
 }
 
 function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
@@ -1711,6 +1714,16 @@ export async function buildPiBuiltinTools(
     tools.push(...buildBrowserTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入受管浏览器工具失败:', error)
+  }
+
+  // 联网检索走 Proma Cloud，不受 MCP 配置影响；用户会话、自动任务、协作子会话与
+  // 外部 Bridge 一律注册——没有可交互浏览器时它正是首选检索路径。
+  if (ctx.webResearchAvailable) {
+    try {
+      tools.push(...buildWebResearchTools(sdk))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入联网检索工具失败:', error)
+    }
   }
 
   const cloudTools = buildPromaCloudTools(sdk, ctx)
