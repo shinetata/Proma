@@ -424,9 +424,11 @@ function ExplorationBringBackAction({
       return
     }
     const branchTitle = sessions.find((item) => item.id === branch.sessionId)?.title || '探索分支'
-    const referenceLabel = `探索后新增内容 · ${branchTitle}`
-    const referenceMarkdown = `这是探索后的新增内容：&session:${branch.sessionId}::${encodeURIComponent(referenceLabel)}`
-    const referenceHtml = `<p>这是探索后的新增内容：<span data-type="mention" data-id="${escapeHtml(branch.sessionId)}" data-label="${escapeHtml(referenceLabel)}" data-mention-suggestion-char="&">${escapeHtml(referenceLabel)}</span></p>`
+    // 带回内容只是普通会话引用，不再加「这是探索后的新增内容：」前缀句；
+    // 分支语义由标签「探索 · 标题」表达，主线发送后仍会带上分支的探索增量上下文。
+    const referenceLabel = `探索 · ${branchTitle}`
+    const referenceMarkdown = `&session:${branch.sessionId}::${encodeURIComponent(referenceLabel)}`
+    const referenceHtml = `<p><span data-type="mention" data-id="${escapeHtml(branch.sessionId)}" data-label="${escapeHtml(referenceLabel)}" data-mention-suggestion-char="&">${escapeHtml(referenceLabel)}</span></p>`
     setParentDraftSyncVersions((previous) => {
       const next = new Map(previous)
       next.set(parentSessionId, (next.get(parentSessionId) ?? 0) + 1)
@@ -445,7 +447,7 @@ function ExplorationBringBackAction({
       next.set(parentSessionId, nextHtml)
       return next
     })
-    toast.success('已添加探索引用', { description: '探索 Tab 保持打开；主会话发送后 Agent 会读取该标记。' })
+    toast.success('已添加探索引用', { description: '探索 Tab 保持打开；引用会作为普通会话引用出现在输入框里。' })
   }, [branch.sessionId, latestExplorationConclusion, parentDraftHtml, parentDrafts, parentSessionId, sessions, setParentDraftHtml, setParentDrafts, setParentDraftSyncVersions])
 
   return (

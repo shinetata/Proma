@@ -844,7 +844,7 @@ export interface AgentSessionMeta {
   forkSourceDir?: string
   /** Pi `/tree` 探索分支所属的主线会话；仅探索分支设置，普通 fork 保持 undefined。 */
   explorationParentSessionId?: string
-  /** Pi `/tree` 探索分支的 assistant 分叉锚点。 */
+  /** Pi `/tree` 探索分支的 assistant 分叉锚点（所选轮次末尾的主线 assistant 消息）。 */
   explorationSourceMessageId?: string
   /** 用户可读的分叉来源，用于重新打开探索分支时恢复上下文提示。 */
   explorationSourceLabel?: string

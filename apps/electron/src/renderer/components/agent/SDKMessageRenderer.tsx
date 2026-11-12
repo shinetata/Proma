@@ -25,6 +25,7 @@ import { buildAssistantTurnSections, findTrailingResult, formatTurnDuration, get
 import { ProcessMotion, ProcessStepGroup, TurnLayoutTransition, TurnProcessSummary, type TurnOutcome } from './ProcessTimeline'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
+import { getTurnForkTargetUuid } from '@/lib/turn-fork-target'
 // 会话转录的纯逻辑(Turn 分组 / 快照去重 / 预览)已下沉到 @proma/session-core 作为唯一真源。
 // 这里 import 供本文件内部使用，并 re-export 以保持既有 `from './SDKMessageRenderer'` 导入方零改动。
 import {
@@ -805,10 +806,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         // 仅取主线 assistant 消息的 uuid 作为 fork/rewind 截断点。
         // SDK forkSession 内部会过滤掉 sidechain（parent_tool_use_id 非空的子代理消息），
         // 若把子代理 uuid 传过去会触发 "Message <uuid> not found in session" 错误。
-        const mainlineAssistants = turn.assistantMessages.filter((m) => !m.parent_tool_use_id)
-        const lastUuid = mainlineAssistants.length > 0
-          ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
-          : undefined
+        const lastUuid = getTurnForkTargetUuid(turn.assistantMessages)
         const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
         if (!hasActions && !stoppedByUser && !isInterrupted) return null
         return (
@@ -1679,6 +1677,8 @@ export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ g
       data-message-id={groupId}
       data-message-role="assistant"
       data-message-turn={historyTurn}
+      // 轮次分叉点：本轮最后一条主线 assistant 消息。历史选区据此从轮末而非选区所在消息分叉。
+      data-turn-fork-uuid={getTurnForkTargetUuid(group.assistantMessages)}
       data-agent-live={isStreaming ? 'true' : undefined}
     >
       <AssistantTurnRenderer
