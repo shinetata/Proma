@@ -35,6 +35,8 @@ import {
   runAutomationNow,
 } from '../automation-scheduler'
 import { getAgentSessionMeta, updateAgentSessionMeta } from '../agent-session-manager'
+import { appendCheckoutEntry, checkoutFromActiveWorktree } from '../session-checkout'
+import { readWorktreeHeadCommit } from '../session-checkout-restore'
 import { getMainWindow } from '../main-window-store'
 import { getMainRepoRoot, listWorktrees } from '../git-diff-service'
 import { getAgentMemoryContext, getProjectFilesPath, getWorktreeRepos, getAgentWorkspace, listAgentWorkspaces, listAgentWorkspacesWithProjectRootStatus } from '../agent-workspace-manager'
@@ -1344,13 +1346,39 @@ async function selectAgentWorktree(ctx: PiBuiltinToolsContext, worktreePath: str
   }
   if (!authorized) throw new Error('该 worktree 不属于当前会话已授权或已登记的仓库')
 
+  const previous = getAgentSessionMeta(ctx.sessionId)
+  // 切回主仓库时写一条 project 记录：历史末尾代表当前检出，
+  // 同时清空 activeWorktree 以保持旧字段语义。
+  if (selected.isMain) {
+    const projectPath = canonicalPath(selected.path)
+    const session = updateAgentSessionMeta(ctx.sessionId, {
+      activeWorktree: undefined,
+      checkoutHistory: appendCheckoutEntry(previous?.checkoutHistory, {
+        kind: 'project',
+        path: projectPath,
+        since: Date.now(),
+      }),
+    })
+    const mainWindow = getMainWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(AGENT_IPC_CHANNELS.ACTIVE_WORKTREE_UPDATED, session)
+    }
+    return session
+  }
+
+  const activeWorktree = {
+    path: canonicalPath(selected.path),
+    mainRepoRoot: canonicalPath(mainRepoRoot),
+    branch: selected.branch,
+    selectedAt: Date.now(),
+  }
+  // 选中的 HEAD 作为基准提交，分支以后被删也能按它重建 worktree。
+  const baseCommit = await readWorktreeHeadCommit(activeWorktree.path)
   const session = updateAgentSessionMeta(ctx.sessionId, {
-    activeWorktree: {
-      path: canonicalPath(selected.path),
-      mainRepoRoot: canonicalPath(mainRepoRoot),
-      branch: selected.branch,
-      selectedAt: Date.now(),
-    },
+    activeWorktree,
+    // 目录日志与旧字段双写：主进程的 cwd、相对路径与授权根解析读日志，
+    // renderer 与历史会话继续读 activeWorktree。
+    checkoutHistory: appendCheckoutEntry(previous?.checkoutHistory, checkoutFromActiveWorktree(activeWorktree, baseCommit)),
   })
   const mainWindow = getMainWindow()
   if (mainWindow && !mainWindow.isDestroyed()) {

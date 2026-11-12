@@ -84,6 +84,8 @@ export function getPreviewFileAccess(
     unrestricted: file.unrestricted === true,
     ...(file.workspaceSkillSlug ? { workspaceSkillSlug: file.workspaceSkillSlug } : {}),
     ...(file.legacySkillFilePath ? { legacySkillFilePath: file.legacySkillFilePath } : {}),
+    // 会话检出引用优先于可能已失效的绝对路径。
+    ...(file.sessionFileRef ? { sessionFileRef: file.sessionFileRef } : {}),
     candidateBasePaths: getPreviewCandidateBasePaths(
       file.basePaths,
       file.gitRoot,

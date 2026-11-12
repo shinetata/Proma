@@ -34,6 +34,7 @@ function PreviewPanelContent({ sessionId, file, onClose, compact, toolbarActions
             unrestricted={file.unrestricted}
             workspaceSkillSlug={file.workspaceSkillSlug}
             legacySkillFilePath={file.legacySkillFilePath}
+            sessionFileRef={file.sessionFileRef}
             baseRef={file.baseRef}
             onEmptyDiff={onClose}
             compact={compact}

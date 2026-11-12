@@ -125,6 +125,7 @@ export function PreviewTabContent({ sessionId }: PreviewTabContentProps): React.
             unrestricted={currentFile.unrestricted}
             workspaceSkillSlug={currentFile.workspaceSkillSlug}
             legacySkillFilePath={currentFile.legacySkillFilePath}
+            sessionFileRef={currentFile.sessionFileRef}
             baseRef={currentFile.baseRef}
             toolbarActions={toolbarActions}
           />

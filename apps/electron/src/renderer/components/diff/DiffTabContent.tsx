@@ -237,6 +237,8 @@ interface DiffTabContentProps {
   workspaceSkillSlug?: string
   /** Original absolute Skill entry path used as a legacy fallback. */
   legacySkillFilePath?: string
+  /** 相对会话检出根的文件引用；绝对路径失效时优先按它解析。 */
+  sessionFileRef?: { sessionId: string; path: string; kind?: 'session' | 'absolute' }
   /** diff 模式下检测到内容为空（无差异）时回调，用于自动关闭预览面板 */
   onEmptyDiff?: () => void
   /** 由外层场景注入的额外工具按钮，例如默认应用打开、返回会话 */
@@ -249,7 +251,7 @@ interface DiffTabContentProps {
   onClose?: () => void
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef, compact = false, onClose }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, sessionFileRef, onEmptyDiff, toolbarActions, baseRef, compact = false, onClose }: DiffTabContentProps): React.ReactElement {
   const ext = getExtension(filePath)
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isHtml = previewOnly && HTML_EXTS.has(ext)
@@ -575,10 +577,11 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     unrestricted: unrestricted === true,
     ...(workspaceSkillSlug ? { workspaceSkillSlug } : {}),
     ...(legacySkillFilePath ? { legacySkillFilePath } : {}),
+    ...(sessionFileRef ? { sessionFileRef } : {}),
     // 历史工具调用的预览仅有相对 filePath；以当前 dirPath（通常是会话 CWD）补全解析上下文。
     // 绝对路径不追加该回退，避免失效路径按同名文件误命中会话目录。
     candidateBasePaths: getPreviewCandidateBasePaths(basePaths, isAbsoluteFilePath(filePath) ? undefined : dirPath),
-  }), [sessionId, basePaths, dirPath, filePath, unrestricted, workspaceSkillSlug, legacySkillFilePath])
+  }), [sessionId, basePaths, dirPath, filePath, unrestricted, workspaceSkillSlug, legacySkillFilePath, sessionFileRef])
 
   const resolveProjectMarkdownImageSrc = React.useMemo(() => (
     createLiveMarkdownImageResolver(filePath, async (candidate) => (

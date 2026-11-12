@@ -43,6 +43,8 @@ import type {
   AgentSessionMeta,
   AgentActiveSessionSnapshot,
   SetAgentSessionActiveWorktreeInput,
+  RestoreAgentCheckoutInput,
+  RestoreAgentCheckoutResult,
   SDKMessage,
   AgentSendInput,
   AgentThinkingLevel,
@@ -539,6 +541,9 @@ export interface ElectronAPI {
   /** 选择或清除当前会话的活动 worktree */
   setAgentSessionActiveWorktree: (input: SetAgentSessionActiveWorktreeInput) => Promise<AgentSessionMeta>
 
+  /** 按会话检出历史恢复被删除的 worktree */
+  restoreAgentCheckout: (input: RestoreAgentCheckoutInput) => Promise<RestoreAgentCheckoutResult>
+
   /** 删除 Agent 会话 */
   deleteAgentSession: (id: string) => Promise<void>
 
@@ -903,7 +908,7 @@ export interface ElectronAPI {
   writeTextFile: (filePath: string, content: string, access?: import('@proma/shared').FileAccessOptions) => Promise<boolean>
 
   // 仅解析文件路径（供 PDF/图片等用 proma-file:// 加载）
-  resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<(import('@proma/shared').ResolvedFileUrl & { resolvedPath?: string }) | null>
+  resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').ResolvedLocalFile | null>
 
   /** 解析当前 Markdown 同目录内的相对媒体文件（仅供 LiveMarkdown 图片使用） */
   resolveMarkdownMedia: (markdownFilePath: string, src: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').ResolvedFileUrl | null>
@@ -1733,6 +1738,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_ACTIVE_WORKTREE, input)
   },
 
+  restoreAgentCheckout: (input: RestoreAgentCheckoutInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_CHECKOUT, input) as Promise<RestoreAgentCheckoutResult>
+  },
+
   deleteAgentSession: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SESSION, id)
   },
@@ -2282,7 +2291,7 @@ const electronAPI: ElectronAPI = {
   },
 
   resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<(import('@proma/shared').ResolvedFileUrl & { resolvedPath?: string }) | null>
+    return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@proma/shared').ResolvedLocalFile | null>
   },
 
   resolveMarkdownMedia: (markdownFilePath: string, src: string, access?: import('@proma/shared').FileAccessOptions) => {

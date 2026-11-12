@@ -32,7 +32,6 @@ import { VaultView } from '@/components/vault/VaultView'
 import { OBSIDIAN_NAME, ObsidianIcon } from '@/components/obsidian/obsidian-brand'
 import {
   currentSessionSidePanelOpenAtom,
-  agentFileSourceFilterMapAtom,
   workspaceFilesVersionAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -80,7 +79,7 @@ import {
   getTerminalIdFromSidePanelTab,
   getTerminalSidePanelTab,
 } from '@/atoms/agent-atoms'
-import type { AgentSidePanelTab, AgentFileSourceFilter, AgentExplorationBranchTab, WorkspaceComponentTab } from '@/atoms/agent-atoms'
+import type { AgentSidePanelTab, AgentExplorationBranchTab, WorkspaceComponentTab } from '@/atoms/agent-atoms'
 import { WorkspaceMemoryTab } from '@/components/agent-skills/WorkspaceMemoryTab'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { PlanningView } from '@/components/planning/PlanningView'
@@ -127,7 +126,6 @@ import { getDelegatedChildSessionStatus, getDelegationStatusIconClass } from '@/
 import { markSessionCompletionViewed } from '@/lib/agent-completion-presence'
 import { rememberStopGenerationTarget } from '@/lib/stop-generation-target'
 import { TerminalTabContent } from '@/components/tabs/TerminalTabContent'
-import { shouldShowBothFileSources } from './file-panel-layout'
 import {
   clampRightWorkspaceSplitRatio,
   clampRightWorkspaceSplitRatioForWidth,
@@ -850,26 +848,36 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     [sessionPath, workspaceFilesPath, extraPathsMemo]
   )
 
-  const fileSourceFilterMap = useAtomValue(agentFileSourceFilterMapAtom)
-  const setFileSourceFilterMap = useSetAtom(agentFileSourceFilterMapAtom)
-  const fileSourceFilter = fileSourceFilterMap[sessionId] ?? 'project'
-  const setFileSourceFilter = React.useCallback((source: AgentFileSourceFilter) => {
-    setFileSourceFilterMap((prev) => {
-      if (prev[sessionId] === source) return prev
-      return { ...prev, [sessionId]: source }
-    })
-  }, [sessionId, setFileSourceFilterMap])
-  const sessionFileRoots = React.useMemo(
-    () => sessionPath ? [{ path: sessionPath, scope: 'session' as const }] : [],
-    [sessionPath],
+  // 文件树只有一棵：项目根 + 会话工作台，不再提供「会话文件 / 项目文件」来源切换。
+  // 会话工作台是隐式来源：没有项目根，或工作台里确实有内容时才出现，避免空目录噪音。
+  const [sessionWorkbenchHasEntries, setSessionWorkbenchHasEntries] = React.useState(false)
+  React.useEffect(() => {
+    let disposed = false
+    setSessionWorkbenchHasEntries(false)
+    if (!sessionPath) return
+    window.electronAPI.listDirectory(sessionPath, { sessionId })
+      .then((entries) => {
+        if (!disposed) setSessionWorkbenchHasEntries(entries.length > 0)
+      })
+      .catch(() => {
+        if (!disposed) setSessionWorkbenchHasEntries(false)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [sessionPath, sessionId, filesVersion])
+  const showProjectFileRoot = Boolean(workspaceFilesPath) && !isProjectRootUnavailable
+  const showSessionFileRoot = Boolean(sessionPath) && (!showProjectFileRoot || sessionWorkbenchHasEntries)
+  // 只有两个根同时出现时，才用 badge 区分会话文件，单根时不需要。
+  const showSessionFileBadge = showProjectFileRoot && showSessionFileRoot
+  const fileTreeRoots = React.useMemo(
+    () => [
+      ...(showProjectFileRoot && workspaceFilesPath ? [{ path: workspaceFilesPath, scope: 'project' as const }] : []),
+      ...(showSessionFileRoot && sessionPath ? [{ path: sessionPath, scope: 'session' as const }] : []),
+    ],
+    [sessionPath, showProjectFileRoot, showSessionFileRoot, workspaceFilesPath],
   )
-  const projectFileRoots = React.useMemo(
-    () => workspaceFilesPath && !isProjectRootUnavailable
-      ? [{ path: workspaceFilesPath, scope: 'project' as const }]
-      : [],
-    [isProjectRootUnavailable, workspaceFilesPath],
-  )
-  // Files 将会话与项目文件放在同一视图；FileBrowser 自己处理对应根目录的自动定位。
+  // Files 把项目与会话文件放在同一视图；FileBrowser 自己处理对应根目录的自动定位。
   // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开。
 
   // 同步 basePaths ref（供 handleFilePreview 使用，避免 hooks 声明顺序问题）
@@ -1600,50 +1608,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     persistSplitRatio(0.5)
   }, [persistSplitRatio, split, updateSplit])
 
-  const renderFileSourceContent = (scope: 'session' | 'project'): React.ReactElement => {
-    const isSession = scope === 'session'
-    const hasAttachedItems = isSession ? hasSessionAttachedItems : hasWorkspaceAttachedItems
-    const roots = isSession ? sessionFileRoots : projectFileRoots
-    // 双栏布局中打开文件后，内联预览的列表应停留在同一来源（商业版 Jt）。
-    const handleScopedFilePreview = (filePath: string) => {
-      setFileSourceFilter(scope)
-      handleFilePreview(filePath)
-    }
-
-    return (
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" aria-label={isSession ? '会话文件' : '项目文件'}>
-        <h3 className="flex h-8 shrink-0 items-center px-3 text-[13px] font-medium text-muted-foreground">
-          {isSession ? '会话文件' : '项目文件'}
-        </h3>
-        <PersistentFileScrollArea
-          stateKey={getFileBrowserScrollStateKey(sessionId, scope, roots)}
-          autoRevealTs={activeAutoRevealTs}
-          className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pt-1"
-        >
-          {isSession && attachedFiles.length > 0 && (
-            <AttachedFilesSection scope="session" showSessionBadge={false} attachedFiles={attachedFiles} onDetach={handleDetachFile} onAddToChat={handleAddToChat} onFilePreview={handleScopedFilePreview} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-          )}
-          {isSession && attachedDirs.length > 0 && (
-            <AttachedDirsSection scope="session" showSessionBadge={false} attachedDirs={attachedDirs} onDetach={handleDetachDirectory} refreshVersion={filesVersion} onAddToChat={handleAddToChat} onFilePreview={handleScopedFilePreview} onOpenDirectoryTerminal={handleOpenDirectoryTerminal} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-          )}
-          {!isSession && wsAttachedFiles.length > 0 && (
-            <AttachedFilesSection scope="project" attachedFiles={wsAttachedFiles} onDetach={handleDetachWorkspaceFile} onAddToChat={handleAddToChat} onFilePreview={handleScopedFilePreview} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-          )}
-          {!isSession && wsAttachedDirs.length > 0 && (
-            <AttachedDirsSection scope="project" attachedDirs={wsAttachedDirs} onDetach={handleDetachWorkspaceDirectory} refreshVersion={filesVersion} onAddToChat={handleAddToChat} onFilePreview={handleScopedFilePreview} onOpenDirectoryTerminal={handleOpenDirectoryTerminal} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-          )}
-          {!isSession && isProjectRootUnavailable && <div className="mx-2 my-2 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">本地项目根目录不可用；当前会话文件仍可访问。</div>}
-          <FileBrowser roots={roots} access={fileAccess} projectRootPath={isProjectRootUnavailable ? null : workspaceFilesPath} showSessionBadge={false} hideToolbar embedded hideEmpty={hasAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleScopedFilePreview} onOpenDirectoryTerminal={handleOpenDirectoryTerminal} />
-          {workspaceSlug && (isSession ? (
-            <FileDropZone workspaceSlug={workspaceSlug} sessionId={sessionId} target="session" onFilesUploaded={handleFilesUploaded} onFilesAttached={handleSessionFilesAttached} onAttachFolder={handleAttachSessionFolder} onFoldersDropped={handleSessionFoldersDropped} />
-          ) : !isProjectRootUnavailable ? (
-            <FileDropZone workspaceSlug={workspaceSlug} target="workspace" onFilesUploaded={handleFilesUploaded} onFilesAttached={handleWorkspaceFilesAttached} onAttachFolder={handleAttachWorkspaceFolder} onFoldersDropped={handleWorkspaceFoldersDropped} />
-          ) : null)}
-        </PersistentFileScrollArea>
-      </section>
-    )
-  }
-
   const renderWorkspaceTabContent = (paneTab: AgentSidePanelTab, paneWidth: number, inPreviewList = false): React.ReactNode => {
     const paneInlinePreview = !inPreviewList && shouldShowInlinePreview(paneTab, inlinePreview?.source, Boolean(split))
       ? inlinePreview
@@ -1675,16 +1639,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     const paneLauncherId = getLauncherIdFromSidePanelTab(paneTab)
     const paneTerminalId = getTerminalIdFromSidePanelTab(paneTab)
     const paneTerminal = paneTerminalId ? terminalTabs.find((terminal) => terminal.terminalId === paneTerminalId) ?? null : null
-    // Files 的双来源布局必须由它所在 Pane 的真实宽度决定，而不是整个右侧工作区宽度。
-    const showBothFileSources = shouldShowBothFileSources(paneWidth)
-    const showSessionFiles = showBothFileSources || fileSourceFilter === 'session'
-    const showProjectFiles = showBothFileSources || fileSourceFilter === 'project'
-    const visibleFileRoots = [
-      ...(showProjectFiles ? projectFileRoots : []),
-      ...(showSessionFiles ? sessionFileRoots : []),
-    ]
-    const hasVisibleSessionAttachedItems = showSessionFiles && hasSessionAttachedItems
-    const hasVisibleWorkspaceAttachedItems = showProjectFiles && hasWorkspaceAttachedItems
+    // Files 只有单一文件树，Pane 宽度不再影响来源布局。
+    const hasVisibleAttachedItems = hasSessionAttachedItems || hasWorkspaceAttachedItems
 
     if (paneLauncherId && launcherTabs.includes(paneLauncherId)) {
       return (
@@ -1795,103 +1751,122 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       <div className="flex-1 min-h-0 flex flex-col pt-2 mx-2 mb-2">
         {sessionPath ? (
           <>
-            {inPreviewList && (
-              <FileSourceSwitcher source={fileSourceFilter} onSourceChange={setFileSourceFilter}>
-                {fileSourceFilter === 'session' && workspaceSlug && (
-                  <FileDropZone compact workspaceSlug={workspaceSlug} sessionId={sessionId} target="session" onFilesUploaded={handleFilesUploaded} onFilesAttached={handleSessionFilesAttached} onAttachFolder={handleAttachSessionFolder} onFoldersDropped={handleSessionFoldersDropped} />
-                )}
-                {fileSourceFilter === 'project' && !isProjectRootUnavailable && workspaceSlug && (
-                  <FileDropZone compact workspaceSlug={workspaceSlug} target="workspace" onFilesUploaded={handleFilesUploaded} onFilesAttached={handleWorkspaceFilesAttached} onAttachFolder={handleAttachWorkspaceFolder} onFoldersDropped={handleWorkspaceFoldersDropped} />
-                )}
-              </FileSourceSwitcher>
-            )}
             <FileSearchBar
-              workspaceFilesPath={isProjectRootUnavailable ? null : workspaceFilesPath}
-              sessionPath={sessionPath}
+              workspaceFilesPath={showProjectFileRoot ? workspaceFilesPath : null}
+              sessionPath={showSessionFileRoot ? sessionPath : null}
               sessionAttachedDirs={attachedDirs}
               workspaceAttachedDirs={wsAttachedDirs}
-              sourceFilter={showBothFileSources ? 'all' : fileSourceFilter}
-              showSessionBadge={showBothFileSources}
+              sourceFilter="all"
+              showSessionBadge={showSessionFileBadge}
               placeholder="搜索文件..."
               sessionId={sessionId}
               onFilePreview={handleFilePreview}
+            />
+            <PersistentFileScrollArea
+              stateKey={getFileBrowserScrollStateKey(sessionId, 'all', fileTreeRoots)}
+              autoRevealTs={activeAutoRevealTs}
+              className="flex-1 min-h-0 overflow-y-auto scrollbar-thin pt-1"
             >
-              {!showBothFileSources && !inPreviewList && (
-                <div className="file-source-tabbar main-tabbar mt-1.5 flex h-8 border-b border-border/80" role="tablist" aria-label="文件来源">
-                  <button
-                    type="button"
-                    role="tab"
-                    className={cn(
-                      'relative flex-1 h-8 px-2 font-medium text-[13px] transition-colors select-none',
-                      fileSourceFilter === 'project'
-                        ? 'app-tab-active text-foreground'
-                        : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-                    )}
-                    aria-selected={fileSourceFilter === 'project'}
-                    onClick={() => setFileSourceFilter('project')}
-                  >
-                    项目文件
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    className={cn(
-                      'relative flex-1 h-8 px-2 font-medium text-[13px] transition-colors select-none',
-                      fileSourceFilter === 'session'
-                        ? 'app-tab-active text-foreground'
-                        : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-                    )}
-                    aria-selected={fileSourceFilter === 'session'}
-                    onClick={() => setFileSourceFilter('session')}
-                  >
-                    会话文件
-                  </button>
+              {/* 拖拽引用提示：引用块样式，左侧竖线 + 缩进，与下方文件列表内容左对齐 */}
+              {!inPreviewList && (
+                <div className="mb-1.5 ml-4 border-l-2 border-primary/40 pl-2 text-[13px] leading-4 text-foreground/75">
+                  支持拖拽文件或文件夹到输入框，实现引用
                 </div>
               )}
-            </FileSearchBar>
-            {showBothFileSources ? (
-              <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border/70 overflow-hidden pt-2">
-                {renderFileSourceContent('project')}
-                {renderFileSourceContent('session')}
-              </div>
-            ) : (
-              <PersistentFileScrollArea
-                stateKey={getFileBrowserScrollStateKey(sessionId, fileSourceFilter, visibleFileRoots)}
-                autoRevealTs={activeAutoRevealTs}
-                className="flex-1 min-h-0 overflow-y-auto scrollbar-thin pt-1"
-              >
-                {/* 拖拽引用提示：引用块样式，左侧竖线 + 缩进，与下方文件列表内容左对齐 */}
-                {!inPreviewList && (
-                  <div className="mb-1.5 ml-4 border-l-2 border-primary/40 pl-2 text-[13px] leading-4 text-foreground/75">
-                    支持拖拽文件或文件夹到输入框，实现引用
-                  </div>
-                )}
-                {showProjectFiles && wsAttachedFiles.length > 0 && (
-                  <AttachedFilesSection scope="project" attachedFiles={wsAttachedFiles} onDetach={handleDetachWorkspaceFile} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-                )}
-                {showProjectFiles && wsAttachedDirs.length > 0 && (
-                  <AttachedDirsSection scope="project" attachedDirs={wsAttachedDirs} onDetach={handleDetachWorkspaceDirectory} refreshVersion={filesVersion} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} onOpenDirectoryTerminal={handleOpenDirectoryTerminal} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-                )}
-                {showSessionFiles && attachedFiles.length > 0 && (
-                  <AttachedFilesSection scope="session" showSessionBadge={false} attachedFiles={attachedFiles} onDetach={handleDetachFile} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-                )}
-                {showSessionFiles && attachedDirs.length > 0 && (
-                  <AttachedDirsSection scope="session" showSessionBadge={false} attachedDirs={attachedDirs} onDetach={handleDetachDirectory} refreshVersion={filesVersion} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} onOpenDirectoryTerminal={handleOpenDirectoryTerminal} allowedPaths={basePathsRef.current} sessionId={sessionId} />
-                )}
-                {showProjectFiles && isProjectRootUnavailable && (
-                  <div className="mx-2 my-2 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-                    本地项目根目录不可用；当前会话文件仍可访问。
-                  </div>
-                )}
-                <FileBrowser roots={visibleFileRoots} access={fileAccess} projectRootPath={isProjectRootUnavailable ? null : workspaceFilesPath} showSessionBadge={false} hideToolbar embedded hideEmpty={hasVisibleSessionAttachedItems || hasVisibleWorkspaceAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} onOpenDirectoryTerminal={handleOpenDirectoryTerminal} />
-                {!inPreviewList && showSessionFiles && workspaceSlug && (
-                  <FileDropZone workspaceSlug={workspaceSlug} sessionId={sessionId} target="session" onFilesUploaded={handleFilesUploaded} onFilesAttached={handleSessionFilesAttached} onAttachFolder={handleAttachSessionFolder} onFoldersDropped={handleSessionFoldersDropped} />
-                )}
-                {!inPreviewList && showProjectFiles && !isProjectRootUnavailable && workspaceSlug && (
-                  <FileDropZone workspaceSlug={workspaceSlug} target="workspace" onFilesUploaded={handleFilesUploaded} onFilesAttached={handleWorkspaceFilesAttached} onAttachFolder={handleAttachWorkspaceFolder} onFoldersDropped={handleWorkspaceFoldersDropped} />
-                )}
-              </PersistentFileScrollArea>
-            )}
+              {wsAttachedFiles.length > 0 && (
+                <AttachedFilesSection
+                  title={showSessionFileBadge ? '附加到项目' : undefined}
+                  scope="project"
+                  attachedFiles={wsAttachedFiles}
+                  onDetach={handleDetachWorkspaceFile}
+                  onAddToChat={handleAddToChat}
+                  onFilePreview={handleFilePreview}
+                  allowedPaths={basePathsRef.current}
+                  sessionId={sessionId}
+                />
+              )}
+              {wsAttachedDirs.length > 0 && (
+                <AttachedDirsSection
+                  title={showSessionFileBadge ? '附加到项目' : undefined}
+                  scope="project"
+                  attachedDirs={wsAttachedDirs}
+                  onDetach={handleDetachWorkspaceDirectory}
+                  refreshVersion={filesVersion}
+                  onAddToChat={handleAddToChat}
+                  onFilePreview={handleFilePreview}
+                  onOpenDirectoryTerminal={handleOpenDirectoryTerminal}
+                  allowedPaths={basePathsRef.current}
+                  sessionId={sessionId}
+                />
+              )}
+              {attachedFiles.length > 0 && (
+                <AttachedFilesSection
+                  title={showSessionFileBadge ? '附加到本次会话' : undefined}
+                  scope="session"
+                  showSessionBadge={false}
+                  attachedFiles={attachedFiles}
+                  onDetach={handleDetachFile}
+                  onAddToChat={handleAddToChat}
+                  onFilePreview={handleFilePreview}
+                  allowedPaths={basePathsRef.current}
+                  sessionId={sessionId}
+                />
+              )}
+              {attachedDirs.length > 0 && (
+                <AttachedDirsSection
+                  title={showSessionFileBadge ? '附加到本次会话' : undefined}
+                  scope="session"
+                  showSessionBadge={false}
+                  attachedDirs={attachedDirs}
+                  onDetach={handleDetachDirectory}
+                  refreshVersion={filesVersion}
+                  onAddToChat={handleAddToChat}
+                  onFilePreview={handleFilePreview}
+                  onOpenDirectoryTerminal={handleOpenDirectoryTerminal}
+                  allowedPaths={basePathsRef.current}
+                  sessionId={sessionId}
+                />
+              )}
+              {isProjectRootUnavailable && (
+                <div className="mx-2 my-2 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+                  本地项目根目录不可用；当前会话文件仍可访问。
+                </div>
+              )}
+              <FileBrowser
+                roots={fileTreeRoots}
+                access={fileAccess}
+                projectRootPath={showProjectFileRoot ? workspaceFilesPath : null}
+                showSessionBadge={showSessionFileBadge}
+                hideToolbar
+                embedded
+                hideEmpty={hasVisibleAttachedItems}
+                onAddToChat={handleAddToChat}
+                onFilePreview={handleFilePreview}
+                onOpenDirectoryTerminal={handleOpenDirectoryTerminal}
+              />
+              {/* 会话工作台为空时目录行不显示，但保留落盘入口：拖入文件后工作台根会自动出现。 */}
+              {!inPreviewList && workspaceSlug && (
+                <FileDropZone
+                  workspaceSlug={workspaceSlug}
+                  sessionId={sessionId}
+                  target="session"
+                  onFilesUploaded={handleFilesUploaded}
+                  onFilesAttached={handleSessionFilesAttached}
+                  onAttachFolder={handleAttachSessionFolder}
+                  onFoldersDropped={handleSessionFoldersDropped}
+                />
+              )}
+              {!inPreviewList && workspaceSlug && showProjectFileRoot && (
+                <FileDropZone
+                  workspaceSlug={workspaceSlug}
+                  target="workspace"
+                  onFilesUploaded={handleFilesUploaded}
+                  onFilesAttached={handleWorkspaceFilesAttached}
+                  onAttachFolder={handleAttachWorkspaceFolder}
+                  onFoldersDropped={handleWorkspaceFoldersDropped}
+                />
+              )}
+            </PersistentFileScrollArea>
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-muted-foreground text-[13px]">等待会话初始化...</div>
@@ -1992,50 +1967,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             )}
           </div>
         </div>
-    </div>
-  )
-}
-
-// ===== 内联预览列表的文件来源切换（商业版 JYt） =====
-
-const FILE_SOURCE_OPTIONS: { value: AgentFileSourceFilter; label: string }[] = [
-  { value: 'project', label: '项目文件' },
-  { value: 'session', label: '会话文件' },
-]
-
-function FileSourceSwitcher({ source, onSourceChange, children }: {
-  source: AgentFileSourceFilter
-  onSourceChange: (source: AgentFileSourceFilter) => void
-  children?: React.ReactNode
-}): React.ReactElement {
-  return (
-    <div className="mb-1 flex h-8 shrink-0 items-center gap-1">
-      <div
-        role="tablist"
-        aria-label="文件来源"
-        title="切换文件来源；文件可拖到输入框引用"
-        className="flex h-7 min-w-0 flex-1 items-center gap-0.5 rounded-md bg-muted/45 p-0.5"
-      >
-        {FILE_SOURCE_OPTIONS.map((option) => {
-          const selected = source === option.value
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              onClick={() => onSourceChange(option.value)}
-              className={cn(
-                'flex h-6 min-w-0 flex-1 items-center justify-center rounded px-1.5 text-[12px] font-medium transition-colors',
-                selected ? 'bg-content-area text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <span className="truncate">{option.label}</span>
-            </button>
-          )
-        })}
-      </div>
-      {children}
     </div>
   )
 }

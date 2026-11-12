@@ -112,6 +112,8 @@ import type {
   RevertFileInput,
   FileAccessOptions,
   ResolvedFileUrl,
+  RestoreAgentCheckoutInput,
+  RestoreAgentCheckoutResult,
   Automation,
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -285,7 +287,13 @@ import {
   searchAgentSessionMessages,
   searchAgentSessionReferences,
   resolveAgentCwd,
+  resolveSessionCheckoutCwd,
+  defaultCheckoutEntry,
 } from './lib/agent-session-manager'
+import { appendCheckoutEntry, checkoutFromActiveWorktree } from './lib/session-checkout'
+import { readWorktreeHeadCommit, restoreWorktree } from './lib/session-checkout-restore'
+import { inferWorktreeRelativePath, joinUnderRoot, rebaseStaleWorktreePath } from './lib/stale-worktree-path-rebase'
+import { normalizeSessionFileRef, resolveSessionFileRefPath, toSessionFileRefRelPath } from './lib/session-file-ref'
 import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, listActiveAgentSessionSnapshots, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
@@ -486,6 +494,14 @@ function getAuthorizedRoots(options?: FileAccessOptions): string[] {
     if (meta?.activeWorktree?.path) {
       roots.push(meta.activeWorktree.path)
     }
+    // worktree 属于会话自己的仓库：主仓库根与历史中其他 worktree 的主仓库一并授权，
+    // 否则切到 worktree 后会因为仓库不在项目目录下而丢失对仓库内其它路径的访问。
+    if (meta?.activeWorktree?.mainRepoRoot) {
+      roots.push(meta.activeWorktree.mainRepoRoot)
+    }
+    for (const item of meta?.checkoutHistory ?? []) {
+      if (item.kind === 'worktree' && item.mainRepoRoot) roots.push(item.mainRepoRoot)
+    }
     if (meta?.attachedFiles) {
       roots.push(...meta.attachedFiles)
     }
@@ -563,7 +579,26 @@ function normalizeFileAccessOptions(value?: FileAccessOptions | string[]): FileA
     candidateBasePaths: Array.isArray(value.candidateBasePaths)
       ? value.candidateBasePaths.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : undefined,
+    // 引用字段逐项校验：sessionId 必须与访问上下文一致，路径与定位号由 normalizeSessionFileRef 负责。
+    sessionFileRef: normalizeFileAccessOptionsFileRef(value.sessionFileRef, value.sessionId),
     unrestricted: value.unrestricted === true,
+  }
+}
+
+/** renderer 传入的文件引用不可信；只保留能对应到本会话的部分。 */
+function normalizeFileAccessOptionsFileRef(
+  ref: unknown,
+  sessionId: unknown,
+): FileAccessOptions['sessionFileRef'] {
+  if (!ref || typeof ref !== 'object' || typeof sessionId !== 'string') return undefined
+  const normalized = normalizeSessionFileRef(ref, sessionId)
+  if (!normalized) return undefined
+  return {
+    sessionId: normalized.sessionId,
+    path: normalized.path,
+    kind: normalized.kind,
+    ...(normalized.line ? { line: normalized.line } : {}),
+    ...(normalized.column ? { column: normalized.column } : {}),
   }
 }
 
@@ -608,6 +643,11 @@ function getExplicitPreviewDirectoryRoots(options?: FileAccessOptions): string[]
     const meta = getAgentSessionMeta(options.sessionId)
     if (meta?.attachedDirectories) meta.attachedDirectories.forEach(add)
     add(meta?.activeWorktree?.path)
+    // worktree 会话的文件引用常指向主仓库（如对比 main 分支），主仓库根需同步授权。
+    add(meta?.activeWorktree?.mainRepoRoot)
+    for (const item of meta?.checkoutHistory ?? []) {
+      if (item.kind === 'worktree') add(item.mainRepoRoot)
+    }
     if (meta?.workspaceId) {
       const workspace = getAgentWorkspace(meta.workspaceId)
       if (workspace) add(getAgentSessionWorkspacePath(workspace.slug, options.sessionId))
@@ -680,13 +720,156 @@ function getPreviewCandidateBasePaths(options?: FileAccessOptions): string[] | u
   return bases.length > 0 ? bases : undefined
 }
 
+/** 是否为已存在的普通文件；失效 worktree 重定位与文件引用解析都只接受文件。 */
+function isExistingRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** 会话已登记的仓库主仓库根；用于文件引用和失效路径重定位的候选根。 */
+async function getRegisteredRepoRoots(options?: FileAccessOptions): Promise<string[]> {
+  const roots: string[] = []
+  for (const workspaceSlug of getWorkspaceSlugsForAccess(options)) {
+    let repos: import('@proma/shared').WorkspaceWorktreeRepo[]
+    try {
+      repos = await getWorktreeRepos(workspaceSlug)
+    } catch {
+      continue
+    }
+    for (const repo of repos) {
+      const mainRepoRoot = await getMainRepoRoot(repo.repoPath)
+      if (mainRepoRoot) roots.push(mainRepoRoot)
+    }
+  }
+  return roots
+}
+
+/**
+ * 会话文件引用的解析根：当前检出、各历史 worktree 所属主仓库、已登记仓库。
+ * 顺序即优先级，调用方取第一个能拼出真实文件的根。
+ */
+async function getSessionFileRefRoots(options?: FileAccessOptions): Promise<string[]> {
+  const roots: string[] = []
+  const push = (candidate?: string): void => {
+    if (!candidate || candidate.length === 0 || roots.includes(candidate)) return
+    roots.push(candidate)
+  }
+  const meta = options?.sessionId ? getAgentSessionMeta(options.sessionId) : undefined
+  const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+  const checkout = meta && workspace ? resolveSessionCheckoutCwd(workspace, meta) : null
+  push(checkout?.path)
+  if (checkout?.kind === 'worktree') push(checkout.mainRepoRoot)
+  push(meta?.activeWorktree?.mainRepoRoot)
+  for (const item of [...(meta?.checkoutHistory ?? [])].reverse()) {
+    if (item.kind === 'worktree') push(item.mainRepoRoot)
+  }
+  for (const repoRoot of await getRegisteredRepoRoots(options)) push(repoRoot)
+  return roots
+}
+
+/** 按会话文件引用拼出真实文件路径；引用无效或没有命中时返回 null。 */
+async function resolveSessionFileRefTarget(options?: FileAccessOptions): Promise<string | null> {
+  const ref = options?.sessionFileRef
+  if (!ref || !options?.sessionId) return null
+  const normalized = normalizeSessionFileRef(ref, options.sessionId)
+  if (!normalized) return null
+  if (normalized.kind === 'absolute') return normalized.path
+  for (const root of await getSessionFileRefRoots(options)) {
+    const candidate = resolveSessionFileRefPath(normalized, root)
+    if (isExistingRegularFile(candidate)) return candidate
+  }
+  return null
+}
+
+/** 已解析文件相对会话检出根的路径；渲染层据此把绝对引用升级为可迁移的引用。 */
+async function sessionRelativePathFor(result: string, options?: FileAccessOptions): Promise<string | undefined> {
+  if (!options?.sessionId) return undefined
+  for (const root of await getSessionFileRefRoots(options)) {
+    const relativePath = toSessionFileRefRelPath(result, root)
+    if (relativePath) return relativePath
+  }
+  for (const basePath of options.candidateBasePaths ?? []) {
+    if (typeof basePath !== 'string' || !isAbsolute(basePath)) continue
+    const relativePath = toSessionFileRefRelPath(result, basePath)
+    if (relativePath) return relativePath
+  }
+  return undefined
+}
+
+/**
+ * 失效 worktree 路径重定位。
+ *
+ * 绝对路径指向的历史 worktree 已被删除时，按「旧根相对路径」或路径里的
+ * `worktrees/<name>/` 段在当前可见根中找同名文件；命中后仍需通过授权根校验。
+ */
+async function resolveRebasedWorktreePath(
+  filePath: string,
+  options: FileAccessOptions | undefined,
+  allowedRoots?: string[],
+): Promise<string | null> {
+  const { isAbsolutePreviewPath } = await import('./lib/file-preview-service')
+  if (!isAbsolutePreviewPath(filePath) || filePath.startsWith('~')) return null
+  const meta = options?.sessionId ? getAgentSessionMeta(options.sessionId) : undefined
+  const staleRoots: string[] = []
+  if (meta?.activeWorktree?.path) staleRoots.push(meta.activeWorktree.path)
+  for (const item of meta?.checkoutHistory ?? []) {
+    if (item.kind === 'worktree') staleRoots.push(item.path)
+  }
+
+  const inferred = inferWorktreeRelativePath(filePath, staleRoots)
+  if (!inferred) return null
+
+  const roots: string[] = []
+  const pushRoot = (candidate?: string): void => {
+    if (!candidate || candidate.length === 0 || roots.includes(candidate)) return
+    roots.push(candidate)
+  }
+  const isPathUnderRoot = (path: string, root: string): boolean => {
+    const normalizedPath = path.replace(/\\/g, '/')
+    const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '')
+    return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`)
+  }
+  for (const item of meta?.checkoutHistory ?? []) {
+    if (item.kind === 'worktree' && item.mainRepoRoot && isPathUnderRoot(filePath, item.path)) {
+      pushRoot(item.mainRepoRoot)
+    }
+  }
+  if (meta?.activeWorktree?.mainRepoRoot && isPathUnderRoot(filePath, meta.activeWorktree.path)) {
+    pushRoot(meta.activeWorktree.mainRepoRoot)
+  }
+  const sessionWorkspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+  const checkout = meta && sessionWorkspace ? resolveSessionCheckoutCwd(sessionWorkspace, meta) : null
+  if (checkout?.kind === 'worktree') pushRoot(checkout.mainRepoRoot)
+  for (const repoRoot of await getRegisteredRepoRoots(options)) pushRoot(repoRoot)
+
+  const result = rebaseStaleWorktreePath({
+    stalePath: filePath,
+    staleRoots,
+    roots,
+    isFile: isExistingRegularFile,
+  })
+  if (!result) return null
+  if (allowedRoots && !allowedRoots.some((root) => isUnderRoot(realpathOrResolve(result.path), root))) {
+    return null
+  }
+  console.log(`[IPC] 文件引用指向已失效 worktree，已重定基（${result.via}）: ${filePath} -> ${result.path}`)
+  return result.path
+}
+
 /** Resolve preview-only relative paths before handing them to OS-level file actions. */
 async function resolveFileAccessPath(filePath: string, options?: FileAccessOptions): Promise<string> {
   const [{ resolve }, { resolveFilePath }] = await Promise.all([
     import('node:path'),
     import('./lib/file-preview-service'),
   ])
-  return resolveFilePath(filePath, getPreviewCandidateBasePaths(options)) ?? resolve(filePath)
+  // 会话文件引用优先：它能跟随 worktree 换位置，比原绝对路径更可靠。
+  const requestedPath = (await resolveSessionFileRefTarget(options)) ?? filePath
+  return resolveFilePath(requestedPath, getPreviewCandidateBasePaths(options))
+    ?? (await resolveRebasedWorktreePath(requestedPath, options, getAuthorizedRoots(options)))
+    ?? resolve(requestedPath)
 }
 
 /** 所有内联预览在注册文件 URL 或读取内容前，都必须验证最终 realpath 的授权范围。 */
@@ -694,16 +877,24 @@ async function resolveAuthorizedPreviewPath(filePath: string, options?: FileAcce
   const { isAbsolutePreviewPath, resolveFilePath } = await import('./lib/file-preview-service')
   const candidateBasePaths = (getPreviewCandidateBasePaths(options) ?? [])
     .filter((basePath) => isExplicitPreviewDirectoryPath(basePath, options))
-  const resolved = resolveFilePath(filePath, candidateBasePaths)
-  if (!resolved || !isExplicitPreviewFilePath(resolved, options)) return null
+  const authorize = (target: string): string | null => {
+    const resolved = resolveFilePath(target, candidateBasePaths)
+    if (!resolved || !isExplicitPreviewFilePath(resolved, options)) return null
 
-  // 相对引用必须留在最初的显式候选目录中。聚合工作区授权不能让绝对或
-  // 相对预览横向扩张到其他会话；绝对路径同样只接受当前会话的显式目录/文件授权。
-  if (!isAbsolutePreviewPath(filePath) && !options?.unrestricted) {
-    const realResolved = realpathOrResolve(resolved)
-    if (!candidateBasePaths.some((basePath) => isUnderRoot(realResolved, basePath))) return null
+    // 相对引用必须留在最初的显式候选目录中。聚合工作区授权不能让绝对或
+    // 相对预览横向扩张到其他会话；绝对路径同样只接受当前会话的显式目录/文件授权。
+    if (!isAbsolutePreviewPath(target) && !options?.unrestricted) {
+      const realResolved = realpathOrResolve(resolved)
+      if (!candidateBasePaths.some((basePath) => isUnderRoot(realResolved, basePath))) return null
+    }
+    return resolved
   }
-  return resolved
+
+  const requestedPath = (await resolveSessionFileRefTarget(options)) ?? filePath
+  const authorized = authorize(requestedPath)
+  if (authorized) return authorized
+  const rebased = await resolveRebasedWorktreePath(requestedPath, options)
+  return rebased === null ? null : authorize(rebased)
 }
 
 /** 当前 Agent 的 Write/Edit 相对路径必须按实际运行 cwd 解析。 */
@@ -2478,8 +2669,14 @@ export function registerIpcHandlers(): void {
       }
       const session = getAgentSessionMeta(input.sessionId)
       if (!session) throw new Error(`Agent 会话不存在: ${input.sessionId}`)
+      const sessionWorkspace = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
       if (input.worktreePath === null) {
-        return updateAgentSessionMeta(input.sessionId, { activeWorktree: undefined })
+        // 回到默认 cwd 也应记一条 project / workbench 记录，历史末尾始终代表当前检出。
+        const fallback = defaultCheckoutEntry(sessionWorkspace, session.id, session.agentCwdMode)
+        return updateAgentSessionMeta(input.sessionId, {
+          activeWorktree: undefined,
+          ...(fallback ? { checkoutHistory: appendCheckoutEntry(session.checkoutHistory, fallback) } : {}),
+        })
       }
 
       const access = normalizeFileAccessOptions({ sessionId: input.sessionId })
@@ -2495,14 +2692,79 @@ export function registerIpcHandlers(): void {
 
       const mainRepoRoot = await getMainRepoRoot(selected.path)
       if (!mainRepoRoot) throw new Error('无法确认 worktree 的主仓库')
+      const activeWorktree = {
+        path: realpathOrResolve(selected.path),
+        mainRepoRoot: realpathOrResolve(mainRepoRoot),
+        branch: selected.branch,
+        selectedAt: Date.now(),
+      }
+      // 记录当前 HEAD 作为基准提交，分支以后被删也能重建 worktree。
+      const baseCommit = await readWorktreeHeadCommit(activeWorktree.path)
       return updateAgentSessionMeta(input.sessionId, {
-        activeWorktree: {
-          path: realpathOrResolve(selected.path),
-          mainRepoRoot: realpathOrResolve(mainRepoRoot),
-          branch: selected.branch,
-          selectedAt: Date.now(),
-        },
+        activeWorktree,
+        checkoutHistory: appendCheckoutEntry(session.checkoutHistory, checkoutFromActiveWorktree(activeWorktree, baseCommit)),
       })
+    },
+  )
+
+  // 按会话检出历史重建被删除的 worktree
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RESTORE_CHECKOUT,
+    async (_, input: RestoreAgentCheckoutInput): Promise<RestoreAgentCheckoutResult> => {
+      if (!input || typeof input.sessionId !== 'string' || !input.sessionId) {
+        return { restored: false, error: '恢复参数无效' }
+      }
+      const session = getAgentSessionMeta(input.sessionId)
+      if (!session) return { restored: false, error: '会话不存在' }
+      const history = session.checkoutHistory ?? []
+      // 指定路径时按路径匹配；不传时恢复最近一条已失效的 worktree 记录。
+      const target = input.worktreePath
+        ? history.find((item) => item.kind === 'worktree'
+          && normalizePathForCompare(realpathOrResolve(item.path)) === normalizePathForCompare(realpathOrResolve(input.worktreePath!)))
+        : [...history].reverse().find((item) => item.kind === 'worktree' && !existsSync(item.path))
+      if (!target || target.kind !== 'worktree' || !target.branch) {
+        return { restored: false, error: '没有可恢复的 worktree 记录' }
+      }
+      if (existsSync(target.path)) {
+        return { restored: false, path: target.path, error: '目录已存在，无需恢复' }
+      }
+      const repoPath = target.mainRepoRoot ? await getMainRepoRoot(target.mainRepoRoot) : null
+      if (!repoPath) return { restored: false, error: '无法确认 worktree 所属仓库' }
+      const access = normalizeFileAccessOptions({ sessionId: input.sessionId })
+      if (!(await ensurePathAllowedWithWorktree(repoPath, access))) {
+        return { restored: false, error: '无权恢复该 worktree' }
+      }
+
+      try {
+        const result = await restoreWorktree({
+          path: target.path,
+          branch: target.branch,
+          ...(target.baseCommit ? { baseCommit: target.baseCommit } : {}),
+          repoPath,
+        })
+        const activeWorktree = {
+          path: target.path,
+          mainRepoRoot: repoPath,
+          branch: target.branch,
+          selectedAt: Date.now(),
+        }
+        const updated = updateAgentSessionMeta(input.sessionId, {
+          activeWorktree,
+          checkoutHistory: appendCheckoutEntry(history, { ...target, since: Date.now() }),
+        })
+        // 渲染层的改动 Tab 依赖这条广播刷新当前 worktree。
+        for (const window of BrowserWindow.getAllWindows()) {
+          window.webContents.send(AGENT_IPC_CHANNELS.ACTIVE_WORKTREE_UPDATED, updated)
+        }
+        return {
+          restored: true,
+          path: target.path,
+          branch: target.branch,
+          branchRecreated: result.branchRecreated,
+        }
+      } catch (error) {
+        return { restored: false, error: error instanceof Error ? error.message : '恢复 worktree 失败' }
+      }
     },
   )
 
@@ -3989,12 +4251,20 @@ export function registerIpcHandlers(): void {
       const { existsSync } = await import('node:fs')
       const { resolveTargetPath } = await import('./lib/file-preview-service')
 
-      const resolvedPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
-      if (!existsSync(resolvedPath)) {
-        console.warn('[IPC] shell:show-item-in-folder 路径不存在:', resolvedPath)
+      let existingPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
+      // 历史 worktree 被删除后旧绝对路径已失效：按推断出的相对路径在候选根中找同名文件。
+      if (!existsSync(existingPath)) {
+        const inferred = inferWorktreeRelativePath(filePath)
+        const rebased = inferred
+          ? (candidateBasePaths ?? []).map((base) => joinUnderRoot(base, inferred.relPath)).find((candidate) => existsSync(candidate))
+          : undefined
+        if (rebased) existingPath = rebased
+      }
+      if (!existsSync(existingPath)) {
+        console.warn('[IPC] shell:show-item-in-folder 路径不存在:', existingPath)
         return false
       }
-      shell.showItemInFolder(resolve(resolvedPath))
+      shell.showItemInFolder(resolve(existingPath))
       return true
     }
   )
@@ -4085,14 +4355,16 @@ export function registerIpcHandlers(): void {
   // 仅解析文件路径（供 PDF/图片等用 proma-file:// 加载）
   ipcMain.handle(
     'file:resolve-path',
-    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<(ResolvedFileUrl & { resolvedPath: string }) | null> => {
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<import('@proma/shared').ResolvedLocalFile | null> => {
       const options = normalizeFileAccessOptions(access)
       const result = await resolveAuthorizedPreviewPath(filePath, options)
       if (!result) return null
       // registerPromaFilePath 对目录路径会抛「不是文件」。渲染端（如悬浮预览解析 markdown
       // 链接）可能传入目录路径，此处优雅降级为 null，而不是让异常冒泡成未捕获的 handler 错误。
       try {
-        return { url: registerPromaFilePath(result), resolvedPath: result }
+        // relPath 让渲染层把预览引用存成相对会话检出根的路径，worktree 换位置后仍能打开。
+        const relPath = await sessionRelativePathFor(result, options)
+        return { url: registerPromaFilePath(result), resolvedPath: result, ...(relPath ? { relPath } : {}) }
       } catch (err) {
         console.warn('[IPC] file:resolve-path 无法注册为文件，跳过:', result, err instanceof Error ? err.message : err)
         return null

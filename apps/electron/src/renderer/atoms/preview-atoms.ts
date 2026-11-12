@@ -27,6 +27,11 @@ export interface PreviewFile {
   workspaceSkillSlug?: string
   /** Original absolute Skill entry path used only when the managed locator cannot resolve. */
   legacySkillFilePath?: string
+  /**
+   * 会话文件引用：相对当前会话检出根的路径。
+   * 带上后，worktree 被删除或重建到别处时仍能打开同一文件。
+   */
+  sessionFileRef?: { sessionId: string; path: string; kind?: 'session' | 'absolute' }
   /** 文件是否落在当前会话的 diff scope 内（与 getUnstagedChanges 的 candidates 对齐） */
   inDiffScope?: boolean
   /** 基准 ref（如 "origin/main"），用于 worktree vs main 模式的 diff 对比 */

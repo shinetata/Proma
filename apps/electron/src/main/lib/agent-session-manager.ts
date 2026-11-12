@@ -51,6 +51,7 @@ import { getConversationMessages } from './legacy-chat-store'
 import { convertLegacyMessage, isUserInputMessage } from '@proma/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
+import { appendCheckoutEntry, checkoutFromActiveWorktree, defaultCheckout, isCurrentCheckout, resolveSessionCheckout } from './session-checkout'
 
 /**
  * 会话索引文件格式
@@ -393,7 +394,42 @@ export function resolveSessionWorkbenchContextDir(
   return layout === 'root' ? sessionDir : join(sessionDir, '.context')
 }
 
-/** Agent 运行 cwd 与 Proma 会话 sidecar 工作台目录解析。 */
+/** 只判断绝对路径且当前是目录，供检出解析注入。 */
+function isExistingDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 按会话检出历史解析当前可用的 cwd。
+ *
+ * 与 resolveAgentCwd 的区别：不接收调用方覆盖的参数，只读会话元数据，
+ * 用于授权根、相对路径与文件引用解析；调用方需要显式覆盖时用 resolveAgentCwd。
+ */
+export function resolveSessionCheckoutCwd(
+  workspace: Pick<AgentWorkspace, 'slug'> | undefined,
+  meta: Pick<AgentSessionMeta, 'id' | 'agentCwdMode' | 'activeWorktree'> & Pick<Partial<AgentSessionMeta>, 'checkoutHistory'>,
+): ReturnType<typeof resolveSessionCheckout> {
+  if (!workspace) return null
+  return resolveSessionCheckout({
+    history: meta.checkoutHistory,
+    activeWorktree: meta.activeWorktree,
+    agentCwdMode: getAgentCwdMode(meta),
+    projectPath: getProjectFilesPath(workspace.slug),
+    workbenchPath: getAgentSessionWorkspacePath(workspace.slug, meta.id),
+    isDirectory: isExistingDirectory,
+  })
+}
+
+/**
+ * Agent 运行 cwd。
+ *
+ * 优先使用 checkoutHistory 末尾仍存在的目录；调用方显式传入的 activeWorktree
+ * 若尚未进入历史，先补一条再解析，保证「刚选择的 worktree」立即生效。
+ */
 export function resolveAgentCwd(
   workspace: Pick<AgentWorkspace, 'slug'> | undefined,
   sessionId: string,
@@ -401,13 +437,39 @@ export function resolveAgentCwd(
   activeWorktree?: AgentActiveWorktree,
 ): string | undefined {
   if (!workspace) return undefined
-  const activeWorktreePath = getActiveWorktreePath({ activeWorktree })
-  if (activeWorktreePath) return activeWorktreePath
-  return getAgentCwdMode({ agentCwdMode }) === 'project'
-    ? getProjectFilesPath(workspace.slug)
-    : getAgentSessionWorkspacePath(workspace.slug, sessionId)
+  const meta = getAgentSessionMeta(sessionId)
+  const history = activeWorktree && !isCurrentCheckout(meta?.checkoutHistory, activeWorktree.path)
+    ? appendCheckoutEntry(meta?.checkoutHistory, checkoutFromActiveWorktree(activeWorktree))
+    : meta?.checkoutHistory
+  const checkout = resolveSessionCheckout({
+    history,
+    activeWorktree: activeWorktree ?? meta?.activeWorktree,
+    agentCwdMode: agentCwdMode ?? getAgentCwdMode(meta),
+    projectPath: getProjectFilesPath(workspace.slug),
+    workbenchPath: getAgentSessionWorkspacePath(workspace.slug, sessionId),
+    isDirectory: isExistingDirectory,
+  })
+  return checkout?.path
 }
 
+/**
+ * agentCwdMode 对应的默认检出记录；用于回退时写入历史，找不到默认目录时返回 null。
+ */
+export function defaultCheckoutEntry(
+  workspace: Pick<AgentWorkspace, 'slug'> | undefined,
+  sessionId: string,
+  agentCwdMode?: AgentCwdMode,
+): import('@proma/shared').SessionCheckoutEntry | null {
+  if (!workspace) return null
+  const entry = defaultCheckout(
+    getAgentCwdMode({ agentCwdMode }),
+    getProjectFilesPath(workspace.slug),
+    getAgentSessionWorkspacePath(workspace.slug, sessionId),
+  )
+  return entry ? { ...entry, since: Date.now() } : null
+}
+
+/** 会话工作台目录（sidecar 私有资料根）。 */
 export function resolveAgentWorkbenchDir(
   workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'> | undefined,
   sessionId: string,
@@ -681,7 +743,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'codexFastMode' | 'narrationMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'activeWorktree' | 'pinned' | 'starred' | 'starredAt' | 'archived' | 'isDraft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'explorationParentSessionId' | 'explorationSourceMessageId' | 'explorationSourceLabel' | 'explorationTitleInitializedAt' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'codexFastMode' | 'narrationMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'activeWorktree' | 'checkoutHistory' | 'pinned' | 'starred' | 'starredAt' | 'archived' | 'isDraft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'explorationParentSessionId' | 'explorationSourceMessageId' | 'explorationSourceLabel' | 'explorationTitleInitializedAt' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -861,6 +923,9 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
       piEntryBindings: undefined,
       // 已切换到另一项目，不能沿用旧项目授权下选择的 worktree。
       activeWorktree: undefined,
+      // 检出历史同样属于旧项目：若旧 worktree 目录仍存在，保留历史会让新项目的会话
+      // 把 cwd 解析回旧 worktree，因此一并丢弃。
+      checkoutHistory: undefined,
       updatedAt: now,
     }
     index.sessions[i] = updated
@@ -959,6 +1024,11 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
   )
   const destDir = resolveAgentCwd(workspace, newMeta.id, newMeta.agentCwdMode, sourceActiveWorktree)
   const destWorkbenchDir = resolveAgentWorkbenchDir(workspace, newMeta.id)
+  // 检出历史随分叉复制；workbench 条目必须指向新会话自己的工位，
+  // 否则分叉会话会把源会话的私有资料当成自己的 cwd。
+  const forkedCheckoutHistory = sourceMeta.checkoutHistory?.map((item) => (
+    item.kind === 'workbench' && destWorkbenchDir ? { ...item, path: destWorkbenchDir } : item
+  ))
 
   try {
     const sdk = await import('@earendil-works/pi-coding-agent')
@@ -987,6 +1057,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
       piSessionFile,
       piEntryBindings: branchBindings,
       activeWorktree: sourceActiveWorktree,
+      ...(forkedCheckoutHistory ? { checkoutHistory: forkedCheckoutHistory } : {}),
       forkSourceDir: sourceDir,
       ...explorationMeta,
     })
@@ -994,6 +1065,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     newMeta.piSessionFile = piSessionFile
     newMeta.piEntryBindings = branchBindings
     newMeta.activeWorktree = sourceActiveWorktree
+    if (forkedCheckoutHistory) newMeta.checkoutHistory = forkedCheckoutHistory
     Object.assign(newMeta, explorationMeta)
 
     if (sourceWorkbenchDir && destWorkbenchDir) await copyForkWorkspaceFiles(sourceWorkbenchDir, destWorkbenchDir)

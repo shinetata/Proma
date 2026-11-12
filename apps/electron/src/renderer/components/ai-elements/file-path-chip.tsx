@@ -35,6 +35,8 @@ import {
 interface FileResolutionCacheEntry {
   exists: boolean
   resolvedPath?: string
+  /** 相对会话检出根的路径；worktree 换位置后仍能据此重新打开。 */
+  relPath?: string
 }
 
 /** 文件存在性缓存（模块级共享，避免重复 IPC）。key 包含会话授权上下文。 */
@@ -72,6 +74,7 @@ function resolveFilePathEntry(
     const entry: FileResolutionCacheEntry = {
       exists: resolved !== null,
       ...(resolved?.resolvedPath ? { resolvedPath: resolved.resolvedPath } : {}),
+      ...(resolved?.relPath ? { relPath: resolved.relPath } : {}),
     }
     fileExistsCache.set(key, entry)
     return entry
@@ -212,6 +215,8 @@ export function FilePathChip({ filePath, basePath, basePaths, sessionId, classNa
       filePath: entry?.resolvedPath ?? cleanPath,
       previewOnly: true,
       basePaths: candidateBases.length > 0 ? candidateBases : undefined,
+      // 主进程已给出相对检出根的路径时登记成可迁移引用，避免 worktree 重建后绝对路径失效。
+      ...(entry?.relPath ? { sessionFileRef: { sessionId: resolvedSessionId, path: entry.relPath } } : {}),
     })
   }, [getSessionId, resolveCurrentPath, openPreview, cleanPath, candidateBases])
 

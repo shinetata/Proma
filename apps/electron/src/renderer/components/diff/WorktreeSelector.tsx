@@ -1,9 +1,12 @@
 import * as React from 'react'
-import { Check, ChevronDown, GitBranch, Loader2, RotateCw, Terminal } from 'lucide-react'
+import { useAtomValue } from 'jotai'
+import { Check, ChevronDown, GitBranch, Loader2, RotateCw, RotateCcw, Terminal } from 'lucide-react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { WorktreeInfo, WorkspaceWorktreeRepo } from '@proma/shared'
+import type { SessionCheckoutEntry, WorktreeInfo, WorkspaceWorktreeRepo } from '@proma/shared'
 import { normalizePathForCompare } from '@proma/shared'
+import { agentSessionsAtom } from '@/atoms/agent-atoms'
 
 interface WorktreeSelectorProps {
   sessionId: string
@@ -40,6 +43,26 @@ export function WorktreeSelector({
   // 初次挂载即保留工具栏高度，避免切回「改动」Tab 后选择器异步出现而推挤文件列表。
   const [isLoading, setIsLoading] = React.useState(true)
   const [hasFetchedOnce, setHasFetchedOnce] = React.useState(false)
+  const sessions = useAtomValue(agentSessionsAtom)
+  /** 当前会话检出历史里已被删除、可以按记录重建的 worktree。 */
+  const restorableRecords = React.useMemo<SessionCheckoutEntry[]>(() => {
+    const session = sessions.find((item) => item.id === sessionId)
+    const history = session?.checkoutHistory ?? []
+    if (history.length === 0) return []
+    const visiblePaths = new Set(
+      repoWorktrees.flatMap((rw) => rw.worktrees.map((wt) => normalizePathKey(wt.path))),
+    )
+    const seen = new Set<string>()
+    return history.filter((item) => {
+      if (item.kind !== 'worktree' || !item.branch) return false
+      // 仍在列表里的 worktree 不需要恢复；同路径历史条目只保留一条。
+      const key = normalizePathKey(item.path)
+      if (visiblePaths.has(key) || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [repoWorktrees, sessionId, sessions])
+  const [restoringPath, setRestoringPath] = React.useState<string | null>(null)
   const dropdownRef = React.useRef<HTMLDivElement>(null)
   /** 丢弃较早请求的迟到响应，避免手动刷新后回滚到旧 Worktree 列表。 */
   const fetchSequenceRef = React.useRef(0)
@@ -102,6 +125,27 @@ export function WorktreeSelector({
     fetchWorktrees()
   }, [fetchWorktrees])
 
+  /** 按会话检出历史重建被删除的 worktree，成功后刷新列表并回到该目录。 */
+  const restoreCheckout = React.useCallback(async (record: SessionCheckoutEntry) => {
+    setRestoringPath(record.path)
+    try {
+      const result = await window.electronAPI.restoreAgentCheckout({ sessionId, worktreePath: record.path })
+      if (!result.restored) {
+        toast.error(result.error ?? '恢复 worktree 失败')
+        return
+      }
+      const branch = result.branch ?? record.branch ?? ''
+      toast.success(`已恢复 worktree：${branch}`, {
+        description: result.branchRecreated ? '已按基准提交重建分支' : undefined,
+      })
+      await fetchWorktrees()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '恢复 worktree 失败')
+    } finally {
+      setRestoringPath(null)
+    }
+  }, [fetchWorktrees, sessionId])
+
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -119,14 +163,17 @@ export function WorktreeSelector({
   const hasMultipleRepos = repoWorktrees.length > 1
   const listId = React.useId()
 
-  if (allWorktrees.length === 0 && !isLoading) return <></>
+  // 所有 worktree 都被删除时仍要显示选择器，否则恢复入口没有可挂载的位置。
+  if (allWorktrees.length === 0 && restorableRecords.length === 0 && !isLoading) return <></>
 
   // 商业版 mRt：在选择器第二行说明当前工作目录状态。
   const statusText = !hasFetchedOnce
     ? '正在检查 Worktree…'
     : selectedWorktree
       ? `Worktree · ${getPathBasename(selectedWorktree.path)}`
-      : allWorktrees.length > 0 ? '使用会话原有工作目录' : '暂无可切换的 Worktree'
+      : allWorktrees.length > 0
+        ? '使用会话原有工作目录'
+        : restorableRecords.length > 0 ? '有已删除的 Worktree 可恢复' : '暂无可切换的 Worktree'
 
   return (
     <div ref={dropdownRef} className="relative shrink-0 border-b border-border/50 bg-content-area pb-2 pt-1">
@@ -303,6 +350,35 @@ export function WorktreeSelector({
               </React.Fragment>
             ))}
           </div>
+          {restorableRecords.length > 0 && (
+            <>
+              <div className="my-1 h-px bg-border/70" />
+              <div className="flex h-6 items-center justify-between gap-2 px-2.5 text-[12px] text-muted-foreground" role="status">
+                <span className="min-w-0 truncate">已删除的 Worktree</span>
+              </div>
+              {restorableRecords.map((record) => (
+                <button
+                  key={record.path}
+                  type="button"
+                  onClick={() => { void restoreCheckout(record) }}
+                  disabled={restoringPath !== null}
+                  title={record.path}
+                  aria-label={`恢复 ${record.branch} Worktree`}
+                  className="flex min-h-10 w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-[background-color] hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+                    {restoringPath === record.path
+                      ? <Loader2 className="size-3.5 motion-safe:animate-spin" />
+                      : <RotateCcw className="size-3.5" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-foreground/80">恢复 {record.branch}</span>
+                    <span className="block truncate text-[10px] leading-4 text-muted-foreground/75">{record.path}</span>
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

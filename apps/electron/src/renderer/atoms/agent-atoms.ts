@@ -593,15 +593,6 @@ export const agentSidePanelLayoutAtomFamily = atomFamily((sessionId: string) => 
   },
 ))
 
-/** 文件来源选择：按会话持久化，未存储的会话默认显示项目文件。 */
-export type AgentFileSourceFilter = 'session' | 'project'
-export const agentFileSourceFilterMapAtom = atomWithStorage<Record<string, AgentFileSourceFilter>>(
-  'proma-agent-file-source-filter-map',
-  {},
-  undefined,
-  { getOnInit: true },
-)
-
 /**
  * 文件树展开状态。Files Tab 切换时 FileBrowser 会卸载，因此按会话与文件根保存
  * 每个目录的显式展开/折叠状态；仅用于当前应用运行期的 UI 恢复，不写入用户的长期偏好。
