@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, ChevronRight, Search, Plus, ServerCog, FolderOpen, Check, Sparkles, Loader2 } from 'lucide-react'
+import { Blocks, ChevronDown, ChevronRight, Search, Plus, ServerCog, FolderOpen, Check, Sparkles, Loader2, PowerOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -30,7 +30,7 @@ import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
 import { AgentActionHint } from '@/components/agent/AgentActionHint'
 import { queuedTextToParagraphHtml } from '@/lib/agent-message-queue'
 import { detectIsMac } from '@/lib/platform'
-import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@proma/shared'
+import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta, SkillUsageSummary } from '@proma/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
 import { SkillCard } from './SkillCard'
 import { McpCard } from './McpCard'
@@ -40,12 +40,40 @@ import { ImportSkillDialog } from './ImportSkillDialog'
 import { BuiltinMcpDetailSheet } from './BuiltinMcpDetailSheet'
 import { CapabilityPageHeader } from './CapabilityPageHeader'
 import { groupSkills } from './skillGrouping'
+import { getSkillGroupAccent } from './skillVisual'
+import { SKILL_IDLE_DAYS, isIdleSkill } from './skillUsage'
 import { EMBEDDED_CATALOG_TWO_COLUMN_MIN_WIDTH, IntegrationCatalog } from './IntegrationCatalog'
 import { CredentialDialog } from './CredentialDialog'
 import { OAuthClientSecretDialog } from './OAuthClientSecretDialog'
 import { buildCatalogMcpGuidePrompt, MCP_INTEGRATION_CATALOG, getCatalogServerNames, isCatalogIntegrationVisible, matchesCatalogSearch, type CatalogCliIntegration, type CatalogCliProbeState, type CatalogCredentialIntegration, type CatalogGuidedIntegration, type CatalogMcpIntegration } from './integration-catalog'
 
 type CapabilityPageTab = 'skills' | 'mcp'
+
+/** 技能列表的状态筛选值；idle 即「30 天未用」视图。 */
+type SkillStatusFilter = 'all' | 'enabled' | 'disabled' | 'update' | 'idle'
+
+interface SkillStatusCounts {
+  all: number
+  enabled: number
+  disabled: number
+  update: number
+  idle: number
+}
+
+/** 状态筛选 chip 的定义与顺序，对齐商业版。 */
+const SKILL_STATUS_FILTERS: ReadonlyArray<{ value: SkillStatusFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'enabled', label: '已启用' },
+  { value: 'disabled', label: '已关闭' },
+  { value: 'update', label: '可更新' },
+  { value: 'idle', label: `${SKILL_IDLE_DAYS} 天未用` },
+]
+
+/** 各能力域的页头说明，文案对齐商业版。 */
+const PAGE_DESCRIPTIONS: Record<CapabilityPageTab, string> = {
+  skills: '按用途分组管理这个项目的 Skill：启用、更新、导入，或进入详情编辑 SKILL.md。',
+  mcp: '连接外部服务：从目录安装、配置凭据，并通过真实握手验证可用。',
+}
 
 /** 主区内容的水平内边距，与页头 chrome 条对齐（商业版 jR）。 */
 const PAGE_GUTTER_CLASS = 'px-5 sm:px-6 xl:px-8'
@@ -178,6 +206,8 @@ export function AgentSkillsView({
     : storedTab === 'mcp' ? 'mcp' : 'skills'
   const isMac = React.useMemo(() => detectIsMac(), [])
   const [search, setSearch] = React.useState('')
+  const [statusFilter, setStatusFilter] = React.useState<SkillStatusFilter>('all')
+  const [disablingIdleSkills, setDisablingIdleSkills] = React.useState(false)
   const [selectedSkillSlug, setSelectedSkillSlug] = React.useState<string | null>(null)
   const [selectedSkillWorkspaceSlug, setSelectedSkillWorkspaceSlug] = React.useState<string | null>(null)
   const [showCreateMcp, setShowCreateMcp] = React.useState(false)
@@ -216,9 +246,65 @@ export function AgentSkillsView({
     })
   }, [data.skills, q])
 
-  const customSkills = filteredSkills.filter((s) => !data.defaultSkillSlugs.has(s.slug))
-  const builtinSkills = filteredSkills.filter((s) => data.defaultSkillSlugs.has(s.slug))
-  const updateCount = data.skills.filter((s) => s.hasUpdate).length
+  // 闲置列表只在统计就绪后计算，否则会把所有 Skill 当成从未使用过。
+  const idleSkills = React.useMemo(() => {
+    if (!data.skillUsageReady) return []
+    return data.skills
+      .filter((skill) => isIdleSkill({ usage: data.skillUsage[skill.slug], isBuiltin: data.defaultSkillSlugs.has(skill.slug) }))
+      .sort((a, b) => (data.skillUsage[a.slug]?.lastUsedAt ?? 0) - (data.skillUsage[b.slug]?.lastUsedAt ?? 0))
+  }, [data.defaultSkillSlugs, data.skillUsage, data.skillUsageReady, data.skills])
+
+  const statusCounts = React.useMemo<SkillStatusCounts>(() => ({
+    all: data.skills.length,
+    enabled: data.skills.filter((skill) => skill.enabled).length,
+    disabled: data.skills.filter((skill) => !skill.enabled).length,
+    update: data.skills.filter((skill) => skill.hasUpdate).length,
+    idle: idleSkills.length,
+  }), [data.skills, idleSkills.length])
+
+  /** 搜索与状态筛选叠加：先按关键词收窄，再按状态过滤（闲置列表本身已排除内置）。 */
+  const visibleSkills = React.useMemo(() => {
+    switch (statusFilter) {
+      case 'enabled':
+        return filteredSkills.filter((skill) => skill.enabled)
+      case 'disabled':
+        return filteredSkills.filter((skill) => !skill.enabled)
+      case 'update':
+        return filteredSkills.filter((skill) => skill.hasUpdate)
+      case 'idle': {
+        const visibleSlugs = new Set(filteredSkills.map((skill) => skill.slug))
+        return idleSkills.filter((skill) => visibleSlugs.has(skill.slug))
+      }
+      default:
+        return filteredSkills
+    }
+  }, [filteredSkills, idleSkills, statusFilter])
+
+  const idleEnabledCount = React.useMemo(
+    () => idleSkills.filter((skill) => skill.enabled).length,
+    [idleSkills],
+  )
+
+  /** 一键关闭闲置 Skill：只关仍启用的，逐个写入后由数据层更新卡片开关。 */
+  const disableIdleSkills = React.useCallback(async (): Promise<void> => {
+    if (disablingIdleSkills) return
+    const targets = idleSkills.filter((skill) => skill.enabled)
+    if (targets.length === 0) return
+    setDisablingIdleSkills(true)
+    try {
+      for (const skill of targets) {
+        await data.toggleSkill(skill.slug, false)
+      }
+      toast.success(`已关闭 ${targets.length} 个闲置 Skill`, {
+        description: '随时可以在「已关闭」里重新打开。',
+      })
+    } finally {
+      setDisablingIdleSkills(false)
+    }
+  }, [data, disablingIdleSkills, idleSkills])
+
+  const customSkills = visibleSkills.filter((s) => !data.defaultSkillSlugs.has(s.slug))
+  const builtinSkills = visibleSkills.filter((s) => data.defaultSkillSlugs.has(s.slug))
 
   const catalogServerNames = React.useMemo(() => getCatalogServerNames(), [])
 
@@ -547,6 +633,7 @@ export function AgentSkillsView({
           contentVersion={data.skillsRevision}
           isBuiltin={selectedIsBuiltin}
           updating={data.updatingSkill === selectedSkill.slug}
+          usage={data.skillUsage[selectedSkill.slug]}
           onBack={closeSkill}
           onToggle={(enabled) => data.toggleSkill(selectedSkill.slug, enabled)}
           onUpdate={() => data.updateSkill(selectedSkill.slug)}
@@ -659,7 +746,7 @@ export function AgentSkillsView({
           <CapabilityPageHeader
             icon={<PageIcon size={16} />}
             title={pageInfo.title}
-            subtitle="扩展 Proma 的能力边界"
+            subtitle={PAGE_DESCRIPTIONS[tab]}
             draggable
             context={<span className="rounded-md bg-foreground/[0.045] px-2 py-1 text-xs text-muted-foreground">{pageInfo.contextLabel}</span>}
             actions={(
@@ -721,6 +808,13 @@ export function AgentSkillsView({
           </div>
         )}
 
+        {/* 页头说明：能力中心全屏模式下展示当前能力域的用途说明 */}
+        {!embedded && (
+          <div className={cn('w-full shrink-0 bg-content-area pt-3', PAGE_GUTTER_CLASS)}>
+            <p className="text-[13px] leading-relaxed text-foreground/55">{PAGE_DESCRIPTIONS[tab]}</p>
+          </div>
+        )}
+
         {/* 工具条：搜索 + Skills 操作 */}
         <div className={cn('titlebar-no-drag flex w-full shrink-0 items-center gap-3', embedded ? 'mx-auto max-w-6xl px-3 pb-3' : cn('bg-content-area pb-4 pt-2', PAGE_GUTTER_CLASS))}>
           <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
@@ -775,9 +869,17 @@ export function AgentSkillsView({
                 builtinSkills={builtinSkills}
                 embedded={embedded}
                 total={data.skills.length}
-                updateCount={updateCount}
+                visibleCount={visibleSkills.length}
+                statusFilter={statusFilter}
+                statusCounts={statusCounts}
+                onStatusFilterChange={setStatusFilter}
+                searchQuery={search}
                 updatingSkill={data.updatingSkill}
+                skillUsage={data.skillUsage}
                 isBuiltin={(slug) => data.defaultSkillSlugs.has(slug)}
+                idleEnabledCount={idleEnabledCount}
+                disablingIdleSkills={disablingIdleSkills}
+                onDisableIdleSkills={() => { void disableIdleSkills() }}
                 onOpen={selectSkill}
                 onToggle={data.toggleSkill}
                 onUpdate={data.updateSkill}
@@ -885,9 +987,17 @@ interface SkillsTabProps {
   builtinSkills: SkillMeta[]
   embedded: boolean
   total: number
-  updateCount: number
+  visibleCount: number
+  statusFilter: SkillStatusFilter
+  statusCounts: SkillStatusCounts
+  onStatusFilterChange: (filter: SkillStatusFilter) => void
+  searchQuery: string
   updatingSkill: string | null
+  skillUsage: SkillUsageSummary
   isBuiltin: (slug: string) => boolean
+  idleEnabledCount: number
+  disablingIdleSkills: boolean
+  onDisableIdleSkills: () => void
   onOpen: (slug: string) => void
   onToggle: (slug: string, enabled: boolean) => void
   onUpdate: (slug: string) => void
@@ -898,38 +1008,151 @@ function SkillsTab({
   builtinSkills,
   embedded,
   total,
-  updateCount,
+  visibleCount,
+  statusFilter,
+  statusCounts,
+  onStatusFilterChange,
+  searchQuery,
   updatingSkill,
+  skillUsage,
   isBuiltin,
+  idleEnabledCount,
+  disablingIdleSkills,
+  onDisableIdleSkills,
   onOpen,
   onToggle,
   onUpdate,
 }: SkillsTabProps): React.ReactElement {
+  const hasVisibleSkills = customSkills.length > 0 || builtinSkills.length > 0
+  // 筛选或搜索生效时，折叠的分组会藏住匹配项，因此强制展开。
+  const filterActive = statusFilter !== 'all' || searchQuery.trim().length > 0
+
   return (
-    <div className="flex flex-col gap-8">
+    <div className={cn('flex flex-col', embedded ? 'gap-4' : 'gap-6')}>
       {/* Proma Coach 由应用内置加载，不在工作区 skills/ 目录中，始终启用 */}
-      <div className="flex items-start justify-between gap-4 rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium">Proma Coach</div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">每轮任务都会使用的工作指南，负责能力选择、结果验证与项目知识维护。</p>
-        </div>
-        <span className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[11px] text-primary">内置核心 · 始终启用</span>
+      <div
+        className={cn(
+          'flex items-center gap-3 rounded-xl border border-border/50 bg-muted/20',
+          embedded ? 'px-3 py-2' : 'px-4 py-3',
+        )}
+      >
+        <Sparkles size={embedded ? 13 : 16} className="shrink-0 text-foreground/45" />
+        <span className={cn('shrink-0 font-medium text-foreground/85', embedded ? 'text-[12px]' : 'text-[15px]')}>Proma Coach</span>
+        <span className={cn('min-w-0 flex-1 truncate text-foreground/55', embedded ? 'text-[12px]' : 'text-[13px]')}>
+          每轮任务自动使用：能力选择、结果验证与项目知识维护
+        </span>
+        <span
+          className={cn(
+            'shrink-0 rounded-md bg-primary/10 font-medium text-primary',
+            embedded ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-[12px]',
+          )}
+        >
+          始终启用
+        </span>
       </div>
+
+      {total > 0 && (
+        <div className={cn('flex flex-wrap items-center', embedded ? 'gap-1.5' : 'gap-2')}>
+          {SKILL_STATUS_FILTERS.map(({ value, label }) => {
+            const count = statusCounts[value]
+            const active = statusFilter === value
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => onStatusFilterChange(value)}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full border transition-colors',
+                  embedded ? 'h-7 px-2.5 text-[12px]' : 'h-8 px-3.5 text-[13px]',
+                  active
+                    ? 'border-transparent bg-foreground/[0.09] font-medium text-foreground'
+                    : 'border-border/60 text-foreground/60 hover:bg-foreground/[0.04] hover:text-foreground/80',
+                  count === 0 && value !== 'all' && 'opacity-45',
+                )}
+              >
+                <span>{label}</span>
+                <span className="tabular-nums text-foreground/40">{count}</span>
+              </button>
+            )
+          })}
+          {filterActive && (
+            <span className={cn('ml-auto tabular-nums text-foreground/40', embedded ? 'text-[11px]' : 'text-[13px]')}>
+              {visibleCount} / {total} 个匹配
+            </span>
+          )}
+        </div>
+      )}
+
+      {statusFilter === 'idle' && statusCounts.idle > 0 && (
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-3 rounded-xl border border-border/60 bg-muted/25',
+            embedded ? 'px-3 py-2' : 'px-4 py-3',
+          )}
+        >
+          <span className={cn('min-w-0 flex-1 text-foreground/55', embedded ? 'text-[12px]' : 'text-[13px]')}>
+            这 {statusCounts.idle} 个 Skill 超过 {SKILL_IDLE_DAYS} 天没有被加载过（不含 Proma 内置）。关掉后它们不再进入能力候选；确认不再需要时再进详情删除。
+          </span>
+          {idleEnabledCount > 0 && (
+            <button
+              type="button"
+              onClick={onDisableIdleSkills}
+              disabled={disablingIdleSkills}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-lg border border-border/60 bg-background font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04] hover:text-foreground disabled:opacity-60',
+                embedded ? 'h-8 px-2.5 text-[12px]' : 'h-8 px-3 text-[13px]',
+              )}
+            >
+              {disablingIdleSkills ? <Loader2 size={14} className="animate-spin" /> : <PowerOff size={14} />}
+              关闭这 {idleEnabledCount} 个
+            </button>
+          )}
+        </div>
+      )}
+
       {total === 0 ? (
         <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无专业 Skill" hint="可以在 Agent 模式下让 Proma 帮你联网查找并安装 Skill，或从其他项目导入。" />
-      ) : customSkills.length === 0 && builtinSkills.length === 0 ? (
-        <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 Skill" hint="试试更换搜索关键词。" />
-      ) : null}
-      {updateCount > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-3 py-2 text-[13px] text-blue-600 dark:text-blue-400">
-          有 {updateCount} 个 Skill 可更新到来源最新版本
-        </div>
+      ) : hasVisibleSkills ? null : statusFilter === 'idle' && searchQuery.trim().length === 0 ? (
+        <EmptyState
+          icon={<Sparkles className="size-8 text-foreground/30" />}
+          title="没有闲置 Skill"
+          hint={`最近 ${SKILL_IDLE_DAYS} 天用过的 Skill 不会出现在这里。`}
+        />
+      ) : (
+        <EmptyState
+          icon={<Search className="size-8 text-foreground/30" />}
+          title="没有匹配的 Skill"
+          hint="试试更换关键词，或把筛选切回「全部」。"
+        />
       )}
+
       {customSkills.length > 0 && (
-        <SkillSection title="我的 Skills" skills={customSkills} embedded={embedded} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection
+          title="我的 Skills"
+          skills={customSkills}
+          embedded={embedded}
+          isBuiltin={isBuiltin}
+          updatingSkill={updatingSkill}
+          skillUsage={skillUsage}
+          forceExpand={filterActive}
+          onOpen={onOpen}
+          onToggle={onToggle}
+          onUpdate={onUpdate}
+        />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="PROMA 内置" skills={builtinSkills} embedded={embedded} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection
+          title="PROMA 内置"
+          skills={builtinSkills}
+          embedded={embedded}
+          isBuiltin={isBuiltin}
+          updatingSkill={updatingSkill}
+          skillUsage={skillUsage}
+          forceExpand={filterActive}
+          onOpen={onOpen}
+          onToggle={onToggle}
+          onUpdate={onUpdate}
+        />
       )}
     </div>
   )
@@ -941,12 +1164,15 @@ interface SkillSectionProps {
   embedded: boolean
   isBuiltin: (slug: string) => boolean
   updatingSkill: string | null
+  skillUsage: SkillUsageSummary
+  /** 筛选/搜索生效时强制展开所有分组 */
+  forceExpand: boolean
   onOpen: (slug: string) => void
   onToggle: (slug: string, enabled: boolean) => void
   onUpdate: (slug: string) => void
 }
 
-function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
+function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, skillUsage, forceExpand, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
   const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(new Set())
   const groups = React.useMemo(() => groupSkills(skills), [skills])
 
@@ -961,32 +1187,41 @@ function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, onOpe
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 px-1">
-        <span className="text-[13px] font-medium text-foreground/55">{title}</span>
-        <span className="text-[12px] tabular-nums text-foreground/35">{skills.length}</span>
+      <div className={cn('flex items-center gap-2.5', embedded ? 'px-1' : 'px-0.5')}>
+        <span className={cn('font-medium text-foreground/75', embedded ? 'text-[13px]' : 'text-[15px]')}>{title}</span>
+        <span className={cn('tabular-nums text-foreground/35', embedded ? 'text-[12px]' : 'text-[15px]')}>{skills.length}</span>
       </div>
-      <div className="flex flex-col gap-4">
+      <div className={cn('flex flex-col', embedded ? 'gap-3' : 'gap-5')}>
         {groups.map((group) => {
-          const collapsed = collapsedGroups.has(group.id)
+          const collapsed = !forceExpand && collapsedGroups.has(group.id)
           return (
-            <div key={group.id} className="flex flex-col gap-3">
+            <div key={group.id} className={cn('flex flex-col', embedded ? 'gap-2' : 'gap-3')}>
               <button
                 type="button"
                 onClick={() => toggleGroup(group.id)}
-                className="flex h-8 items-center gap-2 rounded-lg px-1 text-left text-[13px] font-medium text-foreground/65 transition-colors hover:bg-foreground/[0.04] hover:text-foreground"
+                className={cn(
+                  'flex items-center gap-2.5 rounded-lg text-left font-medium text-foreground/75 transition-colors hover:bg-foreground/[0.04] hover:text-foreground',
+                  embedded ? 'h-7 px-1 text-[13px]' : 'h-8 px-1 text-[15px]',
+                )}
               >
-                <ChevronRight size={14} className={cn('text-foreground/35 transition-transform', !collapsed && 'rotate-90')} />
+                <ChevronRight
+                  size={embedded ? 14 : 16}
+                  className={cn('text-foreground/35 transition-transform', !collapsed && 'rotate-90')}
+                />
+                <span className={cn('shrink-0 rounded-full', embedded ? 'size-1.5' : 'size-2', getSkillGroupAccent(group.title).dot)} />
                 <span>{group.title}</span>
-                <span className="text-[12px] tabular-nums text-foreground/35">{group.skills.length}</span>
+                <span className={cn('tabular-nums text-foreground/35', embedded ? 'text-[12px]' : 'text-[15px]')}>{group.skills.length}</span>
               </button>
               {!collapsed && (
-                <div className={cn('grid gap-3', embedded ? 'skills-embedded-card-grid' : 'sm:grid-cols-2 lg:grid-cols-3')}>
+                <div className={cn('grid gap-3', embedded ? 'skills-embedded-card-grid' : 'gap-4 grid-cols-[repeat(auto-fill,minmax(21rem,1fr))]')}>
                   {group.skills.map((skill) => (
                     <SkillCard
                       key={skill.slug}
                       skill={skill}
                       isBuiltin={isBuiltin(skill.slug)}
                       updating={updatingSkill === skill.slug}
+                      usage={skillUsage[skill.slug]}
+                      embedded={embedded}
                       onOpen={() => onOpen(skill.slug)}
                       onToggle={(enabled) => onToggle(skill.slug, enabled)}
                       onUpdate={() => onUpdate(skill.slug)}

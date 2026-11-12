@@ -15,12 +15,15 @@ import {
   currentAgentWorkspaceIdAtom,
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
-import type { BuiltinMcpServerSummary, CliIntegrationStatus, McpServerEntry, SkillMeta, WorkspaceCapabilities, WorkspaceMcpConfig } from '@proma/shared'
+import type { BuiltinMcpServerSummary, CliIntegrationStatus, McpServerEntry, SkillMeta, SkillUsageSummary, WorkspaceCapabilities, WorkspaceMcpConfig } from '@proma/shared'
 import type { CatalogCliProbeState } from './integration-catalog'
 
 const CLI_STATUS_CACHE_TTL_MS = 5 * 60 * 1000
 const cliIntegrationStatusCache = new Map<string, { statuses: CliIntegrationStatus[]; cachedAt: number }>()
 const cliIntegrationStatusRequests = new Map<string, Promise<CliIntegrationStatus[]>>()
+
+/** 工作区 Skill 使用统计的模块级缓存：切回同一工作区时先展示上次结果，不闪「未使用」。 */
+const skillUsageCache = new Map<string, SkillUsageSummary>()
 
 /** Reuse recent probes for a short period so revisiting a workspace does not flash through loading. */
 function probeCliIntegrationStatuses(workspaceSlug: string): Promise<CliIntegrationStatus[]> {
@@ -54,6 +57,10 @@ export interface AgentSkillsData {
   skillsDir: string
   mcpConfig: WorkspaceMcpConfig
   capabilities: WorkspaceCapabilities | null
+  /** 按 Skill slug 汇总的使用统计；未就绪时为空对象 */
+  skillUsage: SkillUsageSummary
+  /** 使用统计是否已加载完成（未完成时不展示闲置视图，避免闪「全部闲置」） */
+  skillUsageReady: boolean
   /** 每次从磁盘重新读取 Skills 后递增，供详情页刷新 SKILL.md 正文。 */
   skillsRevision: number
   builtinMcpServers: BuiltinMcpServerSummary[]
@@ -90,6 +97,8 @@ export function useAgentSkillsData(workspaceId?: string): AgentSkillsData {
   const [skillsDir, setSkillsDir] = React.useState('')
   const [mcpConfig, setMcpConfig] = React.useState<WorkspaceMcpConfig>({ servers: {} })
   const [capabilities, setCapabilities] = React.useState<WorkspaceCapabilities | null>(null)
+  const [skillUsage, setSkillUsage] = React.useState<SkillUsageSummary>(() => skillUsageCache.get(workspaceSlug) ?? {})
+  const [skillUsageReady, setSkillUsageReady] = React.useState<boolean>(() => skillUsageCache.has(workspaceSlug))
   const [skillsRevision, setSkillsRevision] = React.useState(0)
   const [builtinMcpServers, setBuiltinMcpServers] = React.useState<BuiltinMcpServerSummary[]>([])
   const [cliIntegrationStatuses, setCliIntegrationStatuses] = React.useState<CliIntegrationStatus[]>([])
@@ -97,6 +106,7 @@ export function useAgentSkillsData(workspaceId?: string): AgentSkillsData {
   const [updatingSkill, setUpdatingSkill] = React.useState<string | null>(null)
   const loadRequestRef = React.useRef(0)
   const cliProbeRequestRef = React.useRef(0)
+  const skillUsageRequestRef = React.useRef(0)
   /** 用户最近一次开关意图覆盖验证期间写入磁盘的临时 disabled 状态。 */
   const mcpToggleIntentsRef = React.useRef(new Map<string, boolean>())
   /** 使验证期间已发起的 watcher 重读不能在完成后写回旧快照。 */
@@ -110,6 +120,8 @@ export function useAgentSkillsData(workspaceId?: string): AgentSkillsData {
       setSkills([])
       setMcpConfig({ servers: {} })
       setCapabilities(null)
+      setSkillUsage({})
+      setSkillUsageReady(false)
       setBuiltinMcpServers([])
       setCliIntegrationStatuses([])
       setCliIntegrationProbeState('ready')
@@ -152,6 +164,19 @@ export function useAgentSkillsData(workspaceId?: string): AgentSkillsData {
       setCliIntegrationStatuses(cachedCliStatuses?.statuses ?? [])
       setLoading(false)
 
+      // 使用统计要扫会话文件，不阻塞首屏：先渲染卡片，再由后台结果补充使用时间与闲置视图。
+      const skillUsageRequestId = ++skillUsageRequestRef.current
+      void window.electronAPI.getSkillUsage(workspaceSlug)
+        .then((usage) => {
+          if (loadRequestRef.current !== requestId || skillUsageRequestRef.current !== skillUsageRequestId) return
+          skillUsageCache.set(workspaceSlug, usage)
+          setSkillUsage(usage)
+          setSkillUsageReady(true)
+        })
+        .catch((error) => {
+          console.warn('[Agent 技能] 读取 Skill 使用统计失败:', error)
+        })
+
       const cliProbeRequestId = ++cliProbeRequestRef.current
       void probeCliIntegrationStatuses(workspaceSlug)
         .then((statuses) => {
@@ -173,11 +198,17 @@ export function useAgentSkillsData(workspaceId?: string): AgentSkillsData {
     }
   }, [workspaceSlug])
 
+  // 切换工作区时先切到该工作区的缓存快照，避免短暂沿用上一个工作区的统计。
+  React.useLayoutEffect(() => {
+    setSkillUsage(skillUsageCache.get(workspaceSlug) ?? {})
+    setSkillUsageReady(skillUsageCache.has(workspaceSlug))
+  }, [workspaceSlug])
+
   // 首次进入或切换工作区时展示加载态；普通文件监听刷新则保留当前视图，避免闪烁。
   React.useEffect(() => {
     setLoading(true)
     void loadData()
-    return () => { ++cliProbeRequestRef.current }
+    return () => { ++cliProbeRequestRef.current; ++skillUsageRequestRef.current }
   }, [loadData])
 
   // 外部 Agent 或其他进程编辑 Skills 后，主进程 watcher 会以 300ms debounce 推送
@@ -357,6 +388,8 @@ export function useAgentSkillsData(workspaceId?: string): AgentSkillsData {
     skillsDir,
     mcpConfig,
     capabilities,
+    skillUsage,
+    skillUsageReady,
     skillsRevision,
     builtinMcpServers,
     cliIntegrationStatuses,

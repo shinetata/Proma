@@ -63,6 +63,7 @@ import type {
   WorkspaceAttachFileInput,
   WorkspaceMcpConfig,
   SkillMeta,
+  SkillUsageSummary,
   OtherWorkspaceSkillsGroup,
   WorkspaceCapabilities,
   WorkspaceMemorySummary,
@@ -682,6 +683,9 @@ export interface ElectronAPI {
 
   /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
   getDefaultSkillSlugs: () => Promise<string[]>
+
+  /** 按工作区汇总 Skill 使用统计（key 为 Skill slug） */
+  getSkillUsage: (workspaceSlug: string) => Promise<SkillUsageSummary>
 
   /** 从其他工作区导入 Skill */
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => Promise<SkillMeta>
@@ -1930,6 +1934,10 @@ const electronAPI: ElectronAPI = {
 
   getDefaultSkillSlugs: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS)
+  },
+
+  getSkillUsage: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SKILL_USAGE, workspaceSlug)
   },
 
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => {
