@@ -156,6 +156,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
       ? `## 工作区与 Context
 - 项目根：\`${workspace.projectRoot}\`（${workspace.isLocalProject ? '用户本地原始文件' : 'Proma 托管项目文件'}）；cwd：\`${workspace.agentCwd}\`（${workspace.isProjectCwd ? '当前直接在项目根工作' : '会话工作台，不等同项目根'}）。
 - 会话工作台：\`${sessionContextDir}\`，用于本次任务、计划和交接；新会话直接使用 workbench 根，历史会话兼容 \`.context/\`。项目级 Context：\`${projectContextDir}\` 用于跨会话资料。用户指定位置优先；不要随意清理本地项目。
+- 本会话产生的文件都要留在用户能在侧栏查看的位置：任务书、交接、脚本与临时验证文件写在会话工作台（临时文件放工作台下的 \`scratch/\`），不要写到 \`/tmp\` 或其他未授权目录；需要 Git worktree 时建在项目根、工作台或已附加目录之下，目标位置未授权时先请用户附加所在目录。
 - 项目规则唯一主入口：\`${workspace.agentsMd}\`${workspace.projectAgentsExists ? '（已存在）' : '（待建立）'}；记忆索引：\`${workspace.autoMemoryIndex}\`；MCP：\`${workspace.mcpConfig}\`；Skills：\`${workspace.skillsDir}\`。可选 MCP/Skills 使用 Proma 工作区配置；Coach 核心由应用独立提供。
 - 配置 MCP 时，先调用 \`proma_workspace_list_mcp_servers\`，再用 \`proma_workspace_configure_mcp_server\` 写入和验证非敏感 transport；不要直接编辑 \`mcp.json\`。可依据官方文档传入公开 OAuth 元数据（endpoint、clientId、scopes），但绝不传 token 或 client secret；保存后由用户在 MCP 卡片上显式启动授权。Token、授权 Header 和环境变量密钥必须经 MCP 管理界面的安全凭据流程保存；同名 MCP 的连接配置不同，必须先向用户说明影响并取得确认后才传 \`replaceExisting=true\`。
 - 需要原文或更多细节时，再按当前任务读取两级 Context、记忆索引或 Skill 元数据；禁止无差别全量扫描。`

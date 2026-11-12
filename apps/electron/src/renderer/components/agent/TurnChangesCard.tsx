@@ -8,15 +8,20 @@
  * 点击行为：可直接预览的类型（图片、PDF、Office、HTML）在右侧打开预览；
  * 其余切到右侧面板的改动 Tab，并把文件绝对路径写入 `changesFocusPathMapAtom`
  * 交给连续改动视图滚动定位。
+ *
+ * 渲染时批量检查可见文件能否预览：已删除或不在会话授权目录内的文件置灰标注，
+ * 点击时说明原因；未授权的文件提供「附加目录」与「在访达中显示」。
  */
 
 import * as React from 'react'
-import { useAtomValue, useStore } from 'jotai'
+import { atom, useAtomValue, useStore } from 'jotai'
+import { toast } from 'sonner'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import type { SDKMessage, SDKUserMessage, TurnChangesSummary, TurnDiffHunk, TurnFileDiff } from '@proma/shared'
+import type { FilePreviewAccess, SDKMessage, SDKUserMessage, TurnChangesSummary, TurnDiffHunk, TurnFileDiff } from '@proma/shared'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import {
+  agentAttachedDirectoriesMapAtom,
   agentDiffPanelTabAtom,
   agentSidePanelOpenAtomFamily,
   currentAgentSessionIdAtom,
@@ -52,6 +57,97 @@ function summaryCacheKey(sessionId: string, turnKey: string): string {
 
 function diffCacheKey(sessionId: string, turnKey: string, path: string): string {
   return `${sessionId}\0${turnKey}\0${path}`
+}
+
+/** 文件可预览状态缓存：`sessionId\0path` → 结果。会话附加目录变化后按会话失效。 */
+const accessCache = new Map<string, FilePreviewAccess>()
+/** 每个会话上次检查时的附加目录快照，用于判断缓存是否过期。 */
+const accessCacheAttachedKey = new Map<string, string>()
+/** 附加目录后递增，让所有改动卡重新检查可预览状态。 */
+const previewAccessVersionAtom = atom(0)
+
+function accessCacheKey(sessionId: string, path: string): string {
+  return `${sessionId}\0${path}`
+}
+
+function clearSessionAccessCache(sessionId: string): void {
+  for (const key of [...accessCache.keys()]) {
+    if (key.startsWith(`${sessionId}\0`)) accessCache.delete(key)
+  }
+}
+
+/**
+ * 批量检查一组文件在当前会话下能否预览。
+ * 只检查传入的（通常是当前可见的）文件；结果未返回前按可预览处理。
+ * 会话附加目录增减时丢弃该会话的缓存并重新检查。
+ */
+function useFilePreviewAccess(
+  sessionId: string | undefined,
+  paths: string[],
+  basePaths: string[],
+): Map<string, FilePreviewAccess> {
+  const version = useAtomValue(previewAccessVersionAtom)
+  const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
+  const attachedKey = sessionId ? (attachedDirsMap.get(sessionId) ?? []).join('\0') : ''
+  const pathsKey = paths.join('\0')
+  const basePathsKey = basePaths.join('\0')
+  const [result, setResult] = React.useState<Map<string, FilePreviewAccess>>(() => new Map())
+
+  React.useEffect(() => {
+    if (!sessionId || paths.length === 0) return
+    if (accessCacheAttachedKey.get(sessionId) !== attachedKey) {
+      clearSessionAccessCache(sessionId)
+      accessCacheAttachedKey.set(sessionId, attachedKey)
+    }
+    const known = new Map<string, FilePreviewAccess>()
+    const pending: string[] = []
+    for (const path of paths) {
+      const cached = accessCache.get(accessCacheKey(sessionId, path))
+      if (cached) known.set(path, cached)
+      else pending.push(path)
+    }
+    setResult(known)
+    if (pending.length === 0 || typeof window.electronAPI?.getFilePreviewAccess !== 'function') return
+
+    let cancelled = false
+    window.electronAPI.getFilePreviewAccess(pending, {
+      sessionId,
+      ...(basePaths.length > 0 ? { candidateBasePaths: basePaths } : {}),
+    }).then((items) => {
+      for (const item of items) accessCache.set(accessCacheKey(sessionId, item.path), item)
+      if (cancelled) return
+      setResult((previous) => {
+        const next = new Map(previous)
+        for (const item of items) next.set(item.path, item)
+        return next
+      })
+    }).catch(() => { /* 检查失败时按可预览处理，点击后由预览自身给出原因 */ })
+    return () => { cancelled = true }
+    // paths / basePaths 用拼接键比较，避免每次渲染的新数组引用反复触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, pathsKey, basePathsKey, attachedKey, version])
+
+  return result
+}
+
+/** 不可预览文件在列表里的简短标注与说明。 */
+function describeUnavailable(access: FilePreviewAccess | undefined): { tag: string; reason: string } | null {
+  if (access?.status === 'missing') {
+    return { tag: '已删除', reason: '文件已不存在，可能在本轮之后被移动或删除' }
+  }
+  if (access?.status === 'unauthorized') {
+    return { tag: '未授权', reason: '文件不在当前会话的授权目录内，附加所在目录后即可预览' }
+  }
+  return null
+}
+
+/** 不可预览文件的小标签。 */
+function UnavailableTag({ label }: { label: string }): React.ReactElement {
+  return (
+    <span className="ml-1.5 inline-flex flex-none items-center rounded bg-muted px-1 py-px text-[10.5px] leading-[14px] text-muted-foreground">
+      {label}
+    </span>
+  )
 }
 
 /** 取本轮改动摘要：持久化字段优先，其次内存缓存，最后 IPC 兜底。 */
@@ -389,17 +485,71 @@ export function TurnChangesCard({ turnMessages, inputMessage, basePath }: TurnCh
     })
   }, [basePath, basePaths, openPreview, sessionId, store])
 
+  const collapsibleList = view.files.length > COLLAPSE_THRESHOLD
+  const visiblePaths = React.useMemo(
+    () => (collapsibleList && !expanded ? view.files.slice(0, COLLAPSE_THRESHOLD) : view.files).map((file) => file.path),
+    [collapsibleList, expanded, view.files],
+  )
+  const accessMap = useFilePreviewAccess(sessionId, visiblePaths, basePaths)
+
+  /** 不可预览的文件不打开空白预览，而是说明原因并给出可执行的操作。 */
+  const handleClick = React.useCallback((file: TurnChangeFileEntry): void => {
+    const access = accessMap.get(file.path)
+    if (!sessionId || !access || access.status === 'ok') {
+      handleOpen(file)
+      return
+    }
+    if (access.status === 'missing') {
+      toast.info('文件已不存在', { description: file.path })
+      return
+    }
+    const attachRoot = access.attachRoot
+    toast('该文件不在当前会话的授权目录内', {
+      description: attachRoot ? `附加 ${attachRoot} 后即可在侧栏预览。` : file.path,
+      duration: 8000,
+      ...(attachRoot ? {
+        action: {
+          label: '附加目录',
+          onClick: () => {
+            void window.electronAPI.attachDirectory({ sessionId, directoryPath: attachRoot }).then((updated) => {
+              store.set(agentAttachedDirectoriesMapAtom, (previous) => {
+                const next = new Map(previous)
+                next.set(sessionId, updated)
+                return next
+              })
+              clearSessionAccessCache(sessionId)
+              store.set(previewAccessVersionAtom, (previous) => previous + 1)
+              toast.success('已附加到本会话', { description: attachRoot })
+              handleOpen(file)
+            }).catch((error: unknown) => {
+              toast.error('附加目录失败', { description: error instanceof Error ? error.message : String(error) })
+            })
+          },
+        },
+      } : {}),
+      cancel: {
+        label: '在访达中显示',
+        onClick: () => {
+          void window.electronAPI.showItemInFolder(file.path).then((shown) => {
+            if (!shown) toast.error('无法在文件管理器中显示', { description: file.path })
+          })
+        },
+      },
+    })
+  }, [accessMap, handleOpen, sessionId, store])
+
   if (view.files.length === 0) return null
 
   const singleFile = view.total === 1 ? view.files[0] : undefined
-  const collapsible = view.files.length > COLLAPSE_THRESHOLD
+  const collapsible = collapsibleList
   const visibleFiles = collapsible && !expanded ? view.files.slice(0, COLLAPSE_THRESHOLD) : view.files
+  const singleUnavailable = singleFile ? describeUnavailable(accessMap.get(singleFile.path)) : null
 
   const headerButton = (
     <button
       type="button"
-      onClick={() => handleOpen(singleFile ?? (view.files[0] as TurnChangeFileEntry))}
-      title={singleFile ? singleFile.path : undefined}
+      onClick={() => handleClick(singleFile ?? (view.files[0] as TurnChangeFileEntry))}
+      title={singleFile ? (singleUnavailable ? `${singleFile.path}\n${singleUnavailable.reason}` : singleFile.path) : undefined}
       aria-label={singleFile ? `查看 ${singleFile.display} 的改动` : '在侧边栏查看本轮改动'}
       className="group flex w-full min-w-0 items-center gap-2.5 bg-muted/35 px-2.5 py-2 text-left transition-colors hover:bg-muted/65 focus-visible:bg-muted/65 focus-visible:outline-none dark:bg-muted/25 dark:hover:bg-muted/45"
     >
@@ -418,8 +568,11 @@ export function TurnChangesCard({ turnMessages, inputMessage, basePath }: TurnCh
               binary={singleFile?.binary}
               oversized={singleFile?.oversized}
             />
+            {singleUnavailable && <UnavailableTag label={singleUnavailable.tag} />}
           </span>
-          <span className="hidden group-hover:inline group-focus-visible:inline">在侧边栏预览</span>
+          <span className="hidden group-hover:inline group-focus-visible:inline">
+            {singleUnavailable ? singleUnavailable.reason : '在侧边栏预览'}
+          </span>
         </span>
       </span>
     </button>
@@ -441,29 +594,43 @@ export function TurnChangesCard({ turnMessages, inputMessage, basePath }: TurnCh
           <>
             {headerButton}
             <ul className="border-t border-border/60">
-              {visibleFiles.map((file) => (
-                <li key={file.path}>
-                  <ChangeHoverPreview
-                    sessionId={sessionId}
-                    turnKey={turnKey}
-                    file={file}
-                    enabled={view.fromRecorder}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleOpen(file)}
-                      title={file.path}
-                      aria-label={`查看 ${file.display} 的改动`}
-                      className="flex min-h-[34px] w-full min-w-0 items-center justify-between gap-2.5 px-3.5 py-[7px] text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+              {visibleFiles.map((file) => {
+                const access = accessMap.get(file.path)
+                const unavailable = describeUnavailable(access)
+                return (
+                  <li key={file.path}>
+                    <ChangeHoverPreview
+                      sessionId={sessionId}
+                      turnKey={turnKey}
+                      file={file}
+                      enabled={view.fromRecorder}
                     >
-                      <span className="min-w-0 truncate text-[12px] leading-[18px] text-muted-foreground">{file.display}</span>
-                      <span className="flex-none text-[11px] leading-[18px] text-muted-foreground">
-                        <ChangeCounts added={file.added} deleted={file.deleted} binary={file.binary} oversized={file.oversized} />
-                      </span>
-                    </button>
-                  </ChangeHoverPreview>
-                </li>
-              ))}
+                      <button
+                        type="button"
+                        onClick={() => handleClick(file)}
+                        title={unavailable ? `${file.path}\n${unavailable.reason}` : file.path}
+                        aria-label={unavailable ? `${file.display}：${unavailable.reason}` : `查看 ${file.display} 的改动`}
+                        data-preview-access={unavailable ? access?.status : undefined}
+                        className="flex min-h-[34px] w-full min-w-0 items-center justify-between gap-2.5 px-3.5 py-[7px] text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+                      >
+                        <span
+                          className={cn(
+                            'min-w-0 truncate text-[12px] leading-[18px] text-muted-foreground',
+                            unavailable && 'text-muted-foreground/55',
+                            access?.status === 'missing' && 'line-through',
+                          )}
+                        >
+                          {file.display}
+                        </span>
+                        <span className="flex flex-none items-center text-[11px] leading-[18px] text-muted-foreground">
+                          <ChangeCounts added={file.added} deleted={file.deleted} binary={file.binary} oversized={file.oversized} />
+                          {unavailable && <UnavailableTag label={unavailable.tag} />}
+                        </span>
+                      </button>
+                    </ChangeHoverPreview>
+                  </li>
+                )
+              })}
             </ul>
             {collapsible && (
               <button

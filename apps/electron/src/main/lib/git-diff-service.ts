@@ -231,6 +231,16 @@ function runGitCommand(args: string[], cwd: string, options?: { quiet?: boolean 
   return gitCommandSemaphore.run(() => runGitProcess(args, cwd, options))
 }
 
+/**
+ * 取目录所在的 Git 工作树根（worktree 返回自身根，不是主仓库）；不在仓库内或目录不存在时返回 null。
+ */
+export async function getGitToplevel(directoryPath: string): Promise<string | null> {
+  if (!existsSync(directoryPath)) return null
+  const output = await runGitCommand(['rev-parse', '--show-toplevel'], directoryPath, { quiet: true })
+  const toplevel = output?.trim()
+  return toplevel ? normalizeGitRoot(toplevel) : null
+}
+
 const WORKTREE_FETCH_TTL_MS = 30_000
 interface WorktreeFetchState {
   lastAttemptAt: number

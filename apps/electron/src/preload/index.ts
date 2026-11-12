@@ -939,6 +939,9 @@ export interface ElectronAPI {
   // 仅解析文件路径（供 PDF/图片等用 proma-file:// 加载）
   resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').ResolvedLocalFile | null>
 
+  /** 批量判断文件在当前会话下能否预览（已删除 / 未授权 / 可预览），不返回文件内容 */
+  getFilePreviewAccess: (filePaths: string[], access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').FilePreviewAccess[]>
+
   /** 解析当前 Markdown 同目录内的相对媒体文件（仅供 LiveMarkdown 图片使用） */
   resolveMarkdownMedia: (markdownFilePath: string, src: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').ResolvedFileUrl | null>
 
@@ -2350,6 +2353,10 @@ const electronAPI: ElectronAPI = {
 
   resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@proma/shared').ResolvedLocalFile | null>
+  },
+
+  getFilePreviewAccess: (filePaths: string[], access?: import('@proma/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke('file:preview-access-batch', filePaths, access) as Promise<import('@proma/shared').FilePreviewAccess[]>
   },
 
   resolveMarkdownMedia: (markdownFilePath: string, src: string, access?: import('@proma/shared').FileAccessOptions) => {

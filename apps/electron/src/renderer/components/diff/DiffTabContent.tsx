@@ -77,6 +77,8 @@ const PLAIN_TEXT_EDIT_EXTS = new Set(['.txt', '.text', '.log'])
 const PDF_EXTS = new Set(['.pdf'])
 const OFFICE_PREVIEW_EXTS = new Set(['.docx', '.xlsx', '.pptx'])
 const LEGACY_OFFICE_EXTS = new Set(['.doc', '.xls', '.ppt'])
+/** 主进程无法读取文件时的提示（文案对齐商业版 0.22.28）。 */
+const UNREADABLE_PREVIEW_REASON = '无法读取该文件内容：它可能已被移动或删除，或位于当前会话未授权预览的目录。请用默认应用打开或检查文件位置。'
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
 
 function getPreviewPathLabel(filePath: string): string {
@@ -888,7 +890,18 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               return
             }
             const result = resolvedPreview
-            if (result?.isBinary || result?.isTooLarge) {
+            if (!result) {
+              // 主进程拒绝或找不到文件时返回 null；给出原因，不要渲染成空白页。
+              setUnsupportedPreviewReason(UNREADABLE_PREVIEW_REASON)
+              setPreviewMetadata(undefined)
+              setPreviewContentCache(cacheKey, {
+                oldContent: '',
+                newContent: '',
+                unsupportedPreviewReason: UNREADABLE_PREVIEW_REASON,
+              })
+              return
+            }
+            if (result.isBinary || result.isTooLarge) {
               const reason = result.isTooLarge
                 ? '此文本文件超过 5 MB，无法安全进行内联预览，请使用默认应用打开。'
                 : '此二进制或编码异常文件暂不支持内联预览，请使用默认应用打开。'

@@ -169,7 +169,7 @@ import { browserController } from './lib/browser-controller'
 import { acknowledgeTerminalOutput, closeTerminalsForSession, createTerminal, getTerminalSnapshot, killTerminal, resizeTerminal, writeTerminal } from './lib/terminal-service'
 import { getMainWindow } from './lib/main-window-store'
 import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
-import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, getChangesPatch } from './lib/git-diff-service'
+import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, getChangesPatch, getGitToplevel } from './lib/git-diff-service'
 import { registerPromaDirectoryPath, registerPromaFilePath } from './lib/local-file-protocol'
 import {
   authorizeDiscoveredVault,
@@ -310,7 +310,8 @@ import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
 import { disposeTurnChanges, getTurnChanges, getTurnFileDiff } from './lib/turn-changes'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getConfigDir, getWorkspaceSkillsDir, getScratchPadPath } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getAgentWorkspacesDir, getConfigDir, getWorkspaceSkillsDir, getScratchPadPath } from './lib/config-paths'
+import { getWorkspacePreviewRoots } from './lib/workspace-preview-roots'
 import { getSkillUsageSummary } from './lib/skill-usage-service'
 import { getCachedDefaultAppInfo, saveCachedDefaultAppInfo } from './lib/default-app-cache'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
@@ -673,6 +674,8 @@ function getExplicitPreviewDirectoryRoots(options?: FileAccessOptions): string[]
 
   for (const slug of getWorkspaceSlugsForAccess(options)) {
     add(getProjectFilesPath(slug))
+    // 项目记忆、项目 Skill 与定时任务产物由 Proma 管理，属于本项目会话可见内容。
+    getWorkspacePreviewRoots(getAgentWorkspacePath(slug)).forEach(add)
     getWorkspaceAttachedDirectories(slug).forEach(add)
   }
   return roots
@@ -688,6 +691,7 @@ function getExplicitPreviewFilePaths(options?: FileAccessOptions): string[] {
     getAgentSessionMeta(options.sessionId)?.attachedFiles?.forEach(add)
   }
   for (const slug of getWorkspaceSlugsForAccess(options)) {
+    add(join(getAgentWorkspacePath(slug), 'AGENTS.md'))
     getWorkspaceAttachedFiles(slug).forEach(add)
   }
   return files
@@ -4508,6 +4512,41 @@ export function registerIpcHandlers(): void {
         console.warn('[IPC] file:resolve-path 无法注册为文件，跳过:', result, err instanceof Error ? err.message : err)
         return null
       }
+    }
+  )
+
+  // 改动卡等入口在渲染前批量判断文件能否预览：已删除、不在会话授权目录内的文件提前标出，
+  // 并给出可附加的目录（所在 Git 工作树根，否则为文件所在目录），而不是打开一个空白预览。
+  // 只报告存在性与授权状态，不返回文件内容，也不扩大任何授权。
+  ipcMain.handle(
+    'file:preview-access-batch',
+    async (_, filePaths: unknown, access?: FileAccessOptions | string[]): Promise<import('@proma/shared').FilePreviewAccess[]> => {
+      if (!Array.isArray(filePaths)) return []
+      const options = normalizeFileAccessOptions(access)
+      const candidates = filePaths
+        .slice(0, 200)
+        .filter((item): item is string => typeof item === 'string' && item.length > 0 && !item.includes('\0'))
+      const baseDirs = getPreviewCandidateBasePaths(options) ?? []
+      const { homedir } = await import('node:os')
+      const home = homedir()
+
+      return Promise.all(candidates.map(async (filePath): Promise<import('@proma/shared').FilePreviewAccess> => {
+        if (await resolveAuthorizedPreviewPath(filePath, options)) return { path: filePath, status: 'ok' }
+        const located = isAbsolute(filePath)
+          ? filePath
+          : baseDirs.map((base) => resolve(base, filePath)).find((candidate) => existsSync(candidate))
+        if (!located) return { path: filePath, status: 'missing' }
+        try {
+          if (!(await stat(located)).isFile()) return { path: filePath, status: 'missing' }
+        } catch {
+          return { path: filePath, status: 'missing' }
+        }
+        const parent = dirname(located)
+        const toplevel = await getGitToplevel(parent)
+        // 仓库根落在主目录或根目录时范围太大，退回文件所在目录。
+        const attachRoot = toplevel && toplevel !== home && toplevel !== '/' ? toplevel : parent
+        return { path: filePath, status: 'unauthorized', attachRoot }
+      }))
     }
   )
 

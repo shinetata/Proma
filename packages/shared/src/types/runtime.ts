@@ -283,6 +283,19 @@ export interface ResolvedLocalFile extends ResolvedFileUrl {
   relPath?: string
 }
 
+/**
+ * 单个文件在当前会话下能否预览。
+ * - ok：在会话授权目录内且存在
+ * - missing：文件已不存在
+ * - unauthorized：文件存在，但不在会话授权目录内
+ */
+export interface FilePreviewAccess {
+  path: string
+  status: 'ok' | 'missing' | 'unauthorized'
+  /** unauthorized 时建议附加的目录：所在 Git 仓库根，否则为文件所在目录。 */
+  attachRoot?: string
+}
+
 /** Office 文件内联预览类型 */
 export type OfficePreviewKind = 'document' | 'spreadsheet' | 'presentation'
 
