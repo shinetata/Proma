@@ -190,6 +190,8 @@ export interface DetachedPreviewWindowInput {
   workspaceSkillSlug?: string
   /** Original absolute Skill entry path used as a legacy fallback. */
   legacySkillFilePath?: string
+  /** 相对会话检出根的文件引用；绝对路径失效时优先按它解析。 */
+  sessionFileRef?: SessionFileRef
   /** 窗口标题 */
   title?: string
 }
@@ -209,6 +211,20 @@ export interface RevertFileInput {
   sessionId?: string
 }
 
+/** 文件访问参数中携带的会话文件引用。 */
+export interface SessionFileRef {
+  /** 该引用所属的会话 ID，必须与访问参数的 sessionId 一致 */
+  sessionId: string
+  /** kind 为 session 时是相对会话检出根的路径；为 absolute 时是绝对路径 */
+  path: string
+  /** 缺省为 session：按当前检出根解析，使 worktree 换位置后引用仍能打开 */
+  kind?: 'session' | 'absolute'
+  /** 定位行号（从 1 开始） */
+  line?: number
+  /** 定位列号（从 1 开始） */
+  column?: number
+}
+
 /** 文件预览/附加目录 IPC 的访问上下文 */
 export interface FileAccessOptions {
   /** 当前 Agent 会话 ID，主进程据此查会话和工作区授权目录 */
@@ -222,6 +238,11 @@ export interface FileAccessOptions {
   /** 路径解析候选目录；主进程会先过滤到已授权目录内再使用 */
   candidateBasePaths?: string[]
   /**
+   * 会话文件引用：主进程优先按会话检出根解析该相对路径。
+   * 用于 worktree 换位置后，旧的绝对路径引用仍能打开同一文件。
+   */
+  sessionFileRef?: SessionFileRef
+  /**
    * 文件面板以 Agent 实际可操作的文件系统为准，不再按会话附件二次收窄。
    * 启用后，调用方可以操作任意已存在的本地路径。
    */
@@ -231,6 +252,13 @@ export interface FileAccessOptions {
 /** 已授权本地文件的 proma-file URL */
 export interface ResolvedFileUrl {
   url: string
+}
+
+/** 解析成功后的本地文件：可加载的 URL、绝对路径，以及相对会话检出的路径。 */
+export interface ResolvedLocalFile extends ResolvedFileUrl {
+  resolvedPath: string
+  /** 相对当前会话检出根的路径；无法归入任何检出根时不返回。 */
+  relPath?: string
 }
 
 /** Office 文件内联预览类型 */

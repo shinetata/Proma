@@ -123,6 +123,7 @@ export function DetachedPreviewApp(): React.ReactElement {
             unrestricted={data.unrestricted}
             workspaceSkillSlug={data.workspaceSkillSlug}
             legacySkillFilePath={data.legacySkillFilePath}
+            sessionFileRef={data.sessionFileRef}
           />
         </PreviewContentErrorBoundary>
       </div>

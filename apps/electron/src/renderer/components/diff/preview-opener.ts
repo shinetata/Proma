@@ -23,6 +23,7 @@ import {
 } from '@/atoms/tab-atoms'
 import { agentDiffPanelTabAtom, agentSidePanelOpenAtomFamily, getPreviewSidePanelTab } from '@/atoms/agent-atoms'
 import { inlinePreviewMapAtom, type InlinePreviewSource } from './inline-preview'
+import { isAbsoluteFilePath } from './preview-open-path'
 
 /** Jotai store 类型（从 useStore 推导，避免直接 import 内部 Store 类型） */
 type JotaiStore = ReturnType<typeof useStore>
@@ -71,6 +72,46 @@ export function openPreviewInStore(store: JotaiStore, sessionId: string, file: P
     next.set(sessionId, getPreviewSidePanelTab(previewId))
     return next
   })
+  enrichPreviewFileWithSessionRef(store, sessionId, file)
+}
+
+/**
+ * 给绝对路径预览补上「相对会话检出根」的文件引用。
+ *
+ * worktree 被删除或重建到别处后，绝对路径会失效；带上相对引用后，主进程可以按当前
+ * 检出根重新拼出路径。解析是异步的，只在预览仍活着且仍是同一文件时回写，
+ * 并且由于 PreviewFile 的身份不含 sessionFileRef，回写不会影响预览 Tab 去重。
+ */
+function enrichPreviewFileWithSessionRef(store: JotaiStore, sessionId: string, file: PreviewFile): void {
+  if (file.sessionFileRef || !isAbsoluteFilePath(file.filePath)) return
+  const previewId = getPreviewFileId(file)
+  void window.electronAPI.resolveFilePath(file.filePath, {
+    sessionId,
+    unrestricted: file.unrestricted === true,
+    ...(file.basePaths?.length ? { candidateBasePaths: file.basePaths } : {}),
+  }).then((resolved) => {
+    const relPath = resolved?.relPath
+    if (!relPath) return
+    const patch = (item: PreviewFile): PreviewFile => (
+      getPreviewFileId(item) === previewId && item.filePath === file.filePath
+        ? { ...item, sessionFileRef: { sessionId, path: relPath } }
+        : item
+    )
+    store.set(previewFilesMapAtom, (prev) => {
+      const files = prev.get(sessionId)
+      if (!files?.some((item) => getPreviewFileId(item) === previewId && !item.sessionFileRef)) return prev
+      const next = new Map(prev)
+      next.set(sessionId, files.map(patch))
+      return next
+    })
+    store.set(previewFileMapAtom, (prev) => {
+      const current = prev.get(sessionId)
+      if (!current || getPreviewFileId(current) !== previewId || current.sessionFileRef) return prev
+      const next = new Map(prev)
+      next.set(sessionId, patch(current))
+      return next
+    })
+  }).catch(() => { /* 补不到相对引用时继续使用绝对路径与失效路径重定位 */ })
 }
 
 /** 在「文件 / 文件改动」页签内就地打开预览（商业版 WIt）。 */

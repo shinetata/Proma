@@ -772,6 +772,48 @@ export interface SetAgentSessionActiveWorktreeInput {
   worktreePath: string | null
 }
 
+/** 会话检出目录的类型：linked worktree、主仓库项目目录、会话工作台。 */
+export type SessionCheckoutKind = 'worktree' | 'project' | 'workbench'
+
+/**
+ * 会话先后使用过的检出目录。
+ *
+ * 仅记录会话实际切换或回退过的目录，用来在目录被删除后解析可用 cwd、重建 worktree，
+ * 以及把绝对路径引用重定位到新的检出根。
+ */
+export interface SessionCheckoutEntry {
+  kind: SessionCheckoutKind
+  /** 目录绝对路径 */
+  path: string
+  /** worktree 所属主仓库根目录；仅 worktree 条目有值 */
+  mainRepoRoot?: string
+  /** 选择时 Git 报告的分支名；仅 worktree 条目有值 */
+  branch?: string
+  /** 选择时 worktree 的 HEAD 提交，用于分支被删后重建 */
+  baseCommit?: string
+  /** 该条目写入历史的时间戳 */
+  since: number
+}
+
+/** 恢复会话检出 worktree 的输入；不传 worktreePath 时恢复最近一条已失效记录。 */
+export interface RestoreAgentCheckoutInput {
+  sessionId: string
+  worktreePath?: string
+}
+
+/** 恢复会话检出 worktree 的结果。 */
+export interface RestoreAgentCheckoutResult {
+  restored: boolean
+  /** 恢复后的 worktree 绝对路径 */
+  path?: string
+  /** worktree 分支名 */
+  branch?: string
+  /** 分支已不存在、按基准提交重新创建 */
+  branchRecreated?: boolean
+  /** 失败原因，直接用于提示用户 */
+  error?: string
+}
+
 /**
  * Agent 会话轻量索引项
  *
@@ -819,6 +861,13 @@ export interface AgentSessionMeta {
    * worktree 失效时主进程会主动清除，不会猜测切换到其它分支。
    */
   activeWorktree?: AgentActiveWorktree
+  /**
+   * 会话先后使用过的检出目录，最多 20 条（同路径只保留最后一次）。
+   *
+   * 与 activeWorktree 双写：主进程的 cwd、相对路径与授权根解析读历史，
+   * renderer 与历史会话继续读 activeWorktree。缺失表示未记录历史。
+   */
+  checkoutHistory?: SessionCheckoutEntry[]
   /**
    * 会话私有工作台的文件布局。新会话在 workbench 根目录直接存放计划、handoff
    * 等私有资料；缺失字段的历史会话保留 `.context/` 路径以兼容工具历史。
@@ -1946,6 +1995,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_MODEL: 'agent:update-session-model',
   /** 选择或清除当前会话的活动 worktree */
   SET_ACTIVE_WORKTREE: 'agent:set-active-worktree',
+  /** 按会话检出历史重建被删除的 worktree */
+  RESTORE_CHECKOUT: 'agent:restore-checkout',
   /** 主进程通知 Renderer：Agent 主动切换了会话的活动 worktree */
   ACTIVE_WORKTREE_UPDATED: 'agent:active-worktree-updated',
   /** 删除会话 */

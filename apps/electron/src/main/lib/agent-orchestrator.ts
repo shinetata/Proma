@@ -49,7 +49,8 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, isAgentSessionDeleting } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, resolveSessionCheckoutCwd, defaultCheckoutEntry, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, isAgentSessionDeleting } from './agent-session-manager'
+import { appendCheckoutEntry, checkoutFromActiveWorktree } from './session-checkout'
 import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getMcpApiKeyEnvironment, getMcpOAuthHeaders } from './mcp-oauth-service'
@@ -1007,12 +1008,39 @@ export class AgentOrchestrator {
           throw new Error(`指定的 Agent 项目不存在或已删除: ${workspaceId}`)
         }
         let activeWorktree = sessionMeta?.activeWorktree
-        if (activeWorktree) {
+        // 检出目录可能被手动删除或移走：按历史平滑回退到仍存在的目录，
+        // 并把回退目标写回历史，避免每轮都重新探测、也保留当时的 worktree 记录供恢复。
+        const checkout = sessionMeta ? resolveSessionCheckoutCwd(ws, sessionMeta) : null
+        if (checkout?.fellBack) {
+          const fallbackEntry = checkout.kind === 'worktree'
+            ? { kind: checkout.kind, path: checkout.path, mainRepoRoot: checkout.mainRepoRoot, branch: checkout.branch, baseCommit: checkout.baseCommit, since: Date.now() }
+            : defaultCheckoutEntry(ws, sessionId, sessionMeta?.agentCwdMode)
+              ?? { kind: checkout.kind, path: checkout.path, since: Date.now() }
+          console.warn(`[Agent 编排] 检出目录已失效，平滑回退到 ${fallbackEntry.kind}: ${fallbackEntry.path}`)
+          sessionMeta = updateAgentSessionMeta(sessionId, {
+            activeWorktree: fallbackEntry.kind === 'worktree' ? activeWorktree : undefined,
+            checkoutHistory: appendCheckoutEntry(sessionMeta?.checkoutHistory, fallbackEntry),
+          })
+          if (fallbackEntry.kind !== 'worktree') {
+            activeWorktree = undefined
+          }
+        } else if (activeWorktree) {
           const activeWorktreePath = getActiveWorktreePath(sessionMeta)
           const currentMainRepoRoot = activeWorktreePath ? await getMainRepoRoot(activeWorktreePath) : null
+          // 存量会话只有 activeWorktree、没有历史：校验仍有效后补一条初始历史，
+          // 让后续解析统一走历史路径。
+          if (activeWorktreePath && currentMainRepoRoot && normalizePathForCompare(currentMainRepoRoot) === normalizePathForCompare(activeWorktree.mainRepoRoot) && !sessionMeta?.checkoutHistory?.length) {
+            sessionMeta = updateAgentSessionMeta(sessionId, {
+              checkoutHistory: [checkoutFromActiveWorktree(activeWorktree)],
+            })
+          }
           if (!activeWorktreePath || !currentMainRepoRoot || normalizePathForCompare(currentMainRepoRoot) !== normalizePathForCompare(activeWorktree.mainRepoRoot)) {
             console.warn(`[Agent 编排] 活动 worktree 已失效，回退默认 cwd: ${activeWorktree.path}`)
-            sessionMeta = updateAgentSessionMeta(sessionId, { activeWorktree: undefined })
+            const fallback = defaultCheckoutEntry(ws, sessionId, sessionMeta?.agentCwdMode)
+            sessionMeta = updateAgentSessionMeta(sessionId, {
+              activeWorktree: undefined,
+              ...(fallback ? { checkoutHistory: appendCheckoutEntry(sessionMeta?.checkoutHistory, fallback) } : {}),
+            })
             activeWorktree = undefined
           }
         }
