@@ -14,10 +14,12 @@ import {
   inferContextWindow,
   inferCodexAlignedGPT5ContextWindow,
   getGeminiModelCapability,
+  getGemini4ModelLeafId,
   isGpt6AstraFamily,
   isGpt6LunaFamily,
   isGpt6SolFamily,
   isMimoV26Model,
+  isReasoningControlUnsupported,
   resolveReasoningCapability,
   resolveReasoningProfile,
   type CodexOAuthCredentials,
@@ -95,6 +97,8 @@ function toReasoningTransport(api: Api): ReasoningTransport {
       return 'openai-completions'
     case 'openai-responses':
       return 'openai-responses'
+    case 'google-generative-ai':
+      return 'google-generative-ai'
     default:
       return 'other'
   }
@@ -120,7 +124,9 @@ function compilePiReasoningCapabilities(
     // DeepSeek V4's Anthropic-compatible protocol is not adaptive thinking.
     // Pi's generic stream emits a legacy budget; the runtime request extension
     // replaces it with `thinking: enabled` + `output_config.effort`.
+    // Gemini 的 thinkingLevel 由 Pi Google 适配器按 thinkingLevelMap 直接写入，无需 compat。
     case 'deepseek-output-effort':
+    case 'google-thinking-level':
       return { thinkingLevelMap }
     case 'openai-reasoning-effort':
       return {
@@ -348,12 +354,60 @@ export function supportsPiNativeImageInput(modelId: string | undefined): boolean
   return normalized !== undefined && DEEPSEEK_V4_FLASH_VISION_MODEL_IDS.has(normalized)
 }
 
+/**
+ * 查询 Gemini 文本模型能力；精确 ID 未命中时再按 `/` 后的叶子 ID 匹配，
+ * 兼容 `google/gemini-4-argon` 这类聚合网关前缀。
+ */
+function getKnownGeminiCapability(modelId: string | undefined) {
+  return getGeminiModelCapability(modelId) ?? getGeminiModelCapability(modelId?.split('/').pop())
+}
+
+/** Gemini 4 在单一协议下的注册规格。`reasoning` 未定义表示沿用 catalog 与通用推断。 */
+interface Gemini4PiModelSpec {
+  reasoning?: boolean
+  thinkingLevelMap?: PiCatalogModel['thinkingLevelMap']
+  contextWindow: number
+  maxTokens: number
+}
+
+/**
+ * 解析 Gemini 4 Argon / Carbon 的协议级注册规格。
+ *
+ * Pi catalog 只收录 Argon，且各 provider 条目的 maxTokens / thinkingLevelMap 不一致；
+ * Anthropic 兼容渠道会跨 provider 匹配，命中哪个取决于顺序。这里统一以 shared 能力表为准：
+ * - 所有协议：contextWindow 1,048,576、maxTokens 65,536。
+ * - Gemini 原生协议：reasoning 开启，thinkingLevelMap 只开放 low / medium / high，
+ *   由 Pi 写入 `generationConfig.thinkingConfig.thinkingLevel`。
+ * - Anthropic 兼容协议：网关把请求转到 OpenAI Chat 上游，`thinking` 不生效，
+ *   `output_config.effort` 反而会把推理关掉。声明 reasoning=false 后，Pi 把会话档位
+ *   收敛为 off，请求不带 `thinking` / `output_config` / interleaved beta，模型按上游默认方式推理；
+ *   模型选择器也因此不展示档位。
+ * - 其他协议：只修正尺寸，推理行为沿用 catalog。
+ */
+function resolveGemini4PiModelSpec(api: Api, modelId: string | undefined): Gemini4PiModelSpec | undefined {
+  const leafModelId = getGemini4ModelLeafId(modelId)
+  const capability = leafModelId ? getGeminiModelCapability(leafModelId) : undefined
+  if (!leafModelId || !capability) return undefined
+
+  const size = { contextWindow: capability.contextWindow, maxTokens: capability.maxOutputTokens }
+  if (api === 'google-generative-ai') {
+    return {
+      ...size,
+      reasoning: true,
+      thinkingLevelMap: compilePiReasoningCapabilities(api, leafModelId)?.thinkingLevelMap,
+    }
+  }
+  if (isReasoningControlUnsupported({ modelId: leafModelId, transport: toReasoningTransport(api) })) {
+    return { ...size, reasoning: false }
+  }
+  return size
+}
+
 function applyPiModelCapabilityOverrides(model: PiCatalogModel | undefined): PiCatalogModel | undefined {
   if (!model) return model
 
-  const normalizedId = model.id.trim().toLowerCase()
   // Google 协议模型的 thinking 档位由 API 合约决定，而非目录供应商名。
-  const geminiCapability = model.api === 'google-generative-ai' ? getGeminiModelCapability(normalizedId) : undefined
+  const geminiCapability = model.api === 'google-generative-ai' ? getKnownGeminiCapability(model.id) : undefined
   const requiresMinimalThinkingExclusion = geminiCapability && !geminiCapability.thinkingLevels.includes('minimal')
   const input: PiCatalogModel['input'] = supportsPiNativeImageInput(model.id) && !model.input.includes('image')
     ? [...model.input, 'image']
@@ -682,18 +736,24 @@ export async function resolvePiReasoningCapability(
   const catalogModel = resolvedModelId
     ? await findPiCatalogModel(provider, resolvedModelId)
     : undefined
+  const transport = provider === 'openai-codex' || provider === 'xai'
+    ? 'openai-responses'
+    : toReasoningTransport(resolvePiApi(provider))
   const profile = resolveReasoningProfile({
     modelId: resolvedModelId,
-    transport: provider === 'openai-codex' || provider === 'xai'
-      ? 'openai-responses'
-      : toReasoningTransport(resolvePiApi(provider)),
+    transport,
   })
-  return resolveReasoningCapability({
-    profile,
-    catalog: catalogModel && {
+  // Gemini 4 的推理能力按协议决定，不采用跨 provider 命中的 catalog 条目（见 resolveGemini4PiModelSpec）。
+  const gemini4Spec = resolveGemini4PiModelSpec(resolvePiApi(provider), resolvedModelId)
+  const catalogReasoning = gemini4Spec?.reasoning !== undefined
+    ? { reasoning: gemini4Spec.reasoning, thinkingLevelMap: gemini4Spec.thinkingLevelMap }
+    : catalogModel && {
       reasoning: catalogModel.reasoning,
       thinkingLevelMap: catalogModel.thinkingLevelMap,
-    },
+    }
+  return resolveReasoningCapability({
+    profile,
+    catalog: catalogReasoning,
   })
 }
 
@@ -713,27 +773,38 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
   const catalogContextWindow = catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const inferredContextWindow = inferContextWindow(input.model) ?? DEFAULT_CONTEXT_WINDOW
   const shouldForceAdaptiveThinking = shouldForcePiAdaptiveThinking(api, catalogModel, input.model)
+  // Gemini 4 的尺寸与推理开关按协议固定，优先于 catalog；其余模型不受影响。
+  const gemini4Spec = resolveGemini4PiModelSpec(api, input.model)
+  const reasoning = gemini4Spec?.reasoning ?? catalogModel?.reasoning ?? true
   return {
     api,
-    reasoning: catalogModel?.reasoning ?? true,
-    thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap
-      ?? catalogModel?.thinkingLevelMap,
+    reasoning,
+    // Gemini 4 在 Anthropic 兼容协议下不推理可调，不携带 catalog 中属于其他协议的档位映射。
+    thinkingLevelMap: gemini4Spec?.reasoning === false
+      ? undefined
+      : gemini4Spec?.thinkingLevelMap
+        ?? providerSpecificCapabilities?.thinkingLevelMap
+        ?? catalogModel?.thinkingLevelMap,
     compat: shouldForceAdaptiveThinking
       ? { ...providerSpecificCapabilities?.compat, forceAdaptiveThinking: true }
       : providerSpecificCapabilities?.compat,
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
     // Codex 对齐策略优先；其他模型仍保留 catalog 与 shared inference 中更大的已验证能力。
-    contextWindow: codexAlignedCapabilities?.contextWindow ?? Math.max(catalogContextWindow, inferredContextWindow),
+    contextWindow: gemini4Spec?.contextWindow
+      ?? codexAlignedCapabilities?.contextWindow
+      ?? Math.max(catalogContextWindow, inferredContextWindow),
     // Pi catalog 缺少时，GLM-5.3 系列仍按官方 128K 输出上限注册。
-    maxTokens: isVolcengineGlm5x
-      ? VOLCENGINE_GLM_MAX_TOKENS
-      : (catalogModel?.maxTokens
-        ?? (isCatalogMissingGlm53Family
-          ? GLM_53_FAMILY_MAX_TOKENS
-          : isCatalogMissingMimoV26Family
-            ? MIMO_V26_FAMILY_MAX_TOKENS
-            : DEFAULT_MAX_TOKENS)),
+    maxTokens: gemini4Spec
+      ? gemini4Spec.maxTokens
+      : isVolcengineGlm5x
+        ? VOLCENGINE_GLM_MAX_TOKENS
+        : (catalogModel?.maxTokens
+          ?? (isCatalogMissingGlm53Family
+            ? GLM_53_FAMILY_MAX_TOKENS
+            : isCatalogMissingMimoV26Family
+              ? MIMO_V26_FAMILY_MAX_TOKENS
+              : DEFAULT_MAX_TOKENS)),
   }
 }
 

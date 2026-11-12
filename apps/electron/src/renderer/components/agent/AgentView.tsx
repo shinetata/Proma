@@ -122,7 +122,7 @@ import { ProjectSelector } from './ProjectSelector'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentDeferredQueueMessageInput, AgentSendInput, AgentPendingFile, AgentThinkingLevel, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage } from '@proma/shared'
-import { inferContextWindow, inferReasoningTransport, isCodexFastModeSupportedModel, MAX_ATTACHMENT_SIZE, normalizeReasoningCapabilityLevel, normalizeReasoningLevel, resolveReasoningCapability, resolveReasoningProfile } from '@proma/shared'
+import { inferContextWindow, inferReasoningTransport, isCodexFastModeSupportedModel, isReasoningControlUnsupported, MAX_ATTACHMENT_SIZE, normalizeReasoningCapabilityLevel, normalizeReasoningLevel, resolveReasoningCapability, resolveReasoningProfile } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { getFilePanelDragData, INSERT_FILE_MENTION_EVENT, type FilePanelDragItem } from '@/lib/file-panel-drag'
 import {
@@ -759,6 +759,11 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     ? piReasoningCapability.capability ?? resolveReasoningCapability({ profile: reasoningProfile })
     : resolveReasoningCapability({ profile: reasoningProfile })
   const isSessionThinkingAvailable = Boolean(effectiveReasoningCapability)
+  // 思考参数在当前协议下无效（如 Gemini 4 经 Anthropic 兼容网关）：既无档位，也不展示旧版思考开关。
+  const isReasoningControlLocked = isReasoningControlUnsupported({
+    modelId: agentModelId ?? undefined,
+    transport: inferReasoningTransport(agentChannelProvider),
+  })
   const openAIThinkingLevels = effectiveReasoningCapability?.levels ?? OPENAI_STANDARD_THINKING_LEVELS
   const fallbackOpenAIThinkingLevel: AgentThinkingLevel = agentEffort === 'max'
     ? 'xhigh'
@@ -2788,7 +2793,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
     // 支持推理档位的模型由模型选择器的「推理深度」承担，这里只保留旧会话的思考模式开关。
-    ...(isSessionThinkingAvailable ? [] : [{
+    ...(isSessionThinkingAvailable || isReasoningControlLocked ? [] : [{
       key: 'thinking',
       node: (
         <AgentThinkingPopover
@@ -2840,6 +2845,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     planQuotaChannelId,
     planQuotaChannelUpdatedAt,
     isSessionThinkingAvailable,
+    isReasoningControlLocked,
     backgroundWaiting,
     sessionId,
     agentThinking,

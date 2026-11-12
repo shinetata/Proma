@@ -59,6 +59,7 @@ import {
   resolveOpenAIModelsUrl,
 } from '@proma/core'
 import { normalizeHttpResponse, normalizeRequestError } from './channel-test-error'
+import { resolveGoogleModelsEndpoint, toGoogleChannelModels, type GoogleModelItem } from './google-model-list'
 import { writeJsonFileAtomic } from './safe-file'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -1129,10 +1130,9 @@ async function testOpenAICompatible(
  * 测试 Google Generative AI API 连接
  */
 async function testGoogle(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<ChannelTestResult> {
-  const url = normalizeBaseUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
-  const response = await fetchFn(`${url}/v1beta/models?key=${apiKey}`, withTimeout({
+  const response = await fetchFn(`${resolveGoogleModelsEndpoint(baseUrl)}?key=${apiKey}`, withTimeout({
     method: 'GET',
   }))
 
@@ -2186,26 +2186,16 @@ async function fetchOpenAICompatibleModels(
 }
 
 /**
- * Google Generative AI 模型响应项
- */
-interface GoogleModelItem {
-  name: string
-  displayName?: string
-  description?: string
-  supportedGenerationMethods?: string[]
-}
-
-/**
  * 从 Google Generative AI API 拉取模型列表
  *
  * API: GET /v1beta/models?key={apiKey}
- * 仅返回支持 generateContent 的模型（排除纯 embedding 模型）。
+ * 仅返回支持 generateContent 的模型（排除纯 embedding 模型）；兼容网关不带 `models/` 前缀、
+ * 不声明 supportedGenerationMethods 的响应，规则见 google-model-list.ts。
  */
 async function fetchGoogleModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
-  const url = normalizeBaseUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
-  const response = await fetchFn(`${url}/v1beta/models?key=${apiKey}`, withTimeout({
+  const response = await fetchFn(`${resolveGoogleModelsEndpoint(baseUrl)}?key=${apiKey}`, withTimeout({
     method: 'GET',
   }))
 
@@ -2214,23 +2204,8 @@ async function fetchGoogleModels(baseUrl: string, apiKey: string, proxyUrl?: str
     return { success: false, message: result.message, models: [] }
   }
 
-  const data = await response.json() as { models?: GoogleModelItem[] }
-  const items = data.models ?? []
-
-  // 过滤出支持 generateContent 的模型（排除纯 embedding 模型）
-  const chatModels = items.filter((item) =>
-    item.supportedGenerationMethods?.includes('generateContent')
-  )
-
-  const models: ChannelModel[] = chatModels.map((item) => {
-    // Google 模型 name 格式为 "models/gemini-pro"，提取实际 ID
-    const id = item.name.replace(/^models\//, '')
-    return {
-      id,
-      name: item.displayName || id,
-      enabled: true,
-    }
-  })
+  const data = await response.json() as { models?: GoogleModelItem[] | null }
+  const models = toGoogleChannelModels(data.models)
 
   return {
     success: true,

@@ -10,6 +10,8 @@ export interface GeminiModelCapability {
 }
 
 const ONE_MILLION = 1_000_000
+/** Gemini 4 官方上下文窗口：输入、思考与输出共享 1,048,576 token。 */
+const GEMINI_4_CONTEXT_WINDOW = 1_048_576
 const SIXTY_FOUR_K = 65_536
 
 const ALL_LEVELS = ['minimal', 'low', 'medium', 'high'] as const satisfies readonly GeminiThinkingLevel[]
@@ -22,6 +24,21 @@ const NO_MINIMAL_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly 
  * Agent、Chat 和上下文展示共用的官方模型约束，避免把 Image / Live SKU 误判为 1M。
  */
 const GEMINI_TEXT_MODEL_CAPABILITIES: Readonly<Record<string, GeminiModelCapability>> = {
+  // 输入、思考与输出共享 1,048,576；普通流式请求不启用 long decode，输出上限按 64K 注册。
+  // Argon 与 Carbon 规格相同；Pi catalog 中各 provider 的 Argon 条目不一致、且没有 Carbon，
+  // 因此以这里为准。
+  'gemini-4-argon': {
+    contextWindow: GEMINI_4_CONTEXT_WINDOW,
+    maxOutputTokens: SIXTY_FOUR_K,
+    thinkingLevels: NO_MINIMAL_LEVELS,
+    defaultThinkingLevel: 'medium',
+  },
+  'gemini-4-carbon': {
+    contextWindow: GEMINI_4_CONTEXT_WINDOW,
+    maxOutputTokens: SIXTY_FOUR_K,
+    thinkingLevels: NO_MINIMAL_LEVELS,
+    defaultThinkingLevel: 'medium',
+  },
   'gemini-3-flash-preview': {
     contextWindow: ONE_MILLION,
     maxOutputTokens: SIXTY_FOUR_K,

@@ -7,6 +7,7 @@ export type ReasoningTransport =
   | 'anthropic-messages'
   | 'openai-completions'
   | 'openai-responses'
+  | 'google-generative-ai'
   | 'other'
 
 /**
@@ -28,7 +29,7 @@ export function inferReasoningTransport(provider: ProviderType | undefined): Rea
     case 'xai':
       return 'openai-responses'
     case 'google':
-      return 'other'
+      return 'google-generative-ai'
     default:
       return 'anthropic-messages'
   }
@@ -40,6 +41,8 @@ export type ReasoningEncodingKind =
   | 'deepseek-output-effort'
   | 'openai-reasoning-effort'
   | 'zai-thinking-effort'
+  /** Gemini 原生协议的 `generationConfig.thinkingConfig.thinkingLevel`，由 Pi Google 适配器写入。 */
+  | 'google-thinking-level'
 
 /** 每个产品等级映射为目标协议可接受的 effort 值。 */
 export type ReasoningEffortMap = Partial<Record<AgentThinkingLevel, string | null>>
@@ -50,7 +53,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'deepseek-v4.1-flash' | 'deepseek-v4.1-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-terra' | 'openai-reasoning-sol-luna'
+  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'deepseek-v4.1-flash' | 'deepseek-v4.1-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-terra' | 'openai-reasoning-sol-luna' | 'gemini-4-argon' | 'gemini-4-carbon'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -392,6 +395,61 @@ const OPENAI_SOL_LUNA_PROFILE: ReasoningProfile = {
   },
 }
 
+/**
+ * Gemini 4 Argon / Carbon 只接受 low / medium / high 三档 `thinkingLevel`，默认 medium。
+ *
+ * 仅声明 Gemini 原生协议编码：经 Anthropic 兼容网关转发时思考参数不生效，
+ * `output_config.effort` 甚至会关闭推理，因此其他协议不匹配本 profile。
+ */
+const GEMINI_4_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+
+function normalizeGemini4Level(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
+  if (level === 'off' || level === 'minimal' || level === 'low') return 'low'
+  if (level === 'high' || level === 'xhigh' || level === 'max') return 'high'
+  return 'medium'
+}
+
+const GEMINI_4_ARGON_PROFILE: ReasoningProfile = {
+  id: 'gemini-4-argon',
+  levels: GEMINI_4_LEVELS,
+  defaultLevel: 'medium',
+  normalize: normalizeGemini4Level,
+  encodings: {
+    'google-generative-ai': {
+      kind: 'google-thinking-level',
+      effortMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
+    },
+  },
+}
+
+/** Gemini 4 Carbon 与 Argon 使用同一套档位，仅区分 profile 身份。 */
+const GEMINI_4_CARBON_PROFILE: ReasoningProfile = {
+  ...GEMINI_4_ARGON_PROFILE,
+  id: 'gemini-4-carbon',
+}
+
+/**
+ * 判断模型是否为 Gemini 4 Argon / Carbon。
+ *
+ * 按叶子模型 ID 匹配：去掉 `[1m]` 后缀并取 `/` 后最后一段，兼容 `google/gemini-4-argon`
+ * 这类聚合网关前缀；不做前缀模糊匹配，避免误伤后续发布的其他 Gemini 4 SKU。
+ */
+export function getGemini4ModelLeafId(modelId: string | undefined): 'gemini-4-argon' | 'gemini-4-carbon' | undefined {
+  const leafModelId = modelId?.trim().toLowerCase().replace(/\[1m\]$/, '').split('/').pop()
+  return leafModelId === 'gemini-4-argon' || leafModelId === 'gemini-4-carbon' ? leafModelId : undefined
+}
+
+/**
+ * 判断模型在该协议下是否不提供任何思考控制。
+ *
+ * Gemini 4 经 Anthropic 兼容协议转发时，`thinking` 不生效、`output_config.effort` 会关闭推理，
+ * Proma 因此不发送任何思考字段，模型按上游默认方式推理。主进程据此把 Pi 模型注册为
+ * reasoning=false，渲染层据此隐藏思考档位与旧版思考开关。
+ */
+export function isReasoningControlUnsupported(input: ResolveReasoningProfileInput): boolean {
+  return input.transport === 'anthropic-messages' && getGemini4ModelLeafId(input.modelId) !== undefined
+}
+
 export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   DEEPSEEK_V4_FLASH_PROFILE,
   DEEPSEEK_FLASH_PROFILE,
@@ -404,12 +462,21 @@ export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   OPENAI_ASTRA_PROFILE,
   OPENAI_TERRA_PROFILE,
   OPENAI_SOL_LUNA_PROFILE,
+  GEMINI_4_ARGON_PROFILE,
+  GEMINI_4_CARBON_PROFILE,
 ]
 
 /** 仅按模型 ID 匹配，再以实际 transport 确认该模型是否有已验证的协议 encoding。 */
 export function resolveReasoningProfile(input: ResolveReasoningProfileInput): ReasoningProfile | undefined {
   const modelId = input.modelId?.trim().toLowerCase().replace(/\[1m\]$/, '')
   if (!modelId) return undefined
+
+  // Gemini 4 按叶子 ID 最先分流；只有 Gemini 原生协议有编码，其他协议返回 undefined。
+  const gemini4LeafId = getGemini4ModelLeafId(modelId)
+  if (gemini4LeafId) {
+    const profile = gemini4LeafId === 'gemini-4-carbon' ? GEMINI_4_CARBON_PROFILE : GEMINI_4_ARGON_PROFILE
+    return profile.encodings[input.transport] ? profile : undefined
+  }
 
   const isOpenAITransport = input.transport === 'openai-completions' || input.transport === 'openai-responses'
   const isOpenAIReasoningModel = !modelId.endsWith('-chat-latest')
