@@ -15,6 +15,7 @@ import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { SelectionActionPopover } from '@/components/selection/SelectionActionPopover'
 import { useFocusAgentSessionInput } from '@/hooks/useFocusAgentSessionInput'
 import { SELECTION_ACTION_POPOVER_SELECTOR } from '@/lib/quoted-selection'
+import { resolveTurnForkTargetUuid } from '@/lib/turn-fork-target'
 
 const MAX_AGENT_HISTORY_QUOTED_CHARS = 2000
 const SELECTION_CAPTURE_DEBOUNCE_MS = 80
@@ -30,6 +31,8 @@ interface AgentHistorySelection {
   y: number
   sourceLabel: string
   messageId?: string
+  /** 选区所在轮次的末尾主线 assistant 消息 uuid，用于从轮末分叉。 */
+  forkTargetUuid?: string
   messageRole?: AgentHistoryMessageRole
   selectionStart?: number
   selectionEnd?: number
@@ -215,6 +218,24 @@ export function AgentHistorySelectionLayer({
   const captureTimerRef = React.useRef<number | null>(null)
   const openTemporaryAgentPendingRef = React.useRef(false)
 
+  // 只有已写入 Pi entry 绑定的消息才能被 Pi SessionManager 分叉。
+  const parentSession = React.useMemo(
+    () => agentSessions.find((item) => item.id === sessionId),
+    [agentSessions, sessionId],
+  )
+  const isForkableUuid = React.useCallback((uuid: string): boolean => (
+    Boolean(parentSession?.piEntryBindings?.[uuid])
+  ), [parentSession])
+
+  /** 实际分叉点：优先轮末主线消息，轮末缺少 Pi 绑定时退回选区所在消息。 */
+  const resolveForkTarget = React.useCallback((candidate: AgentHistorySelection): string | undefined => (
+    resolveTurnForkTargetUuid({
+      turnEndUuid: candidate.forkTargetUuid,
+      selectedMessageId: candidate.messageId,
+      isForkable: isForkableUuid,
+    })
+  ), [isForkableUuid])
+
   const clearSelection = React.useCallback((): void => {
     selectionRef.current = null
     setSelection((current) => current === null ? current : null)
@@ -296,6 +317,7 @@ export function AgentHistorySelectionLayer({
       y: Math.max(12, anchorRect.top - 12),
       sourceLabel: sameMessage ? getRoleLabel(role) : 'Agent 历史 · 多条消息',
       messageId: sameMessage ? startMessageEl.dataset.messageId : undefined,
+      forkTargetUuid: sameMessage ? startMessageEl.dataset.turnForkUuid : undefined,
       messageRole: sameMessage ? role : undefined,
       selectionStart,
       selectionEnd,
@@ -406,8 +428,10 @@ export function AgentHistorySelectionLayer({
       return
     }
 
-    const parentSession = agentSessions.find((item) => item.id === sessionId)
-    if (!parentSession?.piEntryBindings?.[candidate.messageId]) {
+    // 分叉点取选区所在轮次的末尾主线消息：选区可能落在轮次中途的 tool 调用消息上，
+    // 从那里分叉会丢掉本轮后续的工具结果与最终回复。
+    const forkTargetUuid = resolveForkTarget(candidate)
+    if (!forkTargetUuid) {
       toast.warning('这个回复没有可用的 Pi 分叉节点，暂时无法从这里探索')
       return
     }
@@ -417,7 +441,7 @@ export function AgentHistorySelectionLayer({
       // 必须使用 Pi 的 SessionManager 分叉，才能继承节点此前完整上下文与工具轨迹。
       const branch = await window.electronAPI.forkAgentSession({
         sessionId,
-        upToMessageUuid: candidate.messageId,
+        upToMessageUuid: forkTargetUuid,
         explorationSourceLabel: candidate.text.slice(0, 80),
       })
       const quotedSelection = createQuotedSelection(candidate)
@@ -430,7 +454,7 @@ export function AgentHistorySelectionLayer({
           ? openBranches
           : [...openBranches, {
               sessionId: branch.id,
-              sourceMessageId: candidate.messageId!,
+              sourceMessageId: forkTargetUuid,
               sourceLabel: candidate.text.slice(0, 80),
             }])
         return next
@@ -446,9 +470,11 @@ export function AgentHistorySelectionLayer({
     } finally {
       openTemporaryAgentPendingRef.current = false
     }
-  }, [agentSessions, clearSelection, createQuotedSelection, sessionId, setAgentSessions, setQuotedSelectionMap, setSidePanelOpen, setSidePanelTabMap, setSideTemporaryAgentMap])
+  }, [clearSelection, createQuotedSelection, resolveForkTarget, sessionId, setAgentSessions, setQuotedSelectionMap, setSidePanelOpen, setSidePanelTabMap, setSideTemporaryAgentMap])
 
-  const canExplore = explorationEnabled && selection?.messageRole === 'assistant' && Boolean(selection.messageId)
+  const canExplore = explorationEnabled
+    && selection?.messageRole === 'assistant'
+    && Boolean(resolveForkTarget(selection))
   return selection && (
     <SelectionActionPopover
       x={selection.x}
