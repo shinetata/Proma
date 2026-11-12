@@ -243,13 +243,9 @@ interface DiffTabContentProps {
   toolbarActions?: React.ReactNode
   /** 基准 ref（如 "origin/main"），用于 worktree vs main 模式 */
   baseRef?: string
-  /** 文件页签内联预览的紧凑布局（商业版 GTe compact）。 */
-  compact?: boolean
-  /** 内联预览的关闭入口：关闭预览并展开文件列表。 */
-  onClose?: () => void
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef, compact = false, onClose }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef }: DiffTabContentProps): React.ReactElement {
   const ext = getExtension(filePath)
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isHtml = previewOnly && HTML_EXTS.has(ext)
@@ -1572,9 +1568,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   }, [fileAccess.candidateBasePaths, filePath])
 
   return (
-    <div className={cn('workspace-preview flex min-w-0 flex-col h-full', compact && 'workspace-preview-compact')}>
-      <div className={cn('flex flex-wrap items-center gap-1.5 px-3 py-1.5 flex-shrink-0', compact && 'min-h-10 border-b border-border/70')}>
-        <span className={cn('workspace-preview-toolbar-title flex-1 text-[13px] text-foreground/80 truncate', compact ? 'min-w-0' : 'min-w-[4rem]')} title={filePath}>
+    <div className="workspace-preview flex min-w-0 flex-col h-full">
+      <div className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 flex-shrink-0">
+        <span className="workspace-preview-toolbar-title flex-1 text-[13px] text-foreground/80 truncate min-w-[4rem]" title={filePath}>
           {getPreviewPathLabel(filePath)}
         </span>
 
@@ -1583,7 +1579,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             <DefaultAppOpenButton
               filePath={previewTargetPath}
               access={fileAccess}
-              variant={compact ? 'prominent' : 'labeled'}
+              variant="labeled"
             />
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1745,21 +1741,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         )}
 
         {toolbarActions}
-        {onClose && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="关闭预览并展开列表"
-                className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-              >
-                <X className="size-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">关闭预览并展开列表</TooltipContent>
-          </Tooltip>
-        )}
       </div>
 
       <div className="workspace-preview-body relative flex-1 min-h-0 flex">

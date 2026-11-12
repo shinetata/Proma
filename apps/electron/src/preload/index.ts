@@ -256,6 +256,8 @@ export interface ElectronAPI {
   listWorktrees: (repoPath: string, sessionId: string) => Promise<import('@proma/shared').WorktreeInfo[]>
   /** 获取 Worktree 相对于基准分支的全量变更 */
   getWorktreeChanges: (worktreePath: string, baseBranch: string, sessionId: string) => Promise<import('@proma/shared').UnstagedChangesResult>
+  /** 获取仓库整体 patch（连续改动视图用） */
+  getChangesPatch: (input: import('@proma/shared').GetChangesPatchInput) => Promise<import('@proma/shared').ChangesPatchResult>
   /** 在独立窗口打开当前文件预览 */
   openDetachedPreview: (input: DetachedPreviewWindowInput) => Promise<string | null>
   /** 获取独立预览窗口数据 */
@@ -1350,6 +1352,10 @@ const electronAPI: ElectronAPI = {
 
   getWorktreeChanges: (worktreePath: string, baseBranch: string, sessionId: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_WORKTREE_CHANGES, worktreePath, baseBranch, sessionId)
+  },
+
+  getChangesPatch: (input: import('@proma/shared').GetChangesPatchInput) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_CHANGES_PATCH, input)
   },
 
   openDetachedPreview: (input: DetachedPreviewWindowInput) => {

@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { FileText, X, Clock, GitBranch } from 'lucide-react'
+import { X, Clock, GitBranch } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -29,7 +29,6 @@ export interface TabBarItemProps {
   /** 预览面板是否正在退出动画 */
   isLeaving: boolean
   /** 该 Tab 正在被拖出 TabBar 转分屏（tear-off 触发瞬间） */
-  isTearingOff?: boolean
   onActivate: () => void
   onClose: () => void
   onMiddleClick: () => void
@@ -57,7 +56,6 @@ export function TabBarItem({
   isStreaming,
   isHovered,
   isLeaving,
-  isTearingOff,
   onActivate,
   onClose,
   onMiddleClick,
@@ -119,16 +117,11 @@ export function TabBarItem({
           isActive
             ? 'app-tab-active text-foreground border-border/80'
             : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-          isTearingOff && 'ring-2 ring-primary/70 ring-offset-0 bg-primary/10',
         )}
         onClick={onActivate}
         onMouseDown={handleMouseDown}
         onPointerDown={onDragStart}
       >
-        {type === 'preview' && !isNarrow && (
-          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-
         {/* 标题（窄状态下隐藏，用 spacer 撑开让关闭按钮靠右） */}
         {isNarrow ? (
           <span className="flex-1" />

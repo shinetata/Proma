@@ -1,0 +1,395 @@
+/**
+ * 连续改动视图样式
+ *
+ * 全部规则限定在 `.cdv-` 前缀下，避免与右侧工作区其他视图互相影响。
+ * 行高、行号宽度分别由 `--cdv-number-width` 与统一的行高变量控制，
+ * 保证统一视图与并排视图行高一致、滚动时不跳动。
+ */
+
+/* ===== 容器与工具栏 ===== */
+
+.cdv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.cdv-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 8px;
+  border-bottom: 0.5px solid hsl(var(--border) / 0.6);
+  background: hsl(var(--content-area));
+}
+
+.cdv-toolbar-spacer {
+  flex: 1;
+}
+
+.cdv-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.cdv-tool:hover:not(:disabled) {
+  background: hsl(var(--accent) / 0.7);
+  color: hsl(var(--foreground));
+}
+
+.cdv-tool:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.cdv-tool[aria-pressed='true'] {
+  background: hsl(var(--accent) / 0.7);
+  color: hsl(var(--foreground));
+}
+
+.cdv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: hsl(var(--content-area));
+}
+
+.cdv-scroll:focus {
+  outline: none;
+}
+
+/* ===== 文件区块 ===== */
+
+.cdv-file {
+  border-bottom: 0.5px solid hsl(var(--border) / 0.6);
+}
+
+.cdv-file:last-child {
+  border-bottom: 0;
+}
+
+.cdv-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 0 8px 0 4px;
+  border-bottom: 0.5px solid hsl(var(--border) / 0.6);
+  background: hsl(var(--content-area));
+}
+
+.cdv-file:not([data-expanded]) .cdv-file-header {
+  border-bottom: 0;
+}
+
+.cdv-file-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.cdv-file-toggle:hover {
+  color: hsl(var(--foreground));
+}
+
+.cdv-chevron {
+  transition: transform 0.12s ease;
+}
+
+.cdv-file:not([data-expanded]) .cdv-chevron {
+  transform: rotate(-90deg);
+}
+
+.cdv-file-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 70%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cdv-badge {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  padding: 0 6px;
+  border-radius: calc(var(--radius) - 4px);
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cdv-note-inline {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground) / 0.8);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cdv-counts {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cdv-added {
+  color: #059669;
+}
+
+.cdv-deleted {
+  color: #dc2626;
+}
+
+:is(.dark) .cdv-added {
+  color: #34d399;
+}
+
+:is(.dark) .cdv-deleted {
+  color: #f87171;
+}
+
+.cdv-note {
+  margin: 0;
+  padding: 8px 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+/* ===== 统一视图行 ===== */
+
+.cdv-code {
+  padding: 4px 0 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.cdv-line {
+  display: grid;
+  grid-template-columns: var(--cdv-number-width, 3ch) var(--cdv-number-width, 3ch) 1.4em minmax(0, 1fr);
+  box-sizing: border-box;
+  min-height: 22px;
+  padding-right: 12px;
+  white-space: pre;
+}
+
+.cdv-line.cdv-wrap,
+.cdv-wrap .cdv-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cdv-no {
+  box-sizing: border-box;
+  padding-right: 6px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  text-align: right;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.cdv-sign {
+  color: hsl(var(--muted-foreground));
+  text-align: center;
+  user-select: none;
+}
+
+.cdv-text {
+  min-width: 0;
+  white-space: inherit;
+  overflow-wrap: inherit;
+}
+
+.cdv-context .cdv-text {
+  color: hsl(var(--foreground) / 0.9);
+}
+
+.cdv-add {
+  background: #10b9811a;
+  box-shadow: inset 3px 0 #10b981;
+}
+
+.cdv-del {
+  background: #ef44441a;
+  box-shadow: inset 3px 0 #ef4444;
+}
+
+.cdv-add .cdv-no,
+.cdv-add .cdv-sign {
+  color: #059669;
+}
+
+.cdv-del .cdv-no,
+.cdv-del .cdv-sign {
+  color: #dc2626;
+}
+
+:is(.dark) .cdv-add {
+  background: #10b98124;
+}
+
+:is(.dark) .cdv-del {
+  background: #ef444424;
+}
+
+:is(.dark) .cdv-add .cdv-no,
+:is(.dark) .cdv-add .cdv-sign {
+  color: #34d399;
+}
+
+:is(.dark) .cdv-del .cdv-no,
+:is(.dark) .cdv-del .cdv-sign {
+  color: #f87171;
+}
+
+/* ===== 并排视图行 ===== */
+
+.cdv-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 22px;
+  white-space: pre;
+}
+
+.cdv-wrap .cdv-pair {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cdv-cell {
+  display: grid;
+  grid-template-columns: var(--cdv-number-width, 3ch) minmax(0, 1fr);
+  box-sizing: border-box;
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.cdv-cell + .cdv-cell {
+  border-left: 0.5px solid hsl(var(--border) / 0.6);
+}
+
+.cdv-cell-empty {
+  background: hsl(var(--muted) / 0.25);
+}
+
+.cdv-cell .cdv-text {
+  overflow-wrap: inherit;
+}
+
+/* ===== 折叠的未改动行段 ===== */
+
+.cdv-gap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 26px;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  background: hsl(var(--muted) / 0.35);
+  color: hsl(var(--muted-foreground));
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.cdv-gap:hover:not(:disabled) {
+  background: hsl(var(--accent) / 0.7);
+  color: hsl(var(--foreground));
+}
+
+.cdv-gap:disabled {
+  cursor: progress;
+}
+
+/* ===== 空状态与提示条 ===== */
+
+.cdv-empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  text-align: center;
+}
+
+.cdv-notice {
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: 0.5px solid hsl(var(--border) / 0.6);
+  background: hsl(var(--muted) / 0.4);
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+/* ===== 非 Git 文件行 ===== */
+
+.cdv-plain-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 10px 0 28px;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--foreground) / 0.9);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cdv-plain-file-row:hover {
+  background: hsl(var(--accent) / 0.6);
+}

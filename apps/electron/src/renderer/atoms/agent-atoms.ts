@@ -947,7 +947,7 @@ export const agentViewedChangeRunAtom = atom<Map<string, string>>(new Map())
 /**
  * Diff 数据缓存 — 按 session 隔离，存放上一次 IPC 拉取到的未暂存改动结果。
  *
- * 让 DiffChangesList 切走再切回时能立即拿到旧数据渲染（SWR 模式），
+ * 让改动 Tab 切走再切回时能立即拿到旧数据渲染（SWR 模式），
  * 避免 mount 时空数组误命中"没有代码改动"分支造成 ~1s 闪烁。
  * 数据新鲜度由 [[agentDiffRefreshVersionAtom]] 触发的后台 fetch 维护，无 TTL。
  */

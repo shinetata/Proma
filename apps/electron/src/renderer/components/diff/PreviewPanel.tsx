@@ -1,4 +1,4 @@
-/** 右侧工作区中的单个文件预览内容。标题与关闭由外层动态 Tab 承担。 */
+/** 右侧工作区中的单个文件预览内容。标题与关闭由外层动态标签承担。 */
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
@@ -11,12 +11,9 @@ interface PreviewPanelProps {
   sessionId: string
   file: PreviewFile
   onClose: () => void
-  /** 内联预览（文件 / 文件改动页签内）使用紧凑工具栏，并显示「关闭预览并展开列表」。 */
-  compact?: boolean
-  toolbarActions?: React.ReactNode
 }
 
-function PreviewPanelContent({ sessionId, file, onClose, compact, toolbarActions }: PreviewPanelProps): React.ReactElement {
+function PreviewPanelContent({ sessionId, file, onClose }: PreviewPanelProps): React.ReactElement {
   const sessionPath = useAtomValue(agentSessionPathMapAtom).get(sessionId) ?? ''
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-content-area titlebar-no-drag">
@@ -36,9 +33,6 @@ function PreviewPanelContent({ sessionId, file, onClose, compact, toolbarActions
             legacySkillFilePath={file.legacySkillFilePath}
             baseRef={file.baseRef}
             onEmptyDiff={onClose}
-            compact={compact}
-            onClose={compact ? onClose : undefined}
-            toolbarActions={toolbarActions}
           />
         </PreviewContentErrorBoundary>
       </div>
@@ -48,13 +42,7 @@ function PreviewPanelContent({ sessionId, file, onClose, compact, toolbarActions
 
 /** Pure file previews only re-render when their own file descriptor changes. */
 export const PreviewPanel = React.memo(PreviewPanelContent, (previous, next) => {
-  if (
-    previous.sessionId !== next.sessionId
-    || previous.file !== next.file
-    || previous.compact !== next.compact
-    || previous.toolbarActions !== next.toolbarActions
-    || (next.compact && previous.onClose !== next.onClose)
-  ) return false
+  if (previous.sessionId !== next.sessionId || previous.file !== next.file) return false
   // previewOnly never calls onEmptyDiff, so its parent callback must not defeat render isolation.
   return previous.file.previewOnly || previous.onClose === next.onClose
 })

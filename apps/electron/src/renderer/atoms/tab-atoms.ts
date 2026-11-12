@@ -2,7 +2,8 @@
  * Tab Atoms — 当前工作区入口状态管理
  *
  * 顶部只保留当前会话入口；会话恢复与导航交给左侧列表。
- * 通过桥接 atom 与 currentAgentSessionIdAtom 同步，确保现有派生 atoms 无需修改。
+ * 文件预览不再占用主内容区标签，一律在右侧工作区里以标签形式呈现，
+ * 因此这里只维护 Agent 会话标签的状态。
  */
 
 import { atom } from 'jotai'
@@ -13,15 +14,11 @@ import {
   unviewedCompletedSessionIdsAtom,
 } from './agent-atoms'
 import type { SessionIndicatorStatus } from './agent-atoms'
-import type { PreviewFile } from './preview-atoms'
 
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'agent' | 'preview'
-
-/** 会话预览 Tab 的 ID 前缀：运行时临时入口，不参与持久化 */
-const PREVIEW_TAB_PREFIX = '__preview__:'
+export type TabType = 'agent'
 
 /** 标签页数据 */
 export interface TabItem {
@@ -41,30 +38,6 @@ export interface PersistedTabState {
   activeTabId: string | null
 }
 
-/** 会话上次停留的视图：会话对话 vs 文件预览 */
-export type SessionView = 'session' | 'preview'
-
-/**
- * 每会话的视图状态（仅运行期内存态，不持久化到磁盘）。
- * 用于在切走再切回同一会话时，重建预览 Tab 并回到上次停留的视图。
- */
-export interface SessionViewState {
-  /** 该会话的预览 Tab 是否处于"打开"状态（用户主动关闭后置 false） */
-  previewTabOpen: boolean
-  /** 上次激活的是会话对话还是文件预览 */
-  lastView: SessionView
-}
-
-/** 切回会话时重建预览 Tab 的提示（由调用方读取 atom 后传入纯函数 openTab） */
-export interface OpenTabRestore {
-  /** 该会话是否应重建预览 Tab（previewTabOpen && 存在预览文件时为 true） */
-  previewTabOpen: boolean
-  /** 预览 Tab 标题（重建时使用） */
-  previewTitle: string
-  /** 上次停留的视图，决定重建后激活预览 Tab 还是会话 Tab */
-  lastView: SessionView
-}
-
 // ===== 核心 Atoms =====
 
 /** 顶部入口列表：当前会话 */
@@ -75,13 +48,6 @@ export const activeTabIdAtom = atom<string | null>(null)
 
 /** 标签页 MRU（最近使用）顺序，最近使用的 ID 排在前面 */
 export const tabMruAtom = atom<string[]>([])
-
-/**
- * 每会话视图状态 Map（仅运行期内存态，不持久化）。
- * key = sessionId，value = { previewTabOpen, lastView }。
- * 切走会话时预览 Tab 被 openTab 丢弃，切回时据此重建并回到上次视图。
- */
-export const sessionViewStateMapAtom = atom<Map<string, SessionViewState>>(new Map())
 
 /** 侧边栏是否收起（持久化） */
 export const sidebarCollapsedAtom = atomWithStorage<boolean>(
@@ -108,11 +74,7 @@ export const activeTabAtom = atom<TabItem | null>((get) => {
   return get(tabsAtom).find((t) => t.id === activeId) ?? null
 })
 
-/**
- * 当前活跃标签所属的会话 ID。
- * 预览 Tab 归一化为其 owner 会话的 sessionId，使"会话高亮"与"Ctrl+Tab 定位"
- * 都把预览 Tab 视为所属会话的一部分（preview tab 的 id 自身不参与这些判定）。
- */
+/** 当前活跃标签所属的会话 ID */
 export const activeSessionIdAtom = atom<string | null>((get) => {
   const activeTab = get(activeTabAtom)
   return activeTab?.sessionId ?? null
@@ -124,9 +86,7 @@ export const tabStreamingMapAtom = atom<Map<string, boolean>>((get) => {
   const agentRunning = get(agentRunningSessionIdsAtom)
   const map = new Map<string, boolean>()
   for (const tab of tabs) {
-    if (tab.type === 'agent') {
-      map.set(tab.id, agentRunning.has(tab.sessionId))
-    }
+    map.set(tab.id, agentRunning.has(tab.sessionId))
   }
   return map
 })
@@ -138,59 +98,29 @@ export const tabIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((ge
   const unviewedCompletedIds = get(unviewedCompletedSessionIdsAtom)
   const map = new Map<string, SessionIndicatorStatus>()
   for (const tab of tabs) {
-    if (tab.type === 'agent') {
-      const status = agentIndicator.get(tab.sessionId)
-        ?? (unviewedCompletedIds.has(tab.sessionId) ? 'completed' : 'idle')
-      map.set(tab.id, status)
-    }
+    const status = agentIndicator.get(tab.sessionId)
+      ?? (unviewedCompletedIds.has(tab.sessionId) ? 'completed' : 'idle')
+    map.set(tab.id, status)
   }
   return map
 })
 
 // ===== 操作函数 =====
 
-export function createPreviewTabId(sessionId: string): string {
-  return `${PREVIEW_TAB_PREFIX}${sessionId}`
-}
-
-export function getFileBaseName(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath
-}
-
-export function getPreviewTabTitle(filePath: string): string {
-  return `预览：${getFileBaseName(filePath)}`
-}
-
-export function isPreviewTab(tab: TabItem): boolean {
-  return tab.type === 'preview' || tab.id.startsWith(PREVIEW_TAB_PREFIX)
-}
-
-/** Agent 会话及其归属的文件预览 Tab 都可操作 Agent 侧面板。 */
+/** Agent 会话标签是唯一可承载右侧工作区的标签类型。 */
 export function isAgentContextTab(tab: TabItem | undefined): boolean {
-  return tab?.type === 'agent' || (tab !== undefined && isPreviewTab(tab))
-}
-
-function isSessionTab(tab: TabItem): boolean {
-  return tab.type === 'agent'
-}
-
-function getPersistentTabs(tabs: TabItem[]): TabItem[] {
-  return tabs.filter(isSessionTab)
+  return tab?.type === 'agent'
 }
 
 export function getPersistableTabState(
   tabs: TabItem[],
   activeTabId: string | null,
 ): PersistedTabState {
-  const persistentTabs = getPersistentTabs(tabs)
-  const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) : null
-  const persistentActiveTabId = activeTab && isPreviewTab(activeTab)
-    ? persistentTabs.find((tab) => tab.sessionId === activeTab.sessionId && tab.type === 'agent')?.id
-      ?? persistentTabs.at(-1)?.id
-      ?? null
-    : activeTab && isSessionTab(activeTab)
-      ? activeTabId
-      : null
+  // 顶部只保留会话入口；其他视图（收藏、定时任务等）不写入 settings.json。
+  const persistentTabs = tabs.filter((tab) => tab.type === 'agent')
+  const persistentActiveTabId = activeTabId && persistentTabs.some((tab) => tab.id === activeTabId)
+    ? activeTabId
+    : persistentTabs.at(-1)?.id ?? null
 
   return {
     tabs: persistentTabs,
@@ -198,33 +128,11 @@ export function getPersistableTabState(
   }
 }
 
-/** 打开或聚焦会话入口：始终用目标会话替换当前会话，避免顶部累积多个 Tab。
- *  restore 提示存在时，切回带预览的会话会一并重建其预览 Tab 并回到上次视图。 */
+/** 打开或聚焦会话入口：始终用目标会话替换当前会话，避免顶部累积多个 Tab。 */
 export function openTab(
   tabs: TabItem[],
   item: { type: TabType; sessionId: string; title: string },
-  restore?: OpenTabRestore,
 ): { tabs: TabItem[]; activeTabId: string } {
-  if (item.type === 'preview') {
-    const ownerAgentTab = tabs.find((t) => t.type === 'agent' && t.sessionId === item.sessionId) ?? {
-      id: item.sessionId,
-      type: 'agent' as const,
-      sessionId: item.sessionId,
-      title: 'Agent 会话',
-    }
-    const previewTab: TabItem = {
-      id: createPreviewTabId(item.sessionId),
-      type: 'preview',
-      sessionId: item.sessionId,
-      title: item.title,
-    }
-
-    return {
-      tabs: [ownerAgentTab, previewTab],
-      activeTabId: previewTab.id,
-    }
-  }
-
   const existingTab = tabs.find((t) => t.sessionId === item.sessionId && t.type === item.type)
   const sessionTab: TabItem = existingTab ?? {
     id: item.sessionId,
@@ -233,43 +141,9 @@ export function openTab(
     title: item.title,
   }
 
-  // 切回带预览的会话：重建该会话的预览 Tab，并按 lastView 决定激活哪个。
-  if (restore?.previewTabOpen) {
-    const previewTab: TabItem = {
-      id: createPreviewTabId(item.sessionId),
-      type: 'preview',
-      sessionId: item.sessionId,
-      title: restore.previewTitle,
-    }
-    return {
-      tabs: [sessionTab, previewTab],
-      activeTabId: restore.lastView === 'preview' ? previewTab.id : sessionTab.id,
-    }
-  }
-
   return {
     tabs: [sessionTab],
     activeTabId: sessionTab.id,
-  }
-}
-
-/**
- * 从视图状态与预览文件 Map 构造 openTab 的 restore 提示。
- * 仅当该会话预览 Tab 处于打开状态且确实有预览文件时才返回提示，否则返回 undefined。
- * 供 useOpenSession / TabSwitcher 等切换入口在调用 openTab 前读取 atom 后传入。
- */
-export function buildOpenTabRestore(
-  sessionId: string,
-  viewStateMap: Map<string, SessionViewState>,
-  previewFileMap: Map<string, PreviewFile | null>,
-): OpenTabRestore | undefined {
-  const viewState = viewStateMap.get(sessionId)
-  const previewFile = previewFileMap.get(sessionId)
-  if (!viewState?.previewTabOpen || !previewFile) return undefined
-  return {
-    previewTabOpen: true,
-    previewTitle: getPreviewTabTitle(previewFile.filePath),
-    lastView: viewState.lastView,
   }
 }
 
@@ -281,14 +155,11 @@ export function closeTab(
 ): { tabs: TabItem[]; activeTabId: string | null } {
   const tabIndex = tabs.findIndex((t) => t.id === tabId)
   if (tabIndex === -1) return { tabs, activeTabId }
-  const closingTab = tabs[tabIndex]!
-  const boundPreviewId = isSessionTab(closingTab) ? createPreviewTabId(closingTab.sessionId) : null
-
-  const newTabs = tabs.filter((t) => t.id !== tabId && (!boundPreviewId || t.id !== boundPreviewId))
+  const newTabs = tabs.filter((t) => t.id !== tabId)
 
   // 如果关闭的是当前激活的标签，切换到相邻标签
   let newActiveTabId = activeTabId
-  if (activeTabId === tabId || (boundPreviewId !== null && activeTabId === boundPreviewId)) {
+  if (activeTabId === tabId) {
     if (newTabs.length > 0) {
       const nextIndex = Math.min(tabIndex, newTabs.length - 1)
       newActiveTabId = newTabs[nextIndex]!.id
@@ -320,6 +191,6 @@ export function updateTabTitle(
   title: string,
 ): TabItem[] {
   return tabs.map((t) =>
-    t.sessionId === sessionId && !isPreviewTab(t) ? { ...t, title } : t
+    t.sessionId === sessionId ? { ...t, title } : t
   )
 }

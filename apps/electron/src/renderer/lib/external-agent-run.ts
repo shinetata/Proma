@@ -80,11 +80,10 @@ export function buildExternalAgentRunActivation(
 ): ExternalAgentRunActivation {
   const session = input.sessions.find((item) => item.id === input.sessionId)
   const title = input.title ?? session?.title ?? '新 Agent 会话'
-  const tabsWithoutPreview = input.tabs.filter((tab) => tab.type !== 'preview')
-  const existingTab = tabsWithoutPreview.find((tab) => tab.type === 'agent' && tab.sessionId === input.sessionId)
+  const existingTab = input.tabs.find((tab) => tab.type === 'agent' && tab.sessionId === input.sessionId)
   const tabs = existingTab
-    ? (tabsWithoutPreview.length === input.tabs.length ? input.tabs : tabsWithoutPreview)
-    : [...tabsWithoutPreview, { id: input.sessionId, type: 'agent' as const, sessionId: input.sessionId, title }]
+    ? input.tabs
+    : [...input.tabs, { id: input.sessionId, type: 'agent' as const, sessionId: input.sessionId, title }]
   const activeTabId = existingTab?.id ?? input.sessionId
 
   return {
