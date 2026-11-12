@@ -76,7 +76,6 @@ import {
   sidebarCollapsedAtom,
   closeTab,
   updateTabTitle,
-  sessionViewStateMapAtom,
 } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { lastFavoriteSessionIdAtom, sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
@@ -653,7 +652,6 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
   const setSessionPendingFiles = useSetAtom(agentSessionPendingFilesAtom)
-  const setSessionViewStateMap = useSetAtom(sessionViewStateMapAtom)
   const clearBrowserSessionState = useSetAtom(clearBrowserSessionStateAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
@@ -696,8 +694,6 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
     setSessionModelMap(deleteKey)
     // 会话工作目录路径：不清理会导致右侧文件面板继续用已删除目录请求 list-directory
     setSessionPathMap(deleteKey)
-    // 视图状态（预览开关 + 上次视图）：删除/归档是终态，统一清理避免孤立条目
-    setSessionViewStateMap(deleteKey)
     // 即使主进程的 browser-closed 事件因删除过程中的重渲染晚到，也不能让右侧工作区
     // 保留已删除会话的浏览器面板。
     clearBrowserSessionState(id)
@@ -731,7 +727,7 @@ export function LeftSidebar({ width, noTransition, utilityRailOnly = false }: Le
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [clearBrowserSessionState, setPreviewPanelOpen, setPreviewFile, setPreviewFiles, setPreviewContentRefreshVersion, setPreviewResolvedPaths, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setNonGitFileChanges, setFileChangesCurrentRun, setDiffData, setAgentSidePanelOpenMap, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
+  }, [clearBrowserSessionState, setPreviewPanelOpen, setPreviewFile, setPreviewFiles, setPreviewContentRefreshVersion, setPreviewResolvedPaths, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setNonGitFileChanges, setFileChangesCurrentRun, setDiffData, setAgentSidePanelOpenMap, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null

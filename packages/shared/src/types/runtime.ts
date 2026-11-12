@@ -201,6 +201,28 @@ export interface DetachedPreviewWindowData extends DetachedPreviewWindowInput {
   id: string
 }
 
+/** 获取仓库改动 patch 的输入 */
+export interface GetChangesPatchInput {
+  /** 当前 Agent 会话 ID，用于主进程校验可访问路径 */
+  sessionId?: string
+  /** 会话或项目目录，仅用于路径授权校验 */
+  dirPath?: string
+  /** 要读取 patch 的 Git 仓库根目录 */
+  gitRoot: string
+  /** 基准 ref（如 worktree 的 "origin/main"）；省略时用 HEAD */
+  baseRef?: string
+}
+
+/** 仓库改动 patch 结果 */
+export interface ChangesPatchResult {
+  /** unified diff 文本；超出上限时截断到最后一个完整文件 */
+  patch: string
+  /** patch 是否因体积超限被截断 */
+  truncated: boolean
+  /** 实际比较的基准：HEAD、merge-base 结果或传入的 baseRef */
+  base: string
+}
+
 /** Revert 文件变更的输入 */
 export interface RevertFileInput {
   dirPath: string
@@ -437,6 +459,8 @@ export const IPC_CHANNELS = {
   LIST_WORKTREES: 'git:list-worktrees',
   /** 获取 Worktree 相对于基准分支的全量变更 */
   GET_WORKTREE_CHANGES: 'git:get-worktree-changes',
+  /** 获取整个仓库（或 worktree 相对基准分支）的 unified patch，供连续改动视图解析 */
+  GET_CHANGES_PATCH: 'git:get-changes-patch',
   /** 在系统默认浏览器中打开外部链接 */
   OPEN_EXTERNAL: 'shell:open-external',
   /** 用系统默认应用打开任意文件 */

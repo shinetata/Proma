@@ -111,6 +111,7 @@ import type {
   TurnChangesSummary,
   TurnFileDiff,
   GetFileDiffInput,
+  GetChangesPatchInput,
   DetachedPreviewWindowInput,
   RevertFileInput,
   FileAccessOptions,
@@ -164,7 +165,7 @@ import { browserController } from './lib/browser-controller'
 import { acknowledgeTerminalOutput, closeTerminalsForSession, createTerminal, getTerminalSnapshot, killTerminal, resizeTerminal, writeTerminal } from './lib/terminal-service'
 import { getMainWindow } from './lib/main-window-store'
 import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
-import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
+import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, getChangesPatch } from './lib/git-diff-service'
 import { registerPromaDirectoryPath, registerPromaFilePath } from './lib/local-file-protocol'
 import {
   authorizeDiscoveredVault,
@@ -1723,6 +1724,26 @@ export function registerIpcHandlers(): void {
       if (!(await ensurePathAllowedWithWorktree(dirPath, access)) || (gitRoot && !(await ensurePathAllowedWithWorktree(gitRoot, access)))) return null
       return getDiffContents(dirPath, filePath, gitRoot, input.baseRef)
     }
+  )
+
+  // 获取仓库整体 patch：连续改动视图一次性拿到所有文件的 unified diff。
+  ipcMain.handle(
+    IPC_CHANNELS.GET_CHANGES_PATCH,
+    async (_, input: GetChangesPatchInput) => {
+      const { dirPath, gitRoot, sessionId } = input ?? {}
+      if (!gitRoot || typeof gitRoot !== 'string') {
+        console.warn('[IPC] git:get-changes-patch 收到无效参数')
+        return { patch: '', truncated: false, base: 'HEAD' }
+      }
+      const access = normalizeFileAccessOptions({ sessionId })
+      if (!(await ensurePathAllowedWithWorktree(gitRoot, access))) {
+        return { patch: '', truncated: false, base: 'HEAD' }
+      }
+      if (dirPath && typeof dirPath === 'string' && !(await ensurePathAllowedWithWorktree(dirPath, access))) {
+        return { patch: '', truncated: false, base: 'HEAD' }
+      }
+      return getChangesPatch(gitRoot, input.baseRef)
+    },
   )
 
   // 列出 Git Worktree（只读取 worktree 元信息，不涉及文件内容，跳过路径安全检查）

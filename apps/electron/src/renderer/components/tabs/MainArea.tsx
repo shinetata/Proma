@@ -15,7 +15,6 @@ import {
 } from '@/atoms/tab-atoms'
 import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
-import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
@@ -45,7 +44,6 @@ import {
 import { browserFrequentSitesAtom, recordFrequentSiteVisit } from '@/components/browser/browser-frequent-sites'
 
 export function MainArea(): React.ReactElement {
-  useTrackSessionView()
 
   const tabs = useAtomValue(tabsAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)

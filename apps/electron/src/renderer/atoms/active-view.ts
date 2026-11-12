@@ -51,10 +51,10 @@ const tabHostViewAtom = atom<TabHostView>('conversations')
 /** 各视图离开时保存的 Tab 集合（商业版 dx） */
 const viewTabSnapshotsAtom = atom<Partial<Record<TabHostView, ViewTabSnapshot>>>({})
 
-/** 可跨视图保存与恢复的 Tab：会话 Tab 及其预览 Tab（商业版 Uc）。 */
+/** 可跨视图保存与恢复的 Tab：当前只有会话 Tab（商业版 Uc）。 */
 function isRestorableTab(tab: TabItem): boolean {
   if (!tab || typeof tab.sessionId !== 'string' || tab.sessionId.trim().length === 0) return false
-  return tab.type === 'agent' ? tab.id === tab.sessionId : tab.type === 'preview'
+  return tab.type === 'agent' && tab.id === tab.sessionId
 }
 
 /**

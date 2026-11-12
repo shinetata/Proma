@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto'
 import { constants, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
-import type { ChangedFileEntry, UnstagedChangesResult, UntrackedFileEntry } from '@proma/shared'
+import type { ChangedFileEntry, ChangesPatchResult, UnstagedChangesResult, UntrackedFileEntry } from '@proma/shared'
 import { normalizePathForCompare } from '@proma/shared'
 import type { ChangeSource, ChangedFileStatus } from '@proma/shared'
 
@@ -650,6 +650,58 @@ export async function getUnstagedChanges(
   }
 
   return { isGitRepo: true, files, untrackedFiles, gitRootNames: gitRoots.map((root) => basename(root)) }
+}
+
+/** 连续改动视图的 patch 上限：超过则截断到最后一个完整文件，避免 IPC 一次搬运过多文本。 */
+const MAX_CHANGES_PATCH_BYTES = 8 * 1024 * 1024
+
+/**
+ * 获取仓库（或 worktree 相对基准分支）的 unified patch。
+ *
+ * - 传入 baseRef 时先取 `merge-base(baseRef, HEAD)`，让已提交但未合并的改动也进入 patch；
+ * - 未传或 merge-base 失败时退回 HEAD，即只包含工作区未提交改动；
+ * - 输出超过 MAX_CHANGES_PATCH_BYTES 时截断到最后一个完整的 `diff --git` 文件边界。
+ */
+export async function getChangesPatch(gitRoot: string, baseRef?: string): Promise<ChangesPatchResult> {
+  const toplevel = await runGitCommand(['rev-parse', '--show-toplevel'], gitRoot, { quiet: true })
+  if (!toplevel) return { patch: '', truncated: false, base: 'HEAD' }
+  const root = normalizeGitRoot(toplevel)
+
+  let base = 'HEAD'
+  if (baseRef) {
+    const mergeBase = await runGitCommand(['merge-base', baseRef, 'HEAD'], root, { quiet: true })
+    if (mergeBase) base = mergeBase
+  }
+
+  // --no-ext-diff/--no-textconv：不触发用户配置的外部 diff 工具与 textconv 过滤器，
+  // 保证输出是可解析的标准 unified diff。
+  const patch = await runGitCommand(
+    [
+      '-c',
+      'core.quotePath=false',
+      'diff',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-color',
+      '--submodule=short',
+      '--ignore-submodules=dirty',
+      '-M',
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
+      base,
+    ],
+    root,
+    { quiet: true },
+  )
+  if (!patch) return { patch: '', truncated: false, base }
+  if (Buffer.byteLength(patch, 'utf8') <= MAX_CHANGES_PATCH_BYTES) {
+    return { patch, truncated: false, base }
+  }
+
+  // 按字节截断可能切断文件边界，回退到最后一个完整文件之前。
+  const cut = patch.slice(0, MAX_CHANGES_PATCH_BYTES)
+  const lastFile = cut.lastIndexOf('\ndiff --git ')
+  return { patch: lastFile > 0 ? cut.slice(0, lastFile) : '', truncated: true, base }
 }
 
 /**

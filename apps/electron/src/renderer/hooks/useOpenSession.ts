@@ -11,11 +11,8 @@ import {
   tabsAtom,
   activeTabIdAtom,
   openTab,
-  buildOpenTabRestore,
-  sessionViewStateMapAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
-import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import {
@@ -66,23 +63,15 @@ export function useOpenSession(): OpenSessionFn {
       }
       setSettingsOpen(false)
 
-      // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图
-      const restore = type === 'agent'
-        ? buildOpenTabRestore(
-            sessionId,
-            store.get(sessionViewStateMapAtom),
-            store.get(previewFileMapAtom),
-          )
-        : undefined
       // 先切到目标视图（会换入该视图的 Tab 集合），再在其上打开会话（商业版 xh）。
       const targetView = options?.view ?? 'conversations'
       if (store.get(activeViewAtom) !== targetView) setActiveView(targetView)
-      const result = openTab(store.get(tabsAtom), { type, sessionId, title }, restore)
+      const result = openTab(store.get(tabsAtom), { type, sessionId, title })
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
       setAutomationForm({ open: false, draft: null })
 
-      if (type === 'agent' || type === 'preview') {
+      if (type === 'agent') {
         setCurrentAgentSessionId(sessionId)
 
         // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。

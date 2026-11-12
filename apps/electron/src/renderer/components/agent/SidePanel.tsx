@@ -26,7 +26,8 @@ import { markdownToHtml } from '@/lib/markdown-rich-text'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import type { RightWorkspaceTabDragState, WorkspacePanelTab } from '@/components/diff/DiffPanelTabBar'
-import { DiffChangesList } from '@/components/diff/DiffChangesList'
+import { ContinuousChangesView } from '@/components/diff/ContinuousChangesView'
+import { changesFocusPathMapAtom } from '@/atoms/changes-focus-atoms'
 import { AgentView } from '@/components/agent/AgentView'
 import { VaultView } from '@/components/vault/VaultView'
 import { OBSIDIAN_NAME, ObsidianIcon } from '@/components/obsidian/obsidian-brand'
@@ -110,8 +111,6 @@ import {
   previewPanelOpenMapAtom,
 } from '@/atoms/preview-atoms'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
-import { InlinePreviewWorkspace } from '@/components/diff/InlinePreviewWorkspace'
-import { inlinePreviewMapAtom, shouldShowInlinePreview } from '@/components/diff/inline-preview'
 import { clearPreviewContentCacheForFile } from '@/lib/preview-content-cache'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { FileEntry, AgentPendingFile, AgentSessionMeta, SDKMessage, WorktreeInfo } from '@proma/shared'
@@ -506,11 +505,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
   const previewFiles = previewFilesMap.get(sessionId) ?? []
-  const requestedPreviewId = getPreviewIdFromSidePanelTab(activeTab)
-  const currentPreviewFile = (requestedPreviewId ? previewFiles.find((file) => getPreviewFileId(file) === requestedPreviewId) : null)
-    ?? previewFileMap.get(sessionId) ?? null
   const previewOpen = previewFiles.length > 0 || previewOpenMap.get(sessionId) === true
-  const selectedFilePath = currentPreviewFile?.filePath
 
   const openPreview = useOpenPreview()
   const setBrowserOpenMap = useSetAtom(browserPanelOpenMapAtom)
@@ -519,7 +514,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // 用 ref 存 basePaths 相关值，避免声明顺序问题
   const basePathsRef = React.useRef<string[]>([])
 
-  // 商业版：文件树、搜索与改动列表中的文件都在所在页签内联预览，列表收进右侧栏。
+  // 文件树、搜索与改动视图中的文件统一在右侧工作区预览标签中打开。
   const handleFilePreview = React.useCallback((filePath: string) => {
     const bp = basePathsRef.current
     openPreview(sessionId, {
@@ -528,7 +523,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       // 文件面板是用户主动选择的入口，保留任意本地路径预览能力。
       unrestricted: true,
       basePaths: bp.length > 0 ? bp : undefined,
-    }, { mode: 'inline', source: 'files' })
+    })
   }, [sessionId, openPreview])
 
   const handlePlainChangeFilePreview = React.useCallback((filePath: string) => {
@@ -538,14 +533,14 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       previewOnly: true,
       unrestricted: true,
       basePaths: bp.length > 0 ? bp : undefined,
-    }, { mode: 'inline', source: 'changes' })
+    })
   }, [sessionId, openPreview])
 
-  // Worktree 选择状态（仅用于 diff 文件点击时传递 baseRef，选取逻辑已下沉至 DiffChangesList）
+  // worktree 模式下改动文件需要带基准 ref 才能对比到正确的基线。
   const selectedWorktreeMap = useAtomValue(agentSelectedWorktreeAtom)
   const selectedWorktreePath = selectedWorktreeMap.get(sessionId) ?? null
 
-  const handleDiffFileClick = React.useCallback((filePath: string, _isUntracked: boolean, gitRoot?: string) => {
+  const handleDiffFileClick = React.useCallback((filePath: string, gitRoot?: string) => {
     // WebP 无法生成文本 Diff，按图片预览打开。
     const imageOnly = /\.webp$/i.test(filePath)
     openPreview(sessionId, {
@@ -555,7 +550,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       dirPath: sessionPath || undefined,
       gitRoot,
       baseRef: selectedWorktreePath ? 'origin/main' : undefined,
-    }, { mode: 'inline', source: 'changes' })
+    })
   }, [openPreview, sessionId, sessionPath, selectedWorktreePath])
 
   // 动画标志：isOpen 变化时启用过渡动画，切换会话时即时显示
@@ -579,6 +574,18 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const nonGitFileChanges = nonGitFileChangesMap.get(sessionId) ?? []
   const fileChangesCurrentRunMap = useAtomValue(agentFileChangesCurrentRunAtom)
   const fileChangesCurrentRunId = fileChangesCurrentRunMap.get(sessionId)
+  // 轮次改动卡等入口请求定位到某个文件；连续改动视图滚动过去后清除该条目。
+  const changesFocusPathMap = useAtomValue(changesFocusPathMapAtom)
+  const setChangesFocusPathMap = useSetAtom(changesFocusPathMapAtom)
+  const changesFocusPath = changesFocusPathMap.get(sessionId)
+  const clearChangesFocus = React.useCallback(() => {
+    setChangesFocusPathMap((prev) => {
+      if (!prev.has(sessionId)) return prev
+      const next = new Map(prev)
+      next.delete(sessionId)
+      return next
+    })
+  }, [sessionId, setChangesFocusPathMap])
 
   // 文件面板必须跟随当前会话归属的项目。仅在会话元数据尚未加载时回退全局选择，
   // 避免用户切换项目列表但仍查看旧会话时读写错误项目根目录。
@@ -1028,42 +1035,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     if (getPreviewIdFromSidePanelTab(activeTab) === previewId) returnToPreviousTabAfterClose(getPreviewSidePanelTab(previewId))
   }, [activeTab, previewFiles, returnToPreviousTabAfterClose, sessionId, setPreviewContentRefreshVersion, setPreviewFileMap, setPreviewFilesMap, setPreviewOpenMap, setPreviewResolvedPaths])
 
-  const [inlinePreviewMap, setInlinePreviewMap] = useAtom(inlinePreviewMapAtom)
-  const inlinePreview = inlinePreviewMap.get(sessionId) ?? null
-
-  // 关闭内联预览：回到完整列表，并清理该文件的预览缓存（商业版 NZt 中的 B）。
-  const closeInlinePreview = React.useCallback(() => {
-    if (!inlinePreview) return
-    const previewId = getPreviewFileId(inlinePreview.file)
-    if (inlinePreview.file.previewOnly) clearPreviewContentCacheForFile(sessionId, inlinePreview.file.filePath)
-    setInlinePreviewMap((previous) => {
-      if (!previous.has(sessionId)) return previous
-      const next = new Map(previous)
-      next.delete(sessionId)
-      return next
-    })
-    const key = `${sessionId}\u0000${previewId}`
-    setPreviewContentRefreshVersion((previous) => {
-      if (!previous.has(key)) return previous
-      const next = new Map(previous)
-      next.delete(key)
-      return next
-    })
-    setPreviewResolvedPaths((previous) => {
-      if (!previous.has(key)) return previous
-      const next = new Map(previous)
-      next.delete(key)
-      return next
-    })
-    setPreviewFileMap((previous) => {
-      const current = previous.get(sessionId)
-      if (!current || getPreviewFileId(current) !== previewId) return previous
-      const next = new Map(previous)
-      next.set(sessionId, null)
-      return next
-    })
-  }, [inlinePreview, sessionId, setInlinePreviewMap, setPreviewContentRefreshVersion, setPreviewFileMap, setPreviewResolvedPaths])
-
   const handleCloseExplorationTab = React.useCallback((branchSessionId: string) => {
     setSideTemporaryAgentMap((prev) => {
       const openBranches = prev.get(sessionId) ?? []
@@ -1486,16 +1457,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     const handleCloseActiveWorkspaceTab = (event: Event) => {
       const { sessionId: targetSessionId } = (event as CustomEvent<{ sessionId?: string }>).detail ?? {}
       if (targetSessionId !== sessionId) return
-      // 内联预览打开时，「关闭标签」先关闭预览并展开列表。
-      if (shouldShowInlinePreview(effectiveActiveTab, inlinePreview?.source, Boolean(split))) {
-        closeInlinePreview()
-        return
-      }
       handleCloseWorkspaceTab(activeTab)
     }
     window.addEventListener(CLOSE_ACTIVE_RIGHT_WORKSPACE_TAB_EVENT, handleCloseActiveWorkspaceTab)
     return () => window.removeEventListener(CLOSE_ACTIVE_RIGHT_WORKSPACE_TAB_EVENT, handleCloseActiveWorkspaceTab)
-  }, [activeTab, closeInlinePreview, effectiveActiveTab, handleCloseWorkspaceTab, inlinePreview?.source, sessionId, split])
+  }, [activeTab, handleCloseWorkspaceTab, sessionId])
 
   const splitContentRef = React.useRef<HTMLDivElement>(null)
   const splitDividerCancelRef = React.useRef<(() => void) | null>(null)
@@ -1611,21 +1577,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   }, [persistSplitRatio, split, updateSplit])
 
   const renderWorkspaceTabContent = (paneTab: AgentSidePanelTab, paneWidth: number, inPreviewList = false): React.ReactNode => {
-    const paneInlinePreview = !inPreviewList && shouldShowInlinePreview(paneTab, inlinePreview?.source, Boolean(split))
-      ? inlinePreview
-      : null
-    if (paneInlinePreview) {
-      return (
-        <InlinePreviewWorkspace
-          key={`${sessionId}:${paneTab}`}
-          sessionId={sessionId}
-          preview={paneInlinePreview}
-          width={paneWidth}
-          onClose={closeInlinePreview}
-          renderList={(listWidth) => renderWorkspaceTabContent(paneTab, listWidth, true)}
-        />
-      )
-    }
     const panePreviewId = getPreviewIdFromSidePanelTab(paneTab)
     const panePreviewFile = (panePreviewId ? previewFiles.find((file) => getPreviewFileId(file) === panePreviewId) : null)
       ?? previewFileMap.get(sessionId) ?? null
@@ -1729,7 +1680,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       <div className="min-h-0 flex-1 overflow-hidden"><VaultView embedded sessionId={sessionId} /></div>
     ) : paneTab === 'changes' ? (
       sessionPath ? (
-        <DiffChangesList
+        <ContinuousChangesView
           key={sessionId}
           dirPath={workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.projectRootPath ?? sessionPath}
           sessionId={sessionId}
@@ -1737,14 +1688,17 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           workspaceFilesPath={workspaceFilesPath || undefined}
           extraPaths={fileAccessPathsMemo}
           refreshVersion={diffRefreshVersion}
-          selectedFilePath={inlinePreview?.source === 'changes' ? inlinePreview.file.filePath : selectedFilePath}
-          onFileClick={handleDiffFileClick}
           workspaceSlug={workspaceSlug || undefined}
           worktreeRepoPaths={worktreeRepoPathsMemo}
           onOpenWorktreeTerminal={handleOpenWorktreeTerminal}
-          nonGitFileChanges={nonGitFileChanges}
+          onOpenDirectoryTerminal={handleOpenDirectoryTerminal}
+          nonGitChanges={nonGitFileChanges}
           currentFileChangeRunId={fileChangesCurrentRunId}
-          onPlainFileClick={handlePlainChangeFilePreview}
+          focusPath={changesFocusPath}
+          onFocused={clearChangesFocus}
+          onFocusMissing={handleDiffFileClick}
+          onOpenFile={handleDiffFileClick}
+          onOpenNonGitFile={handlePlainChangeFilePreview}
         />
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-[13px]">等待会话初始化...</div>

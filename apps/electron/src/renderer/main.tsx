@@ -599,9 +599,7 @@ function DockBadgeInitializer(): null {
   const badgeCount = notificationsEnabled ? count : 0
   const activeAgentSessionId = useMemo(() => {
     const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) : null
-    return activeTab?.type === 'agent' || activeTab?.type === 'preview'
-      ? activeTab.sessionId
-      : null
+    return activeTab?.type === 'agent' ? activeTab.sessionId : null
   }, [activeTabId, tabs])
 
   useEffect(() => {
