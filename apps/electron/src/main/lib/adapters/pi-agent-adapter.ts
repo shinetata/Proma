@@ -66,6 +66,7 @@ import type { AgentMemoryContext } from '../agent-memory'
 import type { ProjectInstructionSource } from '../project-instruction-resolver'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
+import { createGoogleRequestCompatExtension, isOfficialGoogleGenerativeAiBaseUrl } from './pi-google-request-compat'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
@@ -1631,6 +1632,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           : []),
         ...(input.provider === 'openai-codex' && input.codexFastMode
           ? [createCodexFastModeExtension({ fastMode: true })]
+          : []),
+        // Gemini 请求兼容：补齐跨模型历史工具调用的占位签名；中转网关（如 Memtensor）
+        // 在部分上游不支持 VALIDATED 工具模式，额外降为 AUTO。
+        ...(input.provider === 'google'
+          ? [createGoogleRequestCompatExtension({
+              downgradeValidatedToolMode: !isOfficialGoogleGenerativeAiBaseUrl(input.baseUrl),
+            })]
           : []),
       ]
       const resourceLoader = new sdk.DefaultResourceLoader({
